@@ -102,7 +102,7 @@ jobs:
           SOFA_MODEL_TOKEN: ${{ github.token }}
         run: |
           mkdir -p candidate
-          docker run --rm \
+          docker run --rm --platform linux/amd64 \
             --user "$(id -u):$(id -g)" \
             --cap-drop ALL --security-opt no-new-privileges --read-only \
             --pids-limit 128 --memory 3g --cpus 2 \
@@ -116,7 +116,7 @@ jobs:
             --env SOFA_MODEL_TOKEN \
             --env HOME=/home/sofa \
             --env PATH=/toolkit:/copilot:/usr/local/bin:/usr/bin:/bin \
-            node:24-bookworm@sha256:a3acdfc965381ce998d17f8ae1cd297932ab89862fea0b4f61907b59a86e611b \
+            node:24-bookworm@sha256:b977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3 \
             /toolkit/sofa execute --config /workspace/.sofa.yml \
               --manifest /transport/manifest.json --workspace /workspace \
               --out /candidate/bundle.json
