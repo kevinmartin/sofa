@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,6 +102,33 @@ func TestFailureClassificationKeepsDeterministicErrorsOutOfRetry(t *testing.T) {
 	}
 	if got := executionFailureKind(errors.New("unavailable transport")); got != "infrastructure" {
 		t.Fatalf("unknown transport classified as %s", got)
+	}
+}
+
+func TestFailureObservationsRemainDistinctAcrossRecoveredGenerations(t *testing.T) {
+	_, m := testManifest(t)
+	e := state.Engine{Store: &state.MemoryStore{}}
+	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{ModelCalls: 2, InfrastructureRetries: 2, RuntimeSeconds: 1200}); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		generation int64
+		outcome    string
+	}{{1, "infrastructure"}, {2, "quota"}} {
+		scope := fmt.Sprintf("g%d", item.generation)
+		if err := observeOnce(context.Background(), e, m.Fence.AttemptID, "failure-finalizer", item.outcome, m.Grant.BaseSHA, "", scope); err != nil {
+			t.Fatal(err)
+		}
+		if err := observeOnce(context.Background(), e, m.Fence.AttemptID, "failure-finalizer", item.outcome, m.Grant.BaseSHA, "", scope); err != nil {
+			t.Fatalf("finalizer replay was not idempotent: %v", err)
+		}
+	}
+	if err := observeOnce(context.Background(), e, m.Fence.AttemptID, "failure-finalizer", "validation", m.Grant.BaseSHA, "", "g2"); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("changed outcome rewrote generation two: %v", err)
+	}
+	snapshot, err := e.Store.Load(context.Background())
+	if err != nil || len(snapshot.State.Observations) != 2 {
+		t.Fatalf("expected both failed generations in append-only observations: %v", err)
 	}
 }
 

@@ -159,8 +159,11 @@ func ledgerAdmission(g admission.Grant) state.Admission {
 	return state.Admission{Repository: g.Repository, Issue: int64(g.IssueNumber), SpecDigest: g.SpecDigest, ConfigDigest: g.ConfigDigest, BaseSHA: g.BaseSHA, ApprovalID: g.ApprovalID, ReadyEventID: g.ReadyEventID, ActorID: g.OwnerID, ProjectID: g.ProjectID}
 }
 
-func observeOnce(ctx context.Context, engine state.Engine, attemptID, stage, outcome, revision, evidenceRef string) error {
+func observeOnce(ctx context.Context, engine state.Engine, attemptID, stage, outcome, revision, evidenceRef, scope string) error {
 	id := stage + "-" + attemptID
+	if scope != "" {
+		id += "-" + scope
+	}
 	snapshot, err := engine.Store.Load(ctx)
 	if err != nil {
 		return err
@@ -219,7 +222,7 @@ func admit(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := observeOnce(ctx, engine, attempt.ID, "admission", "accepted", grant.BaseSHA, ""); err != nil {
+	if err := observeOnce(ctx, engine, attempt.ID, "admission", "accepted", grant.BaseSHA, "", ""); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(*outDir, 0700); err != nil {
@@ -249,7 +252,7 @@ func admit(ctx context.Context, args []string) error {
 			if attempt.Publication == nil {
 				return errors.New("draft attempt has no publication identity")
 			}
-			if err := observeOnce(ctx, engine, attempt.ID, "publication", "draft", attempt.Publication.HeadSHA, attempt.Publication.PRURL); err != nil {
+			if err := observeOnce(ctx, engine, attempt.ID, "publication", "draft", attempt.Publication.HeadSHA, attempt.Publication.PRURL, ""); err != nil {
 				return err
 			}
 			reason = "already-complete"
@@ -562,10 +565,10 @@ func publish(ctx context.Context, args []string) error {
 	if !ok || attempt.Admission != ledgerAdmission(m.Grant) || attempt.Generation != m.Fence.Generation || attempt.Owner == nil || *attempt.Owner != m.Fence.Owner {
 		return errors.New("publication ledger identity mismatch")
 	}
-	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "execution", "candidate", b.CandidateDigest, ""); err != nil {
+	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "execution", "candidate", b.CandidateDigest, "", ""); err != nil {
 		return err
 	}
-	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "verification", "passed", b.CandidateDigest, ""); err != nil {
+	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "verification", "passed", b.CandidateDigest, "", ""); err != nil {
 		return err
 	}
 	if m.Recovery != nil && (attempt.Publication == nil || *attempt.Publication != *m.Recovery) {
@@ -602,7 +605,7 @@ func publish(ctx context.Context, args []string) error {
 	if err := engine.MarkPublished(ctx, m.Fence, intent); err != nil {
 		return err
 	}
-	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "publication", "draft", result.CommitSHA, result.URL); err != nil {
+	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "publication", "draft", result.CommitSHA, result.URL, ""); err != nil {
 		return err
 	}
 	return writeJSON("publication.json", result)
@@ -664,7 +667,7 @@ func fail(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	return observeOnce(ctx, engine, m.Fence.AttemptID, "failure-finalizer", failure.Kind, m.Grant.BaseSHA, "")
+	return observeOnce(ctx, engine, m.Fence.AttemptID, "failure-finalizer", failure.Kind, m.Grant.BaseSHA, "", fmt.Sprintf("g%d", m.Fence.Generation))
 }
 
 func specDigest(args []string) error {
