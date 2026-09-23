@@ -171,3 +171,74 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 		t.Fatal("verifier changed the independent fixture test")
 	}
 }
+
+func TestExecuteExactRecipeUsesNoModelCredential(t *testing.T) {
+	for _, name := range []string{"SOFA_MODEL_TOKEN", "SOFA_PROJECTS_TOKEN", "SOFA_STATE_TOKEN", "SOFA_PUBLISH_TOKEN", "SOFA_APP_PRIVATE_KEY"} {
+		t.Setenv(name, "")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"go.mod", ".sofa.yml", "fixture/greeting.go", "fixture/greeting_test.go"} {
+		data, err := os.ReadFile(filepath.Join("../../examples/consumer", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		location := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(location), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(location, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixture/greeting.go"), []byte("package fixture\nfunc Greeting(name string)string{return \"Hello, \"+name}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = gitEnv()
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %s: %v", args, output, err)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("init", "-q")
+	git("add", ".")
+	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
+	base := git("rev-parse", "HEAD")
+	_, m := testManifest(t)
+	spec, digest, err := admission.CanonicalSpec("Format fixture", "Format the fixture.\n<!-- sofa:recipe=gofmt -->")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.CanonicalSpec, m.Grant.SpecDigest, m.Grant.BaseSHA = spec, digest, base
+	m.Fence.AttemptID = state.AttemptID(ledgerAdmission(m.Grant))
+	transport := t.TempDir()
+	manifestPath := filepath.Join(transport, "manifest.json")
+	bundlePath := filepath.Join(transport, "bundle.json")
+	if err := writeJSON(manifestPath, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := execute(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Version         int    `json:"version"`
+		UsedAgent       bool   `json:"used_agent"`
+		PromptRequests  int    `json:"prompt_requests"`
+		ModelCalls      *int   `json:"model_calls"`
+		CandidateDigest string `json:"candidate_digest"`
+	}
+	if err := readJSON(filepath.Join(transport, "execution.json"), 4096, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != 1 || result.UsedAgent || result.PromptRequests != 0 || result.ModelCalls != nil {
+		t.Fatal("exact recipe invoked or reported model use")
+	}
+	b, err := readBundle(bundlePath)
+	if err != nil || len(b.Files) != 1 || b.Files[0].Path != "fixture/greeting.go" || result.CandidateDigest != b.CandidateDigest {
+		t.Fatal("exact recipe did not produce the bounded formatter candidate")
+	}
+}

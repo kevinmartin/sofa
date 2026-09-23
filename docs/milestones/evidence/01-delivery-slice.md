@@ -25,7 +25,7 @@
 
 ## Local checks
 
-On 2026-09-23, `go test ./...`, `go test -race ./...`, `go vet ./...`, and a Linux amd64 static `go build -trimpath ./cmd/sofa` passed using Go 1.24.1. The CLI integration test applies a bounded candidate to the disposable fixture, runs its `go test ./...` gate in a secretless process, and confirms the independent test file was not changed. The local baseline fixture test intentionally fails only on the two specified greeting cases. Workflow YAML parses locally; actual GitHub Actions behavior remains untested.
+On 2026-09-23, `go test ./...`, `go test -race ./...`, `go vet ./...`, and a Linux amd64 static `go build -trimpath ./cmd/sofa` passed using Go 1.24.1. The CLI integration test applies a bounded candidate to the disposable fixture, runs its `go test ./...` gate in a secretless process, and confirms the independent test file was not changed. A second CLI integration test runs the exact `gofmt` recipe without a model credential and inspects the emitted execution artifact: `used_agent=false`, `prompt_requests=0`, and `model_calls=null`. Worker-level tests also cover invalid and already-formatted recipe inputs. The local baseline fixture test intentionally fails only on the two specified greeting cases. Workflow YAML parses locally; actual GitHub Actions behavior remains untested.
 
 ## Live resources and remaining setup
 
