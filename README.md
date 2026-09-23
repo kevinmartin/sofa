@@ -22,7 +22,8 @@ This public repository holds **no Kevin-owned reusable workflow secret**.
 Callers pass their own Project read credential explicitly; the scoped
 `GITHUB_TOKEN` created for a caller run handles repository state and Copilot
 Requests in distinct jobs. A separate repository-scoped publisher credential
-opens the draft PR only after trusted verification. Invoking the public workflow
+updates the publication ledger and opens the draft PR only after trusted
+verification. Invoking the public workflow
 from another repository cannot inherit Kevin's consumer secrets. The agent
 receives only its Copilot token inside a disposable container, and its file
 changes become publishable only through the path and evidence validator.

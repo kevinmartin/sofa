@@ -19,9 +19,11 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    that issue, its approval comment, and its Project status history. Set
    `SOFA_PUBLISH_TOKEN` to a separate fine-grained PAT scoped only to this
    repository, with Contents and Pull requests write
-   permissions. Only the trusted publication job receives it. The workflow's
-   `GITHUB_TOKEN` writes the `sofa-state` branch through its explicit job-level
-   Contents permission; the repository default may remain read-only. The
+   permissions. Only the trusted publication job receives it; that job uses the
+   credential for publication-stage ledger updates, candidate branch creation,
+   and the draft PR. Controller and finalizer jobs use their own `GITHUB_TOKEN`
+   for state updates through explicit job-level Contents permission; the
+   repository default may remain read-only. The
    repository-wide setting that also permits Actions to approve PR reviews is
    not needed. Copilot Requests permission and a Copilot-enabled account are
    needed for the agent job.
