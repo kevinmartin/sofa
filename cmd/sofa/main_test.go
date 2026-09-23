@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kevinmartin/sofa/internal/admission"
 	"github.com/kevinmartin/sofa/internal/config"
@@ -38,7 +39,7 @@ func testManifest(t *testing.T) (config.Config, Manifest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := admission.Grant{Version: 1, Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_123", IssueNumber: 7, ProjectID: c.ProjectID, OwnerID: c.OwnerID, SpecDigest: specDigest, ConfigDigest: configDigest, BaseSHA: strings.Repeat("a", 40), ApprovalID: "IC_123", ReadyEventID: "EV_123"}
+	g := admission.Grant{Version: 1, Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_123", IssueNumber: 7, ProjectID: c.ProjectID, OwnerID: c.OwnerID, SpecDigest: specDigest, ConfigDigest: configDigest, BaseSHA: strings.Repeat("a", 40), ProjectItemID: "PVTI_123", StatusOptionID: "ready-option", StatusUpdatedAt: time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)}
 	a := ledgerAdmission(g)
 	m := Manifest{Version: 1, Grant: g, Fence: state.Fence{AttemptID: state.AttemptID(a), Generation: 1, Owner: state.Owner{RunID: "1234", RunAttempt: 1}}, CanonicalSpec: spec}
 	return c, m

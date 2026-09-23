@@ -6,9 +6,10 @@ state, and credentials. The first canary pins one immutable sofa commit while
 the reusable contract is proven. The planned stable channel will let consumers
 receive reviewed toolkit updates automatically after release qualification.
 
-The current milestone is a draft-only delivery slice: a human-authored issue
-with Kevin's exact specification approval and manual Project `Ready` move can
-produce one bounded candidate through Copilot ACP. A separate secretless job
+The current milestone is a draft-only delivery slice: a reviewed issue in a
+private Project's `Ready` status can produce one bounded candidate through
+Copilot ACP. Sofa freezes the issue specification internally at admission and
+rejects later edits. A separate secretless job
 checks that candidate, then a trusted job revalidates authority and opens or
 finds one draft PR. The run does not merge, mark ready, or deploy code.
 

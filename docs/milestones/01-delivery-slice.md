@@ -2,7 +2,7 @@
 
 ## Outcome
 
-In an owner-designated disposable GitHub repository, one human-authored, approved issue produces exactly one draft PR through Copilot ACP. The candidate passes the fixture's deterministic checks, privileged credentials remain outside agent execution, and a killed/repeated run recovers without duplicating publication or overwriting human changes.
+In an owner-designated disposable GitHub repository, one reviewed issue moved to Ready in a private, access-controlled Project produces exactly one draft PR through Copilot ACP. The candidate passes the fixture's deterministic checks, privileged credentials remain outside agent execution, and a killed/repeated run recovers without duplicating publication or overwriting human changes.
 
 This is a narrow prototype. It remains draft-only until later milestones provide the full independent gate system; no unimplemented check is reported as passed.
 
@@ -15,7 +15,7 @@ Local development can start immediately. Hosted acceptance needs a confirmed sof
 ## Scope
 
 - Establish the Go module, a small CLI, versioned configuration, and minimal internal contracts for work sources, state, execution, evidence, and publication. Add only interfaces consumed by this slice.
-- Implement a targeted manual reconciliation command/workflow for the configured issue. Read its canonical human-authored specification, validate Kevin's `/sofa approve-spec <digest>` command, and verify the authorized Ready transition. Persist approval and the specification snapshot using the planned contract. There is no discovery agent or broad scheduled backlog scan yet.
+- Implement a targeted manual reconciliation command/workflow for the configured issue. Treat current Ready status in the private Project as the single delivery authorization, with Project write access restricted to trusted people and no automation setting Ready. Freeze the issue's canonical specification digest and Ready field revision internally, reject edits after Ready, and revalidate them before publication. GitHub does not expose a status-change actor for this canary item, so do not claim to verify who moved it. There is no Discovery agent or broad scheduled backlog scan yet.
 - Implement the orphan `sofa-state` ledger with optimistic concurrent updates, pending dispatch, fenced claims, run ownership, cumulative limits, and phase checkpoints. Dispatch identifies admitted work; it never creates authority.
 - Add a fake ACP peer for deterministic tests and one real Copilot adapter through the selected Caelis SDK. Handle negotiation, streaming, permissions, cancellation, errors, and whole-process cleanup.
 - Package reusable reconciliation/work workflows and minimal caller/setup integration. Reference the candidate toolkit by an immutable commit for the demonstration; stable `v1` publication belongs to 10.
@@ -34,8 +34,8 @@ Exclude automatic Discovery, broad board synchronization, watches, System One, o
 
 ## Acceptance
 
-- [ ] **01-A:** A real hosted run reads the approved issue and Ready proof, performs one Copilot-generated fixture change, captures successful deterministic checks for that candidate, and opens one draft PR. Record actual run/PR URLs and tested versions.
-- [ ] **01-B:** Unauthorized actors, edited specification digests, foreign repositories, malformed dispatches, and duplicate/completed work cannot start a model or publish. Observe model-call counts; do not infer zero from logs being quiet.
+- [ ] **01-A:** A real hosted run reads the reviewed issue and private Project Ready status, performs one Copilot-generated fixture change, captures successful deterministic checks for that candidate, and opens one draft PR. Record actual run/PR URLs and tested versions.
+- [ ] **01-B:** A non-Ready or ambiguously associated item, edits after Ready, changed admitted specification, foreign repositories, malformed dispatches, and duplicate/completed work cannot start a model or publish. Observe model-call counts; do not infer zero from logs being quiet.
 - [ ] **01-C:** Exercise concurrent claims and crash points after admission/before dispatch, after accepted checkpoint, and after PR creation/before ledger acknowledgement. Recovery uses real run/branch/PR state and finds the existing PR. Include at least one actual hosted cancellation/rerun, with the full fault matrix covered locally.
 - [ ] **01-D:** A stale owner or unexpected human branch update prevents the next write; no force-push or second PR occurs. Live cancellation races are documented with the next-enforcement-check limit.
 - [ ] **01-E:** Untrusted patches, paths/symlinks, artifacts, hooks, or agent instructions cannot access Projects/App/publisher credentials or bypass publication validation. Use inert sentinel credentials and adversarial fixtures, not real-secret exfiltration.

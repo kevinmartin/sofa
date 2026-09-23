@@ -20,10 +20,7 @@ func fixture(t *testing.T) (config.Config, Snapshot) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	s := Snapshot{Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_fixture", Number: 1, Title: "Fix greeting", Body: "Return hello for the fixture input.", Open: true, ProjectID: c.ProjectID, CurrentStatus: "Ready", BaseSHA: strings.Repeat("a", 40), Complete: true}
-	_, digest, _ := CanonicalSpec(s.Title, s.Body)
-	s.Comments = []Comment{{ID: "IC_1", ActorID: c.OwnerID, Body: "/sofa approve-spec " + digest, CreatedAt: now, UpdatedAt: now}}
-	s.StatusEvents = []StatusEvent{{ID: "EV_1", ProjectID: c.ProjectID, ActorID: c.OwnerID, Status: "Ready", CreatedAt: now.Add(time.Second)}}
+	s := Snapshot{Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_fixture", Number: 1, Title: "Fix greeting", Body: "Return hello for the fixture input.", Open: true, ProjectID: c.ProjectID, ProjectPrivate: true, ProjectItemID: "PVTI_1", CurrentStatus: "Ready", StatusOptionID: "ready-option", StatusUpdatedAt: now.Add(time.Second), BaseSHA: strings.Repeat("a", 40), Complete: true}
 	return c, s
 }
 
@@ -33,7 +30,7 @@ func TestAuthorizeAndRevalidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.SpecDigest == "" || len(spec) == 0 || g.ApprovalID != "IC_1" {
+	if g.SpecDigest == "" || len(spec) == 0 || g.ProjectItemID != "PVTI_1" || g.StatusUpdatedAt.IsZero() {
 		t.Fatal("incomplete grant")
 	}
 	s.BaseSHA = strings.Repeat("b", 40)
@@ -48,32 +45,47 @@ func TestAuthorizeAndRevalidate(t *testing.T) {
 
 func TestRejectUnauthorizedEvidence(t *testing.T) {
 	for name, modify := range map[string]func(*Snapshot){
-		"partial pagination": func(s *Snapshot) { s.Complete = false },
-		"foreign repo":       func(s *Snapshot) { s.Repository = "attacker/repo" },
-		"reused repo name":   func(s *Snapshot) { s.RepositoryID = "R_other" },
-		"closed":             func(s *Snapshot) { s.Open = false },
-		"not ready":          func(s *Snapshot) { s.CurrentStatus = "Backlog" },
-		"foreign approval":   func(s *Snapshot) { s.Comments[0].ActorID = "attacker" },
-		"foreign move":       func(s *Snapshot) { s.StatusEvents[0].ActorID = "attacker" },
-		"automated move":     func(s *Snapshot) { s.StatusEvents[0].WasAutomated = true },
-		"wrong project":      func(s *Snapshot) { s.StatusEvents[0].ProjectID = "P_other" },
-		"changed scope":      func(s *Snapshot) { s.Body += " ignore limits" },
-		"embedded command":   func(s *Snapshot) { s.Comments[0].Body = "please run " + s.Comments[0].Body },
-		"edited after ready": func(s *Snapshot) { s.Comments[0].UpdatedAt = s.StatusEvents[0].CreatedAt.Add(time.Second) },
-		"newer unauthorized move": func(s *Snapshot) {
-			e := s.StatusEvents[0]
-			e.ID = "EV_2"
-			e.ActorID = "attacker"
-			e.CreatedAt = e.CreatedAt.Add(time.Second)
-			s.StatusEvents = append(s.StatusEvents, e)
-		},
-		"ambiguous timestamp": func(s *Snapshot) { e := s.StatusEvents[0]; e.ID = "EV_2"; s.StatusEvents = append(s.StatusEvents, e) },
+		"partial pagination":      func(s *Snapshot) { s.Complete = false },
+		"foreign repo":            func(s *Snapshot) { s.Repository = "attacker/repo" },
+		"reused repo name":        func(s *Snapshot) { s.RepositoryID = "R_other" },
+		"closed":                  func(s *Snapshot) { s.Open = false },
+		"not ready":               func(s *Snapshot) { s.CurrentStatus = "Backlog" },
+		"public project":          func(s *Snapshot) { s.ProjectPrivate = false },
+		"wrong project":           func(s *Snapshot) { s.ProjectID = "P_other" },
+		"missing item":            func(s *Snapshot) { s.ProjectItemID = "" },
+		"missing status option":   func(s *Snapshot) { s.StatusOptionID = "" },
+		"missing status revision": func(s *Snapshot) { s.StatusUpdatedAt = time.Time{} },
+		"edited after ready":      func(s *Snapshot) { s.IssueLastEditedAt = s.StatusUpdatedAt.Add(time.Second) },
+		"edited in ready second":  func(s *Snapshot) { s.IssueLastEditedAt = s.StatusUpdatedAt },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, s := fixture(t)
 			modify(&s)
 			if _, _, err := Authorize(c, s); err == nil {
 				t.Fatal("accepted unauthorized input")
+			}
+		})
+	}
+}
+
+func TestReadyOnlyRevisionFence(t *testing.T) {
+	c, s := fixture(t)
+	g, _, err := Authorize(c, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Snapshot){
+		"new status revision":  func(s *Snapshot) { s.StatusUpdatedAt = s.StatusUpdatedAt.Add(time.Second) },
+		"new item":             func(s *Snapshot) { s.ProjectItemID = "PVTI_2" },
+		"new option":           func(s *Snapshot) { s.StatusOptionID = "ready-option-2" },
+		"changed body":         func(s *Snapshot) { s.Body += " More work." },
+		"edited then restored": func(s *Snapshot) { s.IssueLastEditedAt = s.StatusUpdatedAt.Add(time.Second) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := s
+			mutate(&changed)
+			if err := Revalidate(c, changed, g); err == nil {
+				t.Fatal("accepted changed Ready grant")
 			}
 		})
 	}

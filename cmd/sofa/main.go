@@ -98,7 +98,7 @@ func writeJSON(name string, value any) error {
 	if name == "" {
 		return errors.New("output path required")
 	}
-	// Raw canonical spec bytes are part of the approved digest. Reformatting
+	// Raw canonical spec bytes are part of the admitted digest. Reformatting
 	// nested JSON while serializing a manifest would silently change identity.
 	b, err := json.Marshal(value)
 	if err != nil {
@@ -156,7 +156,7 @@ func readManifest(name string, c config.Config) (Manifest, error) {
 }
 
 func ledgerAdmission(g admission.Grant) state.Admission {
-	return state.Admission{Repository: g.Repository, Issue: int64(g.IssueNumber), SpecDigest: g.SpecDigest, ConfigDigest: g.ConfigDigest, BaseSHA: g.BaseSHA, ApprovalID: g.ApprovalID, ReadyEventID: g.ReadyEventID, ActorID: g.OwnerID, ProjectID: g.ProjectID}
+	return state.Admission{Repository: g.Repository, Issue: int64(g.IssueNumber), SpecDigest: g.SpecDigest, ConfigDigest: g.ConfigDigest, BaseSHA: g.BaseSHA, ProjectID: g.ProjectID, ProjectItemID: g.ProjectItemID, StatusOptionID: g.StatusOptionID, StatusUpdatedAt: g.StatusUpdatedAt}
 }
 
 func observeOnce(ctx context.Context, engine state.Engine, attemptID, stage, outcome, revision, evidenceRef, scope string) error {

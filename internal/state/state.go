@@ -43,15 +43,15 @@ const (
 
 // Admission contains immutable authorization references, never their bodies.
 type Admission struct {
-	Repository   string `json:"repository"`
-	Issue        int64  `json:"issue"`
-	SpecDigest   string `json:"spec_digest"`
-	ConfigDigest string `json:"config_digest"`
-	BaseSHA      string `json:"base_sha"`
-	ApprovalID   string `json:"approval_id"`
-	ReadyEventID string `json:"ready_event_id"`
-	ActorID      string `json:"actor_id"`
-	ProjectID    string `json:"project_id"`
+	Repository      string    `json:"repository"`
+	Issue           int64     `json:"issue"`
+	SpecDigest      string    `json:"spec_digest"`
+	ConfigDigest    string    `json:"config_digest"`
+	BaseSHA         string    `json:"base_sha"`
+	ProjectID       string    `json:"project_id"`
+	ProjectItemID   string    `json:"project_item_id"`
+	StatusOptionID  string    `json:"status_option_id"`
+	StatusUpdatedAt time.Time `json:"status_updated_at"`
 }
 
 type Limits struct {
@@ -156,7 +156,7 @@ var shaPattern = regexp.MustCompile(`^[a-f0-9]{40}([a-f0-9]{24})?$`)
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 func (a Admission) Validate() error {
-	if !repoPattern.MatchString(a.Repository) || a.Issue <= 0 || !digestPattern.MatchString(a.SpecDigest) || !digestPattern.MatchString(a.ConfigDigest) || !shaPattern.MatchString(a.BaseSHA) || !reference(a.ApprovalID) || !reference(a.ReadyEventID) || !reference(a.ActorID) || !reference(a.ProjectID) {
+	if !repoPattern.MatchString(a.Repository) || a.Issue <= 0 || !digestPattern.MatchString(a.SpecDigest) || !digestPattern.MatchString(a.ConfigDigest) || !shaPattern.MatchString(a.BaseSHA) || !reference(a.ProjectID) || !reference(a.ProjectItemID) || !reference(a.StatusOptionID) || a.StatusUpdatedAt.IsZero() {
 		return fmt.Errorf("%w: admission references", ErrInvalid)
 	}
 	return nil
@@ -188,10 +188,11 @@ func (l Limits) permits(c Counters) bool {
 
 func AttemptID(a Admission) string {
 	b, _ := json.Marshal(struct {
-		Repository                           string
-		Issue                                int64
-		SpecDigest, ApprovalID, ReadyEventID string
-	}{strings.ToLower(a.Repository), a.Issue, a.SpecDigest, a.ApprovalID, a.ReadyEventID})
+		Repository                                string
+		Issue                                     int64
+		SpecDigest, ProjectItemID, StatusOptionID string
+		StatusUpdatedAt                           time.Time
+	}{strings.ToLower(a.Repository), a.Issue, a.SpecDigest, a.ProjectItemID, a.StatusOptionID, a.StatusUpdatedAt})
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
 }

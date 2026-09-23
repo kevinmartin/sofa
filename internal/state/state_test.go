@@ -17,7 +17,7 @@ var testNow = time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
 var testOwner = Owner{"42", 1}
 
 func admission() Admission {
-	return Admission{"owner/consumer", 7, strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 40), "approval-1", "ready-1", "actor-1", "project-1"}
+	return Admission{Repository: "owner/consumer", Issue: 7, SpecDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), BaseSHA: strings.Repeat("c", 40), ProjectID: "project-1", ProjectItemID: "item-1", StatusOptionID: "ready-option", StatusUpdatedAt: testNow}
 }
 func limits() Limits { return Limits{2, 2, 2, 2700} }
 func engine() Engine { return Engine{Store: &MemoryStore{}, Now: func() time.Time { return testNow }} }
@@ -71,7 +71,7 @@ func TestAdmissionCrashAndDedup(t *testing.T) {
 		}
 	}
 	newAuthority := admission()
-	newAuthority.ReadyEventID = "ready-2"
+	newAuthority.StatusUpdatedAt = newAuthority.StatusUpdatedAt.Add(time.Second)
 	if _, _, err := e.Admit(context.Background(), newAuthority, limits()); !errors.Is(err, ErrAdmissionChanged) {
 		t.Fatalf("silent supersession: %v", err)
 	}

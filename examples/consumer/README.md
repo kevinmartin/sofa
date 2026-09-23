@@ -16,7 +16,8 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    repository's default branch protected from unreviewed workflow edits. The
    Project needs a status named `Ready`.
 4. Set repository secret `SOFA_PROJECTS_TOKEN` to a credential that can read
-   that issue, its approval comment, and its Project status history. Set
+   that issue and its private Project status. Keep Project write access limited
+   to trusted people and do not configure automations to set `Ready`. Set
    `SOFA_PUBLISH_TOKEN` to a separate fine-grained PAT scoped only to this
    repository, with Contents and Pull requests write
    permissions. Only the trusted publication job receives it; that job uses the
@@ -28,14 +29,13 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    not needed. Copilot Requests permission and a Copilot-enabled account are
    needed for the agent job.
 5. Create one issue titled **Normalize greeting names**, copying
-   [issue-body.md](issue-body.md) as its exact body. Build the toolkit CLI and
-   run `sofa spec-digest --title 'Normalize greeting names'
-   --body-file issue-body.md`. Kevin must post `/sofa approve-spec <digest>`
-   himself, then move that issue into `Ready` in the Project. Run **sofa
-   disposable canary** manually on the default branch with that issue number.
-   For the untouched example body, the digest is
-   `cf358e96c2ddc9e03d6b6f7ff2025637507f508617642267e8d9467213205673`;
-   recompute it if GitHub or the issue creator changes any substantive text.
+   [issue-body.md](issue-body.md) as its body. Review the issue, then move it
+   into `Ready` in the private Project. Run **sofa disposable canary** manually
+   on the default branch with that issue number. There is no approval command
+   to calculate or post. Sofa computes a content digest internally, captures
+   the Ready field revision, and blocks if the issue was edited after Ready or
+   if its admitted content or Ready revision later changes. Milestone 01 does
+   not supersede an admitted issue; use a new issue for revised scope.
 
 The workflow admits the issue before the model job. An idle or duplicate run
 completes without dispatching work or consuming inference. The model receives
