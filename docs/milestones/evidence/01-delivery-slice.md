@@ -17,7 +17,7 @@
 | 01-A | Pending live | Approved disposable issue/Ready event, Copilot ACP Actions run, passing check evidence, and one draft PR URL. |
 | 01-B | Local admission and claim tests pass; live pending | Observe unauthorized/duplicate deliveries and model-call telemetry in hosted path. |
 | 01-C | Local ledger recovery, CAS, and publisher idempotence tests pass; live pending | Hosted cancellation/rerun and full crash matrix with run/PR references. |
-| 01-D | Local stale-fence and forged-branch checks pass; live pending | Human branch-update canary and documented race boundary. |
+| 01-D | Local stale-fence, forged-tree, and post-reference human branch-update checks pass; live pending | Hosted human branch-update canary and documented race boundary. |
 | 01-E | Local path/symlink/candidate/secret-sentinel checks pass; hosted pending | Verify job credential boundaries and adversarial artifact fixture in Actions. |
 | 01-F | Local ACP fake-peer/process cleanup and state budget/checkpoint tests pass; hosted pending | Observe Copilot auth/quota behavior and actual cancellation. |
 | 01-G | Local exact recipe and negative-case tests pass; live pending | Confirm idle reconciliation and recipe path with zero model calls. |

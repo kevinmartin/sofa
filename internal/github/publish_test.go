@@ -23,13 +23,15 @@ func jsonResponse(status int, value any) *http.Response {
 }
 
 type publishFixture struct {
-	branch        bool
-	pr            bool
-	mutations     int
-	guards        int
-	extra         bool
-	commitMessage string
-	content       []byte
+	branch         bool
+	pr             bool
+	mutations      int
+	guards         int
+	extra          bool
+	changeOnCreate bool
+	humanBranch    bool
+	commitMessage  string
+	content        []byte
 }
 
 const testRepo = "owner/fixture"
@@ -53,6 +55,9 @@ func (f *publishFixture) trip(r *http.Request) (*http.Response, error) {
 	case r.Method == http.MethodGet && strings.Contains(p, "/git/ref/heads/sofa/"):
 		if !f.branch {
 			return jsonResponse(404, map[string]any{"message": "missing"}), nil
+		}
+		if f.humanBranch {
+			return jsonResponse(200, map[string]any{"object": map[string]any{"sha": strings.Repeat("9", 40)}}), nil
 		}
 		return jsonResponse(200, map[string]any{"object": map[string]any{"sha": testCommit}}), nil
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/git/commits/"+testBase):
@@ -86,6 +91,7 @@ func (f *publishFixture) trip(r *http.Request) (*http.Response, error) {
 		return jsonResponse(201, map[string]any{"sha": testCommit}), nil
 	case r.Method == http.MethodPost && strings.HasSuffix(p, "/git/refs"):
 		f.branch = true
+		f.humanBranch = f.changeOnCreate
 		return jsonResponse(201, map[string]any{"ref": "refs/heads/sofa/test"}), nil
 	case r.Method == http.MethodGet && strings.HasSuffix(p, "/pulls"):
 		if !f.pr {
@@ -149,5 +155,24 @@ func TestPublishDraftBlocksMissingEvidence(t *testing.T) {
 	}
 	if f.mutations != 0 || f.guards != 0 {
 		t.Fatal("publication began before validating evidence")
+	}
+}
+
+func TestPublishDraftStopsWhenHumanChangesCandidateBranch(t *testing.T) {
+	f := &publishFixture{changeOnCreate: true}
+	in := inputFixture(f)
+	c, err := New("fixture-token", roundTripFunc(f.trip))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PublishDraft(context.Background(), in); err == nil {
+		t.Fatal("human branch update did not stop PR publication")
+	}
+	if !f.branch || !f.humanBranch || f.pr {
+		t.Fatal("publisher overwrote the human branch or opened a PR")
+	}
+	mutations := f.mutations
+	if _, err := c.PublishDraft(context.Background(), in); err == nil || f.mutations != mutations || f.pr {
+		t.Fatal("retry overwrote the human branch or opened a PR")
 	}
 }
