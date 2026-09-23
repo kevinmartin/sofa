@@ -93,7 +93,7 @@ jobs:
           curl --fail --silent --show-error --location --retry 3 \
             --output "$RUNNER_TEMP/copilot-linux-x64.tar.gz" \
             https://github.com/github/copilot-cli/releases/download/v1.0.86/copilot-linux-x64.tar.gz
-          echo '3c0e1f939931ddf19cf4d6a2d77922afb937dbfa8d373fe623b8befab5bd7fdb  '"$RUNNER_TEMP/copilot-linux-x64.tar.gz" | sha256sum --check --status
+          echo 'ea4a519d7b2ff54e9c7d10ae9921cf4ab3f5041489ec340852f47f4f63fc535b  '"$RUNNER_TEMP/copilot-linux-x64.tar.gz" | sha256sum --check --status
           tar -xzf "$RUNNER_TEMP/copilot-linux-x64.tar.gz" -C "$RUNNER_TEMP/copilot-bin"
           test -x "$RUNNER_TEMP/copilot-bin/copilot"
       - name: Run isolated candidate worker
