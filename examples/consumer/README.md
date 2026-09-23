@@ -16,11 +16,15 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    repository's default branch protected from unreviewed workflow edits. The
    Project needs a status named `Ready`.
 4. Set repository secret `SOFA_PROJECTS_TOKEN` to a credential that can read
-   that issue, its approval comment, and its Project status history. The
-   workflow's own `GITHUB_TOKEN` writes only this repository's `sofa-state`
-   branch and draft PR. Set Actions workflow permissions to permit the
-   requested contents and pull-request writes. Copilot Requests permission and
-   a Copilot-enabled account are needed for the agent job.
+   that issue, its approval comment, and its Project status history. Set
+   `SOFA_PUBLISH_TOKEN` to a separate fine-grained PAT scoped only to this
+   repository, with Contents and Pull requests write
+   permissions. Only the trusted publication job receives it. The workflow's
+   `GITHUB_TOKEN` writes the `sofa-state` branch through its explicit job-level
+   Contents permission; the repository default may remain read-only. The
+   repository-wide setting that also permits Actions to approve PR reviews is
+   not needed. Copilot Requests permission and a Copilot-enabled account are
+   needed for the agent job.
 5. Create one issue titled **Normalize greeting names**, copying
    [issue-body.md](issue-body.md) as its exact body. Build the toolkit CLI and
    run `sofa spec-digest --title 'Normalize greeting names'
@@ -53,8 +57,7 @@ The ledger either suppresses duplicate work or reclaims the attempt. If a
 publication intent survived, the verifier fetches the previous run's candidate
 artifact and checks it again under the new fence. Artifacts have a one-day
 retention; if the needed artifact has expired, recovery stops rather than
-inventing evidence. Do not delete the `sofa-state` branch to retry. A token made
-from `GITHUB_TOKEN` may suppress downstream PR-triggered workflows; this slice
+inventing evidence. Do not delete the `sofa-state` branch to retry. This slice
 uses its own deterministic check evidence and leaves independent downstream CI
 qualification to later milestones.
 
