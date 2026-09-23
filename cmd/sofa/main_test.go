@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kevinmartin/sofa/internal/admission"
@@ -129,6 +130,62 @@ func TestFailureObservationsRemainDistinctAcrossRecoveredGenerations(t *testing.
 	snapshot, err := e.Store.Load(context.Background())
 	if err != nil || len(snapshot.State.Observations) != 2 {
 		t.Fatalf("expected both failed generations in append-only observations: %v", err)
+	}
+}
+
+type synchronizedReadStore struct {
+	state.Store
+	mu        sync.Mutex
+	remaining int
+	release   chan struct{}
+}
+
+func (s *synchronizedReadStore) Load(ctx context.Context) (state.Snapshot, error) {
+	snapshot, err := s.Store.Load(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	s.mu.Lock()
+	wait := s.remaining > 0
+	if wait {
+		s.remaining--
+		if s.remaining == 0 {
+			close(s.release)
+		}
+	}
+	s.mu.Unlock()
+	if wait {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return state.Snapshot{}, ctx.Err()
+		}
+	}
+	return snapshot, nil
+}
+
+func TestConcurrentEquivalentObservationsAreIdempotent(t *testing.T) {
+	_, m := testManifest(t)
+	store := &state.MemoryStore{}
+	e := state.Engine{Store: store}
+	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{ModelCalls: 2, InfrastructureRetries: 2, RuntimeSeconds: 1200}); err != nil {
+		t.Fatal(err)
+	}
+	e.Store = &synchronizedReadStore{Store: store, remaining: 2, release: make(chan struct{})}
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			results <- observeOnce(context.Background(), e, m.Fence.AttemptID, "admission", "accepted", m.Grant.BaseSHA, "", "")
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("equivalent observation conflicted: %v", err)
+		}
+	}
+	snapshot, err := store.Load(context.Background())
+	if err != nil || len(snapshot.State.Observations) != 1 {
+		t.Fatalf("expected exactly one admission observation: %v", err)
 	}
 }
 

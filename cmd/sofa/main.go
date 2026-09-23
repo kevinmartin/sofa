@@ -164,19 +164,31 @@ func observeOnce(ctx context.Context, engine state.Engine, attemptID, stage, out
 	if scope != "" {
 		id += "-" + scope
 	}
-	snapshot, err := engine.Store.Load(ctx)
-	if err != nil {
+	lookup := func() (bool, error) {
+		snapshot, err := engine.Store.Load(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, prior := range snapshot.State.Observations {
+			if prior.ID == id {
+				if prior.AttemptID == attemptID && prior.Stage == stage && prior.Outcome == outcome && prior.Revision == revision && prior.EvidenceRef == evidenceRef {
+					return true, nil
+				}
+				return false, state.ErrConflict
+			}
+		}
+		return false, nil
+	}
+	if found, err := lookup(); err != nil || found {
 		return err
 	}
-	for _, prior := range snapshot.State.Observations {
-		if prior.ID == id {
-			if prior.AttemptID == attemptID && prior.Stage == stage && prior.Outcome == outcome && prior.Revision == revision && prior.EvidenceRef == evidenceRef {
-				return nil
-			}
-			return state.ErrConflict
+	err := engine.Observe(ctx, state.Observation{Version: state.Version, ID: id, AttemptID: attemptID, Stage: stage, Outcome: outcome, Revision: revision, EvidenceRef: evidenceRef, RecordedAt: time.Now().UTC()})
+	if errors.Is(err, state.ErrConflict) {
+		if found, currentErr := lookup(); currentErr != nil || found {
+			return currentErr
 		}
 	}
-	return engine.Observe(ctx, state.Observation{Version: state.Version, ID: id, AttemptID: attemptID, Stage: stage, Outcome: outcome, Revision: revision, EvidenceRef: evidenceRef, RecordedAt: time.Now().UTC()})
+	return err
 }
 
 func admit(ctx context.Context, args []string) error {
