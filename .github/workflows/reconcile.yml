@@ -1,0 +1,104 @@
+name: sofa reconcile
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: Number of the owner-designated issue in the calling repository
+        required: true
+        type: number
+      toolkit_sha:
+        description: Full immutable commit SHA of the sofa toolkit
+        required: true
+        type: string
+    outputs:
+      dispatch:
+        description: Whether a new or recoverable attempt was admitted
+        value: ${{ jobs.admit.outputs.dispatch }}
+      reconcile_publication:
+        description: Whether to reuse a candidate from an interrupted publication
+        value: ${{ jobs.admit.outputs.reconcile_publication }}
+      reconcile_candidate:
+        description: Whether to reverify a retained candidate
+        value: ${{ jobs.admit.outputs.reconcile_candidate }}
+    secrets:
+      SOFA_PROJECTS_TOKEN:
+        required: true
+
+jobs:
+  admit:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Only the trusted controller writes sofa-state.
+      actions: read # Reconciliation checks prior run termination before reclaim.
+    outputs:
+      dispatch: ${{ steps.status.outputs.dispatch }}
+      reconcile_publication: ${{ steps.status.outputs.reconcile_publication }}
+      reconcile_candidate: ${{ steps.status.outputs.reconcile_candidate }}
+    steps:
+      - name: Validate immutable toolkit reference
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
+      - name: Check out consumer configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Verify checked out toolkit commit
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted controller
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Admit the designated issue
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_STATE_TOKEN: ${{ github.token }}
+          SOFA_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          mkdir -p transport
+          ./sofa admit --config consumer/.sofa.yml --issue "$SOFA_ISSUE_NUMBER" --out-dir transport
+      - name: Record dispatch decision
+        id: status
+        shell: bash
+        run: |
+          if [[ -f transport/manifest.json ]] && [[ "$(jq -r '.dispatch' transport/status.json)" == true ]]; then
+            echo 'dispatch=true' >> "$GITHUB_OUTPUT"
+            echo "reconcile_publication=$(jq -r '.reconcile_publication // false' transport/status.json)" >> "$GITHUB_OUTPUT"
+            echo "reconcile_candidate=$(jq -r '.reconcile_candidate // false' transport/status.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo 'dispatch=false' >> "$GITHUB_OUTPUT"
+            echo 'reconcile_publication=false' >> "$GITHUB_OUTPUT"
+            echo 'reconcile_candidate=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Carry admitted manifest to work jobs
+        if: steps.status.outputs.dispatch == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport/manifest.json
+          if-no-files-found: error
+          retention-days: 1
