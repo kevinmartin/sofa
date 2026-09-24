@@ -24,6 +24,8 @@ The four broad development stages have been divided into smaller goals, followed
 
 Recommended execution order is numerical: run 01.1 after 01 to protect the proven delivery loop before extending it. Goals 02–04 retain independent feature boundaries and can be implemented in parallel after their shared contracts are frozen. Assign separate branches/worktrees when available and give one coordinator responsibility for integration. Within any goal, delegate bounded adapters, fixtures, or reviews while the coordinator works on another useful part. Avoid simultaneous uncoordinated edits to configuration, state schemas, and publication logic.
 
+Use GitHub Stacked PRs for dependent milestones while a parent sofa PR is still under review. Keep each milestone's changes on its own branch and PR, targeting the parent branch so its review diff stays focused. After Kevin merges a parent, sync/rebase the remaining stack and rerun checks for the resulting head/base. Stack management does not grant merge authority for sofa.
+
 ## Shared goal contract
 
 ### Sources and scope
