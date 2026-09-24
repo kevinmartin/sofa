@@ -1,0 +1,396 @@
+name: sofa work
+
+on:
+  workflow_call:
+    inputs:
+      toolkit_sha:
+        description: Full immutable commit SHA of the sofa toolkit
+        required: true
+        type: string
+      reconcile_publication:
+        description: Reuse a prior candidate after interrupted publication
+        required: false
+        default: false
+        type: boolean
+      reconcile_candidate:
+        description: Reverify an accepted candidate from a prior terminal run
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      SOFA_PROJECTS_TOKEN:
+        required: true
+      SOFA_PUBLISH_TOKEN:
+        required: true
+
+# The caller invokes this only when reconcile emitted dispatch=true. Recovery
+# fetches only the prior run/attempt identified by the admitted manifest.
+jobs:
+  execute:
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.reconcile_candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      copilot-requests: write
+    steps:
+      - name: Validate immutable toolkit reference
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
+      - name: Download admitted manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Read admitted base commit
+        id: base
+        shell: bash
+        run: |
+          sha="$(jq -er '.grant.base_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid admitted base commit' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out admitted consumer commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Verify source identities
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_BASE_SHA"
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted worker
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sofa-cli"
+          go build -trimpath -o "$RUNNER_TEMP/sofa-cli/sofa" ./cmd/sofa
+      - name: Fetch pinned Copilot ACP package
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/copilot-package"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/github-copilot-linux-x64.tgz" \
+            https://github.com/github/copilot-cli/releases/download/v1.0.86/github-copilot-1.0.86-linux-x64.tgz
+          echo '53284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112  '"$RUNNER_TEMP/github-copilot-linux-x64.tgz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/github-copilot-linux-x64.tgz" -C "$RUNNER_TEMP/copilot-package"
+          test -f "$RUNNER_TEMP/copilot-package/package/index.js"
+      - name: Run isolated candidate worker
+        shell: bash
+        env:
+          SOFA_MODEL_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p candidate
+          docker run --rm --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges --read-only \
+            --pids-limit 128 --memory 3g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --tmpfs /home/sofa:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$PWD/consumer,dst=/workspace" \
+            --mount "type=bind,src=$PWD/transport,dst=/transport,readonly" \
+            --mount "type=bind,src=$PWD/candidate,dst=/candidate" \
+            --mount "type=bind,src=$RUNNER_TEMP/sofa-cli,dst=/toolkit,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/copilot-package,dst=/copilot-package,readonly" \
+            --env SOFA_MODEL_TOKEN \
+            --env HOME=/home/sofa \
+            --env PATH=/toolkit:/usr/local/bin:/usr/bin:/bin \
+            node:24-bookworm@sha256:b977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3 \
+            /toolkit/sofa execute --config /workspace/.sofa.yml \
+              --manifest /transport/manifest.json --workspace /workspace \
+              --out /candidate/bundle.json
+      - name: Preserve sanitized execution failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-execution-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/execution-failure.json
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Carry candidate bundle to secretless verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate/bundle.json
+            candidate/execution.json
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize-failure:
+    needs: [execute, verify]
+    if: always() && (needs.execute.result == 'failure' || needs.verify.result == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download admitted manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Download sanitized failure, when produced
+        if: needs.execute.result == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-execution-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: failure
+      - name: Download sanitized verification failure, when produced
+        if: needs.verify.result == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: failure
+      - name: Build bounded infrastructure fallback
+        shell: bash
+        run: |
+          if [[ -f failure/verification-failure.json ]]; then
+            cp failure/verification-failure.json failure/failure.json
+          elif [[ -f failure/execution-failure.json ]]; then
+            cp failure/execution-failure.json failure/failure.json
+          else
+            mkdir -p failure
+            jq -n --arg id "$(jq -er '.fence.attempt_id' transport/manifest.json)" \
+              --argjson gen "$(jq -er '.fence.generation' transport/manifest.json)" \
+              '{version:1,attempt_id:$id,generation:$gen,kind:"infrastructure"}' \
+              > failure/failure.json
+          fi
+      - name: Read admitted base commit
+        id: base
+        shell: bash
+        run: |
+          sha="$(jq -er '.grant.base_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid admitted base commit' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out admitted configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted finalizer
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Record the bounded failure
+        shell: bash
+        env:
+          SOFA_STATE_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
+          ./sofa fail --config consumer/.sofa.yml \
+            --manifest transport/manifest.json \
+            --failure failure/failure.json
+
+  verify:
+    needs: execute
+    if: always() && (needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read # Only used by download-artifact for a prior run on recovery.
+    steps:
+      - name: Download admitted manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Read recovery artifact identity
+        if: inputs.reconcile_candidate
+        id: recovery
+        shell: bash
+        run: |
+          run_id="$(jq -er '.recovery_source.run_id' transport/manifest.json)"
+          attempt="$(jq -er '.recovery_source.run_attempt' transport/manifest.json)"
+          [[ "$run_id" =~ ^[0-9]+$ && "$attempt" =~ ^[0-9]+$ ]] || { echo 'invalid recovery run identity' >&2; exit 1; }
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
+      - name: Download current candidate bundle
+        if: '!inputs.reconcile_candidate'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
+      - name: Download retained candidate bundle
+        if: inputs.reconcile_candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-verified-candidate-${{ steps.recovery.outputs.run_id }}-${{ steps.recovery.outputs.attempt }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.recovery.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: candidate
+      - name: Read admitted base commit
+        id: base
+        shell: bash
+        run: |
+          sha="$(jq -er '.grant.base_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid admitted base commit' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out admitted consumer commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted verifier
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Verify candidate and run configured checks without secrets
+        shell: bash
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
+          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
+          mkdir -p evidence
+          ./sofa verify --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --workspace "$PWD/consumer" \
+            --bundle candidate/bundle.json --out evidence/checks.json
+      - name: Preserve sanitized verification failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/verification-failure.json
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Carry trusted evidence to publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/checks.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Carry verified candidate to publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-verified-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/bundle.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: verify
+    # A recovered candidate skips execute. Explicit always() prevents GitHub's
+    # implicit success() from treating that intentional skip as a failed chain.
+    if: always() && needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Download admitted manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Download verified candidate bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-verified-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
+      - name: Download trusted check evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Read admitted base commit
+        id: base
+        shell: bash
+        run: |
+          sha="$(jq -er '.grant.base_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid admitted base commit' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out admitted configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted publisher
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Verify publisher source identity
+        shell: bash
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
+          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
+      - name: Revalidate live authority and publish one draft PR
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_PUBLISH_TOKEN: ${{ secrets.SOFA_PUBLISH_TOKEN }}
+          SOFA_BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ./sofa publish --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --bundle candidate/bundle.json \
+            --evidence evidence/checks.json --base-branch "$SOFA_BASE_BRANCH"
