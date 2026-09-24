@@ -4,7 +4,7 @@
 
 Produce a verified release candidate and an evidence-backed handoff for Kevin to promote. Completion means the candidate passes required integration acceptance, public/private canaries, compatibility checks and rollback rehearsal. It does not mean publishing a stable release, moving public `v1`, merging work or deploying production.
 
-Depends on **all milestones 01–09** and their evidence reports. Read the [shared milestone contract](README.md), [main plan](../../PLAN.md), [lifecycle](../lifecycle.md), [runtime/watch design](../runtime-and-watches.md), [memory](../memory.md), and [System One design](../system-one.md). Reconcile implementation against these contracts before assembling the candidate; an earlier milestone's unchecked live prerequisite remains unchecked here.
+Depends on **all milestones 01, 01.1, and 02–09** and their evidence reports. Read the [shared milestone contract](README.md), [main plan](../../PLAN.md), [lifecycle](../lifecycle.md), [runtime/watch design](../runtime-and-watches.md), [memory](../memory.md), and [System One design](../system-one.md). Reconcile implementation against these contracts before assembling the candidate; an earlier milestone's unchecked live prerequisite remains unchecked here.
 
 ## Scope and exclusions
 
@@ -42,5 +42,5 @@ When implemented, write `docs/milestones/evidence/10-release-readiness.md`. Incl
 If an external environment, credential or owner action is unavailable, complete independent local work and list the exact unfinished live check. A local pass cannot substitute for public/private canaries or real supported-agent verification. Keep release readiness explicitly incomplete until required evidence exists; missing authorization is never inferred from elapsed time.
 
 ```text
-Implement and verify milestone 10 in docs/milestones/10-release-readiness.md under docs/milestones/README.md. Integrate completed milestones 01–09, produce an immutable release candidate, run required authorized live canaries and isolated upgrade/rollback rehearsals, and write the specified evidence report. Completion is a verified release-ready handoff. Do not merge, deploy production, publish stable releases or move public v1. Preserve incomplete live checks honestly and continue independent local work when external prerequisites are missing.
+Implement and verify milestone 10 in docs/milestones/10-release-readiness.md under docs/milestones/README.md. Integrate completed milestones 01, 01.1, and 02–09, produce an immutable release candidate, run required authorized live canaries and isolated upgrade/rollback rehearsals, and write the specified evidence report. Completion is a verified release-ready handoff. Do not merge, deploy production, publish stable releases or move public v1. Preserve incomplete live checks honestly and continue independent local work when external prerequisites are missing.
 ```
