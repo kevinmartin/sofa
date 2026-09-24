@@ -35,8 +35,30 @@ func checkFakeWorkflowContract(data []byte) error {
 			return fmt.Errorf("fake workflow references a privileged credential or permission")
 		}
 	}
+	for _, forbidden := range []string{"-e SOFA_E2E_HOST_ONLY_TOKEN", "--env-file", "src=$RUNNER_TEMP"} {
+		if strings.Contains(content, forbidden) {
+			return fmt.Errorf("fake worker receives a host-only credential")
+		}
+	}
 	if !strings.Contains(content, "--network none") || !strings.Contains(content, "SOFA_MODEL_TOKEN=sofa-fake-acp-inert-token") || !strings.Contains(content, "SOFA_COPILOT_PATH=/toolkit/fake-acp") || !strings.Contains(content, "--platform linux/amd64") {
 		return fmt.Errorf("fake worker isolation or identity changed")
+	}
+	for _, required := range []string{
+		"export SOFA_E2E_HOST_ONLY_TOKEN=\"sofa-e2e-host-$(openssl rand -hex 32)\"",
+		"host_file_sentinel=\"sofa-e2e-host-file-$(openssl rand -hex 32)\"",
+		"host_file=\"$(mktemp \"$RUNNER_TEMP/sofa-e2e-host-only.XXXXXX\")\"",
+		"echo \"::add-mask::$SOFA_E2E_HOST_ONLY_TOKEN\"",
+		"echo \"::add-mask::$host_file_sentinel\"",
+		"-e SOFA_E2E_HOST_ONLY_FILE=\"$host_file\"",
+		"if [ \"${SOFA_E2E_HOST_ONLY_TOKEN+x}\" ]; then",
+		"if [ -e \"$SOFA_E2E_HOST_ONLY_FILE\" ]; then",
+		"done < <(find transport candidate -type f -print0)",
+		"grep -Fq -- \"$SOFA_E2E_HOST_ONLY_TOKEN\" \"$artifact\"",
+		"grep -Fq -- \"$host_file_sentinel\" \"$artifact\"",
+	} {
+		if !strings.Contains(content, required) {
+			return fmt.Errorf("fake host-only sentinel boundary is missing %q", required)
+		}
 	}
 	if verify.Needs != "execute" || !strings.Contains(verify.If, "always()") || !strings.Contains(verify.If, "needs.execute.result == 'skipped' && inputs.reconcile_candidate") || publish.Needs != "verify" || !strings.Contains(publish.If, "always()") || !strings.Contains(publish.If, "needs.verify.result == 'success'") {
 		return fmt.Errorf("fake recovery chain cannot publish after execution skips")
@@ -72,6 +94,10 @@ func TestFakeHostedWorkflowContract(t *testing.T) {
 	for _, test := range []struct{ name, old, next string }{
 		{"network isolation", "--network none", "--network bridge"},
 		{"credential boundary", "permissions: {}", "permissions: {}\n# ${{ secrets.SOFA_PUBLISH_TOKEN }}"},
+		{"host environment boundary", "if [ \"${SOFA_E2E_HOST_ONLY_TOKEN+x}\" ]; then", "if false; then"},
+		{"host file boundary", "if [ -e \"$SOFA_E2E_HOST_ONLY_FILE\" ]; then", "if false; then"},
+		{"artifact sentinel scan", "done < <(find transport candidate -type f -print0)", "done < <(find nowhere -type f -print0)"},
+		{"host environment injection", "-e SOFA_E2E_HOST_ONLY_FILE=\"$host_file\"", "-e SOFA_E2E_HOST_ONLY_TOKEN -e SOFA_E2E_HOST_ONLY_FILE=\"$host_file\""},
 		{"job permission", "      contents: read\n      actions: read", "      contents: write\n      actions: read"},
 		{"recovery scheduler", "if: always() && github.repository", "if: github.repository"},
 		{"verified artifact", "name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}", "name: sofa-e2e-other-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}"},
