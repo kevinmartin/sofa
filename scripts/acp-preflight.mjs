@@ -25,14 +25,22 @@ const child = spawn(process.env.SOFA_COPILOT_PATH || '/copilot/copilot', ['--acp
 let stage = 'initialize';
 let finished = false;
 let stderrCode = '';
+let stderrBytes = 0;
 let lines = 0;
 const osCodes = ['ENOSPC', 'EACCES', 'EPERM', 'EROFS', 'ENOMEM', 'ENOENT'];
+const startupCategories = [
+  ['Failed to extract bundled package', 'package extraction failed'],
+  ['ERR_SYSTEM_ERROR', 'Node system error'],
+  ['Cannot find module', 'module unavailable'],
+  ['ERR_DLOPEN_FAILED', 'native module unavailable'],
+  ['GLIBC_', 'glibc incompatible'],
+];
 
 function finish(detail, success = false) {
   if (finished) return;
   finished = true;
   clearTimeout(timer);
-  console.log(`sofa ACP preflight: ${stage}: ${detail}${stderrCode ? `; child ${stderrCode}` : ''}`);
+  console.log(`sofa ACP preflight: ${stage}: ${detail}; stderr bytes ${stderrBytes}${stderrCode ? `; child ${stderrCode}` : ''}`);
   child.kill('SIGKILL');
   process.exitCode = success ? 0 : 1;
 }
@@ -42,9 +50,11 @@ function send(id, method, params) {
 }
 
 child.stderr.on('data', (data) => {
+  stderrBytes += data.length;
   if (stderrCode) return;
   const chunk = String(data);
-  stderrCode = osCodes.find((code) => chunk.includes(code)) || '';
+  stderrCode = osCodes.find((code) => chunk.includes(code)) ||
+    startupCategories.find(([pattern]) => chunk.includes(pattern))?.[1] || '';
 });
 child.on('error', (error) => {
   const category = osCodes.includes(error.code) ? error.code : 'process start failed';
