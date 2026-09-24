@@ -1,0 +1,302 @@
+name: sofa secretless fake ACP E2E
+
+# Test-only adapter. The trusted disposable coordinator creates a suite-owned
+# caller branch pinned to this exact candidate SHA. No job receives a secret.
+on:
+  workflow_call:
+    inputs:
+      suite_id:
+        required: true
+        type: string
+      scenario:
+        required: true
+        type: string
+      candidate_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      disposable_base_sha:
+        required: true
+        type: string
+      reconcile_candidate:
+        required: false
+        default: false
+        type: boolean
+      producer_run_id:
+        required: false
+        default: ''
+        type: string
+      producer_run_attempt:
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+jobs:
+  execute:
+    if: github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && !inputs.reconcile_candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact disposable fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.disposable_base_sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out exact sofa candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Check source identities
+        shell: bash
+        env:
+          SOFA_E2E_CANDIDATE: ${{ inputs.candidate_sha }}
+          SOFA_E2E_DISPOSABLE_BASE: ${{ inputs.disposable_base_sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_E2E_CANDIDATE"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_E2E_DISPOSABLE_BASE"
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build test-only peer and candidate tools
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p ../bin
+          go build -trimpath -o ../bin/sofa ./cmd/sofa
+          go build -trimpath -o ../bin/e2e-fixture ./cmd/e2e-fixture
+          go build -trimpath -o ../bin/fake-acp ./cmd/fake-acp
+      - name: Prepare synthetic admitted attempt
+        shell: bash
+        env:
+          SOFA_E2E_SUITE: ${{ inputs.suite_id }}
+          SOFA_E2E_SCENARIO: ${{ inputs.scenario }}
+          SOFA_E2E_CANDIDATE: ${{ inputs.candidate_sha }}
+          SOFA_E2E_PR_BASE: ${{ inputs.base_sha }}
+          SOFA_E2E_DISPOSABLE_BASE: ${{ inputs.disposable_base_sha }}
+        run: |
+          bin/e2e-fixture prepare --config consumer/.sofa.yml --out-dir transport \
+            --suite-id "$SOFA_E2E_SUITE" --scenario "$SOFA_E2E_SCENARIO" \
+            --candidate-sha "$SOFA_E2E_CANDIDATE" --pr-base-sha "$SOFA_E2E_PR_BASE" \
+            --disposable-base-sha "$SOFA_E2E_DISPOSABLE_BASE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Run fake ACP in the restricted networkless worker
+        shell: bash
+        run: |
+          mkdir -p candidate
+          docker run --rm --platform linux/amd64 --network none \
+            --user "$(id -u):$(id -g)" --cap-drop ALL \
+            --security-opt no-new-privileges --read-only \
+            --pids-limit 128 --memory 3g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --tmpfs /home/sofa:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$PWD/consumer,dst=/workspace" \
+            --mount "type=bind,src=$PWD/transport,dst=/transport,readonly" \
+            --mount "type=bind,src=$PWD/candidate,dst=/candidate" \
+            --mount "type=bind,src=$PWD/bin,dst=/toolkit,readonly" \
+            -e SOFA_MODEL_TOKEN=sofa-fake-acp-inert-token \
+            -e SOFA_COPILOT_PATH=/toolkit/fake-acp \
+            node:24-bookworm@sha256:b977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3 \
+            /toolkit/sofa execute --config /transport/config.yml \
+              --manifest /transport/manifest.json --workspace /workspace \
+              --out /candidate/bundle.json
+      - name: Carry synthetic admission and fixture identity
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-e2e-source-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            transport/config.yml
+            transport/manifest.json
+            transport/identity.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Carry bounded fake candidate and telemetry
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-e2e-candidate-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate/bundle.json
+            candidate/execution.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: execute
+    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && (needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Download current synthetic admission
+        if: '!inputs.reconcile_candidate'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-e2e-source-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Download current fake candidate
+        if: '!inputs.reconcile_candidate'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-e2e-candidate-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
+      - name: Download retained synthetic admission
+        if: inputs.reconcile_candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-e2e-source-${{ inputs.suite_id }}-${{ inputs.producer_run_id }}-${{ inputs.producer_run_attempt }}
+          run-id: ${{ inputs.producer_run_id }}
+          github-token: ${{ github.token }}
+          path: retained
+      - name: Download retained fake candidate
+        if: inputs.reconcile_candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-e2e-candidate-${{ inputs.suite_id }}-${{ inputs.producer_run_id }}-${{ inputs.producer_run_attempt }}
+          run-id: ${{ inputs.producer_run_id }}
+          github-token: ${{ github.token }}
+          path: candidate
+      - name: Check out exact disposable fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.disposable_base_sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out exact sofa candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Check source identities and build verifier
+        shell: bash
+        env:
+          SOFA_E2E_CANDIDATE: ${{ inputs.candidate_sha }}
+          SOFA_E2E_DISPOSABLE_BASE: ${{ inputs.disposable_base_sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_E2E_CANDIDATE"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_E2E_DISPOSABLE_BASE"
+          mkdir -p bin evidence
+          cd toolkit
+          CGO_ENABLED=0 go build -trimpath -o ../bin/sofa ./cmd/sofa
+          CGO_ENABLED=0 go build -trimpath -o ../bin/e2e-fixture ./cmd/e2e-fixture
+      - name: Rebind retained candidate to a new fenced generation
+        if: inputs.reconcile_candidate
+        shell: bash
+        run: |
+          bin/e2e-fixture recover --from-dir retained --out-dir transport \
+            --bundle candidate/bundle.json --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Verify exact fake candidate with secretless configured checks
+        shell: bash
+        run: |
+          bin/sofa verify --config transport/config.yml \
+            --manifest transport/manifest.json --workspace "$PWD/consumer" \
+            --bundle candidate/bundle.json --out evidence/checks.json
+      - name: Carry current verification artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            transport/config.yml
+            transport/manifest.json
+            transport/identity.json
+            candidate/bundle.json
+            candidate/execution.json
+            evidence/checks.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: verify
+    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Download exact verified candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+      - name: Check out exact disposable fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.disposable_base_sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out exact sofa candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Simulate trusted publication against controlled GitHub API
+        shell: bash
+        working-directory: toolkit
+        env:
+          SOFA_E2E_CANDIDATE: ${{ inputs.candidate_sha }}
+          SOFA_E2E_DISPOSABLE_BASE: ${{ inputs.disposable_base_sha }}
+          SOFA_E2E_CONFIG: ${{ github.workspace }}/transport/config.yml
+          SOFA_E2E_MANIFEST: ${{ github.workspace }}/transport/manifest.json
+          SOFA_E2E_BUNDLE: ${{ github.workspace }}/candidate/bundle.json
+          SOFA_E2E_EVIDENCE: ${{ github.workspace }}/evidence/checks.json
+          SOFA_E2E_BASE_ROOT: ${{ github.workspace }}/consumer
+          SOFA_E2E_RESULT: ${{ github.workspace }}/report/publication.json
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOFA_E2E_CANDIDATE"
+          test "$(git -C ../consumer rev-parse HEAD)" = "$SOFA_E2E_DISPOSABLE_BASE"
+          mkdir -p ../report
+          go test -count=1 -run '^TestHostedArtifactPublication$' ./cmd/sofa
+      - name: Validate and emit versioned redacted scenario report
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -o ../bin/e2e-fixture ./cmd/e2e-fixture
+          ../bin/e2e-fixture report --identity ../transport/identity.json \
+            --manifest ../transport/manifest.json --bundle ../candidate/bundle.json \
+            --execution ../candidate/execution.json --evidence ../evidence/checks.json \
+            --publication ../report/publication.json --out ../report/scenario.json
+      - name: Carry redacted candidate report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-e2e-report-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            transport/identity.json
+            transport/manifest.json
+            candidate/execution.json
+            candidate/bundle.json
+            evidence/checks.json
+            report/publication.json
+            report/scenario.json
+          if-no-files-found: error
+          retention-days: 1
