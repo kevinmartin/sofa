@@ -11,7 +11,9 @@ if (!token) {
 }
 
 const home = mkdtempSync('/tmp/sofa-agent-home-');
-const child = spawn(process.env.SOFA_COPILOT_PATH || '/copilot/copilot', ['--acp', '--stdio'], {
+const packageEntry = process.env.SOFA_COPILOT_ENTRY;
+const child = spawn(packageEntry ? 'node' : process.env.SOFA_COPILOT_PATH || '/copilot/copilot',
+  packageEntry ? [packageEntry, '--acp', '--stdio'] : ['--acp', '--stdio'], {
   cwd: process.env.SOFA_WORKSPACE || '/workspace',
   env: {
     PATH: '/toolkit:/copilot:/usr/local/bin:/usr/bin:/bin',
@@ -24,7 +26,7 @@ const child = spawn(process.env.SOFA_COPILOT_PATH || '/copilot/copilot', ['--acp
 
 let stage = 'initialize';
 let finished = false;
-let stderrCode = '';
+const stderrCodes = new Set();
 let stderrBytes = 0;
 let lines = 0;
 const osCodes = ['ENOSPC', 'EACCES', 'EPERM', 'EROFS', 'ENOMEM', 'ENOENT'];
@@ -33,6 +35,10 @@ const startupCategories = [
   ['ERR_SYSTEM_ERROR', 'Node system error'],
   ['Cannot find module', 'module unavailable'],
   ['ERR_DLOPEN_FAILED', 'native module unavailable'],
+  ['cannot open shared object file', 'shared library unavailable'],
+  ['failed to map segment from shared object', 'shared library mapping failed'],
+  ['Operation not permitted', 'operation not permitted'],
+  ['invalid ELF', 'invalid executable format'],
   ['GLIBC_', 'glibc incompatible'],
 ];
 
@@ -40,7 +46,8 @@ function finish(detail, success = false) {
   if (finished) return;
   finished = true;
   clearTimeout(timer);
-  console.log(`sofa ACP preflight: ${stage}: ${detail}; stderr bytes ${stderrBytes}${stderrCode ? `; child ${stderrCode}` : ''}`);
+  const categories = [...stderrCodes].sort().join(', ');
+  console.log(`sofa ACP preflight: ${stage}: ${detail}; stderr bytes ${stderrBytes}${categories ? `; child ${categories}` : ''}`);
   child.kill('SIGKILL');
   process.exitCode = success ? 0 : 1;
 }
@@ -51,10 +58,11 @@ function send(id, method, params) {
 
 child.stderr.on('data', (data) => {
   stderrBytes += data.length;
-  if (stderrCode) return;
   const chunk = String(data);
-  stderrCode = osCodes.find((code) => chunk.includes(code)) ||
-    startupCategories.find(([pattern]) => chunk.includes(pattern))?.[1] || '';
+  for (const code of osCodes) if (chunk.includes(code)) stderrCodes.add(code);
+  for (const [pattern, category] of startupCategories) {
+    if (chunk.includes(pattern)) stderrCodes.add(category);
+  }
 });
 child.on('error', (error) => {
   const category = osCodes.includes(error.code) ? error.code : 'process start failed';
