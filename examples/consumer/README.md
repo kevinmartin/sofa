@@ -7,9 +7,9 @@ excludes the test, so a candidate cannot pass by editing its assertion.
 
 1. Copy the files into the disposable repository. Rename
    `.github/workflows/sofa.yml.example` to `.github/workflows/sofa.yml`.
-2. Publish a reviewed sofa toolkit commit. Replace all three forty-zero values
+2. Publish a reviewed sofa toolkit commit. Replace all four forty-zero values
    in the caller with its **same full commit SHA**. The two reusable workflow
-   references and `toolkit_sha` must refer to that commit.
+   references and both `toolkit_sha` inputs must refer to that commit.
 3. The example already names the designated `kevinmartin/sofa-disposable`
    repository and Kevin's immutable ID. Replace only `project_id` in
    `.sofa.yml` with the disposable Project's immutable node ID. Keep the

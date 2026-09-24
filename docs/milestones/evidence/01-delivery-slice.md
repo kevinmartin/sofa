@@ -1,6 +1,6 @@
 # Milestone 01 evidence — safe hosted delivery slice
 
-**Status: Milestone 01 acceptance demonstrated; `sofa` PR remains draft and unmerged.** Kevin's Ready move for issue #6 admitted one Copilot ACP turn, secretless `go-test` passed, and the trusted publisher opened draft PR #7. A later cancellation after admission recovered into a zero-prompt recipe candidate and one draft PR. A separate publication failure recovered from its retained candidate and opened one draft PR without a second agent run. The hosted branch guard rejected unexpected existing branches without overwriting them.
+**Status: Complete.** The `sofa` PR remains draft and unmerged. Kevin's Ready move for issue #6 admitted one Copilot ACP turn, secretless `go-test` passed, and the trusted publisher opened draft PR #7. A later cancellation after admission recovered into a zero-prompt recipe candidate and one draft PR. A separate publication failure recovered from its retained candidate and opened one draft PR without a second agent run. The hosted branch guard rejected unexpected existing branches without overwriting them.
 
 ## Implementation and boundaries
 
