@@ -67,11 +67,13 @@ error also stops recovery rather than inventing evidence. Do not delete the
 uses its own deterministic check evidence and leaves independent downstream CI
 qualification to later milestones.
 
-The worker image, Copilot CLI tarball and external actions are pinned. Copilot
-CLI v1.0.86's Linux x64 tarball is checked against its published SHA-256 before
+The worker image, Copilot CLI package and external actions are pinned. Copilot
+CLI v1.0.86's Linux x64 package is checked against its published SHA-256 before
 execution. The worker runs as a non-root UID in a read-only container with only
 the disposable checkout, manifest, candidate output, trusted binary and
-Copilot executable mounted. The CLI's ACP file callbacks use the configured
+Copilot package mounted. The package's Node entrypoint passed a zero-prompt
+hosted ACP initialization and session probe in this container; the standalone
+binary could not map a shared library there. The CLI's ACP file callbacks use the configured
 allowlist; native harness tools can bypass those callbacks. The separate
 publisher validates every candidate path and file before writing. This
 prototype does not enforce a destination-specific network egress policy inside

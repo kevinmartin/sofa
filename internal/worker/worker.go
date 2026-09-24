@@ -103,7 +103,14 @@ func Execute(ctx context.Context, in Input) (Result, error) {
 			return out, errors.New("cannot create isolated agent home")
 		}
 		defer os.RemoveAll(dir)
-		ac := agent.Config{Dir: in.Directory, Env: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + dir, "GITHUB_TOKEN=" + in.ModelToken}, Timeout: time.Duration(in.Config.Limits.AttemptSeconds) * time.Second, AllowedPaths: allowed}
+		ac := agent.Config{
+			Command: "/usr/local/bin/node",
+			Args:    []string{"/copilot-package/package/index.js", "--acp", "--stdio"},
+			Dir:     in.Directory,
+			Env:     []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + dir, "GITHUB_TOKEN=" + in.ModelToken},
+			Timeout: time.Duration(in.Config.Limits.AttemptSeconds) * time.Second,
+			AllowedPaths: allowed,
+		}
 		prompt := fmt.Sprintf("Implement the approved issue in this disposable checkout. Title: %s\nSpecification: %s\nEdit only these approved existing files: %s\nDo not alter tests or policy to make a failure appear green. Return a completed ACP turn after the change.", spec.Title, spec.Body, strings.Join(allowed, ", "))
 		result, err := runner.Run(ctx, ac, prompt)
 		if err != nil {
