@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -104,7 +105,8 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 	cmd := exec.Command(command, args...)
 	cmd.Dir = root
 	cmd.Env = append([]string{}, cfg.Env...)
-	cmd.Stderr = io.Discard
+	stderr := &stderrOSCode{}
+	cmd.Stderr = stderr
 	configureProcessGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -128,7 +130,7 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 		MaxQueuedWrites: 32, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
-		return result, ErrProtocol
+		return result, protocolFailure("connection setup", err, stderr)
 	}
 	defer func() {
 		_ = conn.Close()
@@ -145,10 +147,10 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 	}()
 	init, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber, ClientInfo: &acp.Implementation{Name: "sofa", Version: "prototype"}, ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}}})
 	if err != nil {
-		return result, classify(ctx, err)
+		return result, classify(ctx, "initialize", err, stderr)
 	}
 	if init.ProtocolVersion != acp.ProtocolVersionNumber {
-		return result, ErrProtocol
+		return result, protocolFailure("initialize", nil, stderr)
 	}
 	session, err := conn.NewSessionWithResponseHook(ctx, acp.NewSessionRequest{Cwd: root, McpServers: []acp.McpServer{}}, func(_ context.Context, s acp.NewSessionResponse) error {
 		c.mu.Lock()
@@ -157,10 +159,10 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 		return nil
 	})
 	if err != nil {
-		return result, classify(ctx, err)
+		return result, classify(ctx, "session/new", err, stderr)
 	}
 	if len(session.SessionId) == 0 || len(session.SessionId) > 256 {
-		return result, ErrProtocol
+		return result, protocolFailure("session/new", nil, stderr)
 	}
 	id := sha256.Sum256([]byte(session.SessionId))
 	result.SessionID = hex.EncodeToString(id[:])
@@ -172,13 +174,13 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 			_ = conn.Cancel(stop, acp.CancelNotification{SessionId: session.SessionId})
 			done()
 		}
-		return result, classify(ctx, err)
+		return result, classify(ctx, "session/prompt", err, stderr)
 	}
 	switch string(response.StopReason) {
 	case "end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled":
 		result.StopReason = string(response.StopReason)
 	default:
-		return result, ErrProtocol
+		return result, protocolFailure("session/prompt", nil, stderr)
 	}
 	return result, nil
 }
@@ -196,7 +198,7 @@ func resolveExecutable(name, path string) string {
 	return ""
 }
 
-func classify(ctx context.Context, err error) error {
+func classify(ctx context.Context, stage string, err error, stderr *stderrOSCode) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -218,7 +220,52 @@ func classify(ctx context.Context, err error) error {
 			}
 		}
 	}
-	return ErrProtocol
+	return protocolFailure(stage, err, stderr)
+}
+
+// stderrOSCode keeps only a fixed operating-system error category. Copilot's
+// stderr may contain credentials or untrusted text, so neither its bytes nor
+// remote RPC messages are returned to the caller.
+type stderrOSCode struct {
+	mu   sync.Mutex
+	code string
+}
+
+func (d *stderrOSCode) Write(p []byte) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.code == "" {
+		for _, code := range []string{"ENOSPC", "EACCES", "EPERM", "EROFS", "ENOMEM", "ENOENT"} {
+			if strings.Contains(string(p), code) {
+				d.code = code
+				break
+			}
+		}
+	}
+	return len(p), nil
+}
+
+func (d *stderrOSCode) Code() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.code
+}
+
+func protocolFailure(stage string, err error, stderr *stderrOSCode) error {
+	category := "invalid response"
+	if err != nil {
+		category = "transport"
+		var remote *acp.RequestError
+		if errors.As(err, &remote) {
+			category = fmt.Sprintf("RPC code %d", remote.Code)
+		} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			category = "connection closed"
+		}
+	}
+	if code := stderr.Code(); code != "" {
+		category += ", child " + code
+	}
+	return fmt.Errorf("%w during %s (%s)", ErrProtocol, stage, category)
 }
 
 type client struct {

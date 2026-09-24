@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,7 +133,19 @@ func TestProtocolAuthenticationAndQuotaFailures(t *testing.T) {
 			if strings.Contains(err.Error(), "SECRET") {
 				t.Fatal("remote secret leaked")
 			}
+			if tc.mode == "malformed" && !strings.Contains(err.Error(), "during initialize") {
+				t.Fatalf("missing safe protocol phase: %v", err)
+			}
 		})
+	}
+}
+
+func TestProtocolFailureReportsOnlyFixedStderrCategory(t *testing.T) {
+	d := &stderrOSCode{}
+	_, _ = d.Write([]byte("SECRET_SHOULD_NEVER_APPEAR: Error: ENOSPC"))
+	err := protocolFailure("initialize", io.EOF, d)
+	if !errors.Is(err, ErrProtocol) || !strings.Contains(err.Error(), "initialize") || !strings.Contains(err.Error(), "ENOSPC") || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("unsafe or incomplete diagnostic: %v", err)
 	}
 }
 func TestTimeoutKillsDescendants(t *testing.T) {
