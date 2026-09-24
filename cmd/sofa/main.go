@@ -353,10 +353,13 @@ func forbidPrivilegedEnv(modelEnv string, includeModel bool) error {
 }
 
 type ExecutionFailure struct {
-	Version    int    `json:"version"`
-	AttemptID  string `json:"attempt_id"`
-	Generation int64  `json:"generation"`
-	Kind       string `json:"kind"`
+	Version        int    `json:"version"`
+	AttemptID      string `json:"attempt_id"`
+	Generation     int64  `json:"generation"`
+	Kind           string `json:"kind"`
+	Reason         string `json:"reason,omitempty"`
+	UsedAgent      bool   `json:"used_agent,omitempty"`
+	PromptRequests int    `json:"prompt_requests,omitempty"`
 }
 
 var errExecutionValidation = errors.New("execution input or candidate validation failed")
@@ -376,6 +379,44 @@ func executionFailureKind(err error) string {
 	}
 }
 
+func validateExecutionFailure(f ExecutionFailure, m Manifest) error {
+	if f.AttemptID != m.Fence.AttemptID || f.Generation != m.Fence.Generation {
+		return errors.New("failure artifact identity mismatch")
+	}
+	switch f.Kind {
+	case "authentication", "quota", "infrastructure", "validation":
+	default:
+		return errors.New("unsupported failure class")
+	}
+	// Version one is the workflow's bounded infrastructure fallback when the
+	// execution job could not upload an artifact. It cannot assert telemetry.
+	if f.Version == 1 && f.Kind == "infrastructure" && f.Reason == "" && !f.UsedAgent && f.PromptRequests == 0 {
+		return nil
+	}
+	if f.Version != 2 || f.PromptRequests < 0 || f.PromptRequests > 1 || (!f.UsedAgent && f.PromptRequests != 0) {
+		return errors.New("invalid execution failure telemetry")
+	}
+	switch f.Reason {
+	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation", "agent-error", "artifact-write", "unexpected":
+	default:
+		return errors.New("unsupported execution failure reason")
+	}
+	if (f.Reason == "recovery-input" || f.Reason == "base-checkout") && (f.UsedAgent || f.PromptRequests != 0) {
+		return errors.New("invalid pre-execution failure telemetry")
+	}
+	switch f.Reason {
+	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation":
+		if f.Kind != "validation" {
+			return errors.New("execution failure reason and class mismatch")
+		}
+	case "artifact-write", "unexpected":
+		if f.Kind != "infrastructure" {
+			return errors.New("execution failure reason and class mismatch")
+		}
+	}
+	return nil
+}
+
 func execute(ctx context.Context, args []string) (retErr error) {
 	f := flags("execute")
 	configPath, manifestPath, workspace, out := f.String("config", "", ""), f.String("manifest", "", ""), f.String("workspace", "", ""), f.String("out", "", "")
@@ -393,24 +434,37 @@ func execute(ctx context.Context, args []string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	failure := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Reason: "unexpected"}
 	defer func() {
 		if retErr != nil {
-			_ = writeJSON(filepath.Join(filepath.Dir(*out), "execution-failure.json"), ExecutionFailure{Version: 1, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: executionFailureKind(retErr)})
+			failure.Kind = executionFailureKind(retErr)
+			_ = writeJSON(filepath.Join(filepath.Dir(*out), "execution-failure.json"), failure)
+			fmt.Fprintf(os.Stderr, "sofa: execution failure reason=%s used_agent=%t prompt_requests=%d\n", failure.Reason, failure.UsedAgent, failure.PromptRequests)
 		}
 	}()
 	if m.Recovery != nil || m.RecoveryCheckpoint != nil {
+		failure.Reason = "recovery-input"
 		return errExecutionValidation
 	}
 	if err := cleanBase(ctx, *workspace, m.Grant.BaseSHA); err != nil {
+		failure.Reason = "base-checkout"
 		return fmt.Errorf("%w: admitted base checkout", errExecutionValidation)
 	}
 	result, err := worker.Execute(ctx, worker.Input{Config: c, CanonicalSpec: m.CanonicalSpec, Directory: *workspace, AttemptID: m.Fence.AttemptID, Generation: uint64(m.Fence.Generation), BaseSHA: m.Grant.BaseSHA, ModelToken: os.Getenv(c.Profile.SecretEnv)})
+	failure.UsedAgent = result.UsedAgent
+	failure.PromptRequests = result.PromptRequests
 	if err != nil {
+		failure.Reason = "agent-error"
+		if errors.Is(err, worker.ErrValidation) {
+			failure.Reason = "worker-validation"
+		}
 		return err
 	}
 	if result.NoChange {
-		return errExecutionValidation
+		failure.Reason = "candidate-no-change"
+		return fmt.Errorf("%w: no candidate changes", errExecutionValidation)
 	}
+	failure.Reason = "artifact-write"
 	if err := writeJSON(*out, result.Bundle); err != nil {
 		return err
 	}
@@ -666,13 +720,8 @@ func fail(ctx context.Context, args []string) error {
 	if err := readJSON(*failurePath, 4096, &failure); err != nil {
 		return err
 	}
-	if failure.Version != 1 || failure.AttemptID != m.Fence.AttemptID || failure.Generation != m.Fence.Generation {
-		return errors.New("failure artifact identity mismatch")
-	}
-	switch failure.Kind {
-	case "authentication", "quota", "infrastructure", "validation":
-	default:
-		return errors.New("unsupported failure class")
+	if err := validateExecutionFailure(failure, m); err != nil {
+		return err
 	}
 	client, err := clientFromEnv("SOFA_STATE_TOKEN")
 	if err != nil {

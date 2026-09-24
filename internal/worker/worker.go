@@ -104,21 +104,23 @@ func Execute(ctx context.Context, in Input) (Result, error) {
 		}
 		defer os.RemoveAll(dir)
 		ac := agent.Config{
-			Command: "/usr/local/bin/node",
-			Args:    []string{"/copilot-package/package/index.js", "--acp", "--stdio"},
-			Dir:     in.Directory,
-			Env:     []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + dir, "GITHUB_TOKEN=" + in.ModelToken},
-			Timeout: time.Duration(in.Config.Limits.AttemptSeconds) * time.Second,
+			Command:      "/usr/local/bin/node",
+			Args:         []string{"/copilot-package/package/index.js", "--acp", "--stdio"},
+			Dir:          in.Directory,
+			Env:          []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + dir, "GITHUB_TOKEN=" + in.ModelToken},
+			Timeout:      time.Duration(in.Config.Limits.AttemptSeconds) * time.Second,
 			AllowedPaths: allowed,
 		}
 		prompt := fmt.Sprintf("Implement the approved issue in this disposable checkout. Title: %s\nSpecification: %s\nEdit only these approved existing files: %s\nDo not alter tests or policy to make a failure appear green. Return a completed ACP turn after the change.", spec.Title, spec.Body, strings.Join(allowed, ", "))
 		result, err := runner.Run(ctx, ac, prompt)
-		if err != nil {
-			return out, err
-		}
+		// A failed ACP turn can still have sent a prompt. Preserve the bounded
+		// accounting returned by the adapter without retaining agent text.
 		out.UsedAgent = true
 		out.PromptRequests = result.PromptRequests
 		out.ModelCalls = result.ModelCalls
+		if err != nil {
+			return out, err
+		}
 		if result.StopReason != "end_turn" {
 			return out, fmt.Errorf("%w: agent did not complete requested turn", ErrValidation)
 		}

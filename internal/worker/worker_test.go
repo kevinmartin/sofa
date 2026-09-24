@@ -95,3 +95,14 @@ func TestRefusedAgentTurnCannotBecomeCandidate(t *testing.T) {
 		t.Fatal("refused turn accepted")
 	}
 }
+
+func TestFailedAgentTurnRetainsPromptAccounting(t *testing.T) {
+	in, _ := workerFixture(t)
+	in.Runner = RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) {
+		return agent.Result{PromptRequests: 1}, agent.ErrQuota
+	})
+	out, err := Execute(context.Background(), in)
+	if err != agent.ErrQuota || !out.UsedAgent || out.PromptRequests != 1 || len(out.Bundle.Files) != 0 {
+		t.Fatalf("failed ACP turn lost bounded accounting: %+v, %v", out, err)
+	}
+}

@@ -107,6 +107,39 @@ func TestFailureClassificationKeepsDeterministicErrorsOutOfRetry(t *testing.T) {
 	}
 }
 
+func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
+	_, m := testManifest(t)
+	base := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "candidate-no-change", UsedAgent: true, PromptRequests: 1}
+	if err := validateExecutionFailure(base, m); err != nil {
+		t.Fatal(err)
+	}
+	legacy := ExecutionFailure{Version: 1, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "infrastructure"}
+	if err := validateExecutionFailure(legacy, m); err != nil {
+		t.Fatal("workflow fallback rejected:", err)
+	}
+	legacy.Kind = "validation"
+	if err := validateExecutionFailure(legacy, m); err == nil {
+		t.Fatal("accepted legacy failure with non-infrastructure class")
+	}
+	for _, mutate := range []func(*ExecutionFailure){
+		func(f *ExecutionFailure) { f.Reason = "agent-supplied text" },
+		func(f *ExecutionFailure) { f.PromptRequests = -1 },
+		func(f *ExecutionFailure) { f.PromptRequests = 2 },
+		func(f *ExecutionFailure) { f.UsedAgent = false },
+		func(f *ExecutionFailure) { f.AttemptID = "other" },
+		func(f *ExecutionFailure) { f.Kind = "retry-anyway" },
+		func(f *ExecutionFailure) { f.Kind = "infrastructure" },
+		func(f *ExecutionFailure) { f.Reason = "base-checkout" },
+		func(f *ExecutionFailure) { f.Version = 1 },
+	} {
+		candidate := base
+		mutate(&candidate)
+		if err := validateExecutionFailure(candidate, m); err == nil {
+			t.Fatalf("accepted invalid failure telemetry: %+v", candidate)
+		}
+	}
+}
+
 func TestFailureObservationsRemainDistinctAcrossRecoveredGenerations(t *testing.T) {
 	_, m := testManifest(t)
 	e := state.Engine{Store: &state.MemoryStore{}}
@@ -326,5 +359,31 @@ func TestExecuteExactRecipeUsesNoModelCredential(t *testing.T) {
 	b, err := readBundle(bundlePath)
 	if err != nil || len(b.Files) != 1 || b.Files[0].Path != "fixture/greeting.go" || result.CandidateDigest != b.CandidateDigest {
 		t.Fatal("exact recipe did not produce the bounded formatter candidate")
+	}
+	git("add", ".")
+	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "formatted")
+	m.Grant.BaseSHA = git("rev-parse", "HEAD")
+	m.Fence.AttemptID = state.AttemptID(ledgerAdmission(m.Grant))
+	if err := writeJSON(manifestPath, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := execute(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); !errors.Is(err, errExecutionValidation) {
+		t.Fatalf("expected bounded no-change failure: %v", err)
+	}
+	var failure ExecutionFailure
+	if err := readJSON(filepath.Join(transport, "execution-failure.json"), 4096, &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Version != 2 || failure.Kind != "validation" || failure.Reason != "candidate-no-change" || failure.UsedAgent || failure.PromptRequests != 0 {
+		t.Fatalf("no-change failure was not distinguished: %+v", failure)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixture", "untracked.go"), []byte("package fixture\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := execute(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); !errors.Is(err, errExecutionValidation) {
+		t.Fatalf("expected dirty-base failure: %v", err)
+	}
+	if err := readJSON(filepath.Join(transport, "execution-failure.json"), 4096, &failure); err != nil || failure.Reason != "base-checkout" || failure.UsedAgent || failure.PromptRequests != 0 {
+		t.Fatalf("dirty-base failure was not distinguished: %+v, %v", failure, err)
 	}
 }
