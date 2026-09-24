@@ -11,6 +11,7 @@ The four broad development stages have been divided into smaller goals, followed
 | Goal | Observable outcome | Prerequisites |
 | --- | --- | --- |
 | [01 — Safe hosted delivery slice](01-delivery-slice.md) | One approved issue produces one validated draft PR using Copilot; interruption and duplicate delivery are recoverable | None |
+| [01.1 — Deterministic E2E regression harness](01.1-e2e-regression-harness.md) | Fast fault scenarios and a hosted fake-ACP canary protect the delivery loop without recurring model requests | 01 |
 | [02 — Lifecycle and Discovery](02-lifecycle.md) | Discovery, specification approval, board handoffs, review feedback, and release observation work | 01 |
 | [03 — Harnesses and model endpoints](03-harnesses.md) | Copilot, Codex, and Claude work through tested, isolated profiles and compatible routers | 01 |
 | [04 — Independent validation](04-validation.md) | Required reviewer, blackbox, security, and repository gates control PR readiness | 01 |
@@ -19,9 +20,9 @@ The four broad development stages have been divided into smaller goals, followed
 | [07 — Useful memory](07-memory.md) | Episodes, semantic knowledge, and skills can be stored and retrieved with scope and freshness controls | 02, 04, 05 |
 | [08 — Bounded watches](08-watches.md) | Configured maintenance loops can produce useful findings and bounded fix PRs | 02, 04, 05, 07 |
 | [09 — Dreaming and improvement](09-dreaming.md) | New outcomes produce evaluated, reviewable improvement proposals without self-triggering loops | 07, 08 |
-| [10 — Release readiness](10-release-readiness.md) | Public/private canaries and recovery/security checks qualify a reproducible release candidate | 01–09 |
+| [10 — Release readiness](10-release-readiness.md) | Public/private canaries and recovery/security checks qualify a reproducible release candidate | 01, 01.1, 02–09 |
 
-Recommended execution order is numerical. After 01, goals 02–04 have independent feature boundaries, but parallel implementation is optional: first freeze their shared contracts, assign separate branches/worktrees when available, and give one coordinator responsibility for integration. Within any goal, delegate bounded adapters, fixtures, or reviews while the coordinator works on another useful part. Avoid simultaneous uncoordinated edits to configuration, state schemas, and publication logic.
+Recommended execution order is numerical: run 01.1 after 01 to protect the proven delivery loop before extending it. Goals 02–04 retain independent feature boundaries and can be implemented in parallel after their shared contracts are frozen. Assign separate branches/worktrees when available and give one coordinator responsibility for integration. Within any goal, delegate bounded adapters, fixtures, or reviews while the coordinator works on another useful part. Avoid simultaneous uncoordinated edits to configuration, state schemas, and publication logic.
 
 ## Shared goal contract
 
@@ -46,7 +47,7 @@ Implement only the selected milestone and small prerequisites necessary to compl
 
 Each milestone names its live prerequisites. Discover existing repository configuration and authorized credentials first. Ask for missing repository IDs, credential references, test targets, or limits early when they are actually needed, while continuing independent local implementation and checks. Never ask for secret values in chat or print them in evidence.
 
-A future implementation goal permits building and validating its scoped feature. It does not name a GitHub test target, authorize creating arbitrary repositories or changing production settings, supply a spending budget, or authorize a stable release. Use owner-designated disposable resources and configured finite budgets. Prepare concrete setup artifacts before requesting any missing external action. Do not re-request permission already supplied in that implementation task.
+A future implementation goal permits building and validating its scoped feature. Unless the owner or milestone explicitly designates one, it does not name a GitHub test target, authorize creating arbitrary repositories or changing production settings, supply a spending budget, or authorize a stable release. Use owner-designated disposable resources and configured finite budgets. Prepare concrete setup artifacts before requesting any missing external action. Do not re-request permission already supplied in that implementation task.
 
 Mocks and replay fixtures prove local behavior; they do not prove hosted Actions or real harness interoperability. If a required live check is unavailable, record local results, the exact remaining check and prerequisite, and continue other useful work. Keep the milestone incomplete rather than relabeling the check optional. Respect the goal system's own completion/blocking rules; the progress labels below are document status, not tool commands.
 
