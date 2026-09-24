@@ -84,14 +84,14 @@ func Authorize(c config.Config, s Snapshot) (Grant, []byte, error) {
 	if err != nil {
 		return Grant{}, nil, err
 	}
-	if !s.Complete || !s.Open || s.Repository != c.Repository || s.RepositoryID != c.RepositoryID || s.ProjectID != c.ProjectID || !s.ProjectPrivate || s.ProjectItemID == "" || s.CurrentStatus != c.ReadyStatus || s.StatusOptionID == "" || s.StatusUpdatedAt.IsZero() || (!s.IssueLastEditedAt.IsZero() && !s.IssueLastEditedAt.Before(s.StatusUpdatedAt)) || s.IssueID == "" || s.Number < 1 || !shaPattern.MatchString(s.BaseSHA) {
+	if !s.Complete || !s.Open || !strings.EqualFold(s.Repository, c.Repository) || s.RepositoryID != c.RepositoryID || s.ProjectID != c.ProjectID || !s.ProjectPrivate || s.ProjectItemID == "" || s.CurrentStatus != c.ReadyStatus || s.StatusOptionID == "" || s.StatusUpdatedAt.IsZero() || (!s.IssueLastEditedAt.IsZero() && !s.IssueLastEditedAt.Before(s.StatusUpdatedAt)) || s.IssueID == "" || s.Number < 1 || !shaPattern.MatchString(s.BaseSHA) {
 		return deny()
 	}
 	spec, digest, err := CanonicalSpec(s.Title, s.Body)
 	if err != nil {
 		return Grant{}, nil, err
 	}
-	return Grant{Version: 1, Repository: s.Repository, RepositoryID: s.RepositoryID, IssueID: s.IssueID, IssueNumber: s.Number, ProjectID: c.ProjectID, OwnerID: c.OwnerID, SpecDigest: digest, ConfigDigest: configDigest, BaseSHA: s.BaseSHA, ProjectItemID: s.ProjectItemID, StatusOptionID: s.StatusOptionID, StatusUpdatedAt: s.StatusUpdatedAt}, spec, nil
+	return Grant{Version: 1, Repository: c.Repository, RepositoryID: s.RepositoryID, IssueID: s.IssueID, IssueNumber: s.Number, ProjectID: c.ProjectID, OwnerID: c.OwnerID, SpecDigest: digest, ConfigDigest: configDigest, BaseSHA: s.BaseSHA, ProjectItemID: s.ProjectItemID, StatusOptionID: s.StatusOptionID, StatusUpdatedAt: s.StatusUpdatedAt}, spec, nil
 }
 
 // Revalidate retains the admitted base even when the default branch advances.

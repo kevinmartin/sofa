@@ -54,7 +54,7 @@ Mocks and replay fixtures prove local behavior; they do not prove hosted Actions
 
 Use observable acceptance scenarios with positive, failure, and interruption cases that protect real behavior. Run checks appropriate to changed components and relevant regressions. Do not repeat unrelated expensive/live suites merely because another milestone started. Live measurements include versions, environment, sample size, budgets, and limitations; unknown cost remains unknown.
 
-During implementation, maintain `docs/milestones/evidence/<milestone-file-name>.md`. These reports are intentionally absent from the planning package. Each report contains:
+During implementation, maintain `docs/milestones/evidence/<milestone-file-name>.md`. The completed 01 report is included; reports for later milestones are intentionally absent from the planning package. Each report contains:
 
 1. Status: **Not started**, **In progress**, **Local checks passed; live checks pending**, or **Complete**.
 2. Implemented behavior and material decisions, with source/config/schema revisions.

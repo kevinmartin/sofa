@@ -8,7 +8,7 @@ Depends on **03: harness/provider matrix** and **04: mandatory independent gates
 
 ## Scope and exclusions
 
-Implement the Go decision interfaces, direct Jev HTTP adapter, optional SemIf subprocess adapter, versioned rubrics, strict result validation, shadow evaluation, profile routing, and failure recovery integration. SemIf uses the pinned upstream `semif-score` JSONL contract; record runtime/model/tokenizer/checksum versions. Implement its adapter and protocol/replay tests even if runner performance keeps the CPU profile experimental.
+Implement the Go decision interfaces, direct Jev HTTP adapter, optional SemIf subprocess adapter, versioned rubrics, strict result validation, shadow evaluation, profile routing, and failure recovery integration. The Jev adapter requires HTTPS with normal certificate validation, rejects HTTP before attaching credentials, and rejects redirects for credential-bearing requests; cover these boundaries in tests. SemIf uses the pinned upstream `semif-score` JSONL contract; record runtime/model/tokenizer/checksum versions. Implement its adapter and protocol/replay tests even if runner performance keeps the CPU profile experimental.
 
 Route only among prefiltered, trusted model/effort profiles. Explicit choices and a single eligible profile make no decision request. Use advertised, tested ACP configuration between completed turns; otherwise start a configured session at a checkpoint. Reread available reasoning options after model changes. Preserve supported endpoint/auth combinations, required review roles, and publication boundaries.
 

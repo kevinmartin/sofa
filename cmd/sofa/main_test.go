@@ -18,6 +18,7 @@ import (
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/state"
 	"github.com/kevinmartin/sofa/internal/worker"
+	"go.yaml.in/yaml/v3"
 )
 
 func testManifest(t *testing.T) (config.Config, Manifest) {
@@ -60,6 +61,20 @@ func TestManifestBindsSpecAndConfiguration(t *testing.T) {
 	}
 	if _, err := readManifest(path, c); err == nil {
 		t.Fatal("accepted changed specification")
+	}
+}
+
+func TestLedgerAdmissionNormalizesRepositoryCasing(t *testing.T) {
+	_, m := testManifest(t)
+	m.Grant.Repository = "Owner/Fixture"
+	a := ledgerAdmission(m.Grant)
+	if a.Repository != "owner/fixture" {
+		t.Fatalf("ledger repository was not normalized: %q", a.Repository)
+	}
+	lower := m.Grant
+	lower.Repository = "owner/fixture"
+	if a != ledgerAdmission(lower) {
+		t.Fatal("repository casing changed ledger admission")
 	}
 }
 
@@ -112,6 +127,10 @@ func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
 	base := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "candidate-no-change", UsedAgent: true, PromptRequests: 1, Updates: 5, PermissionRequests: 2, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolReads: 1, ToolEdits: 1, ToolExecutes: 1, ToolOthers: 1, ToolFailedUpdates: 1}
 	if err := validateExecutionFailure(base, m); err != nil {
 		t.Fatal(err)
+	}
+	verification := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "configured-check"}
+	if err := validateExecutionFailure(verification, m); err != nil {
+		t.Fatalf("configured check failure was not finalizable: %v", err)
 	}
 	legacy := ExecutionFailure{Version: 1, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "infrastructure"}
 	if err := validateExecutionFailure(legacy, m); err != nil {
@@ -279,7 +298,7 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 	git("add", ".")
 	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
 	base := git("rev-parse", "HEAD")
-	_, m := testManifest(t)
+	c, m := testManifest(t)
 	m.Grant.BaseSHA = base
 	m.Fence.AttemptID = state.AttemptID(ledgerAdmission(m.Grant))
 	original, err := os.ReadFile(filepath.Join(root, "fixture/greeting.go"))
@@ -311,6 +330,47 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 	testAfter, _ := os.ReadFile(filepath.Join(root, "fixture/greeting_test.go"))
 	if string(testBefore) != string(testAfter) {
 		t.Fatal("verifier changed the independent fixture test")
+	}
+	// A configured check can exit successfully after changing the candidate.
+	// That must not create evidence for the original bundle digest.
+	git("restore", "--", "fixture/greeting.go")
+	c.Checks = []config.Check{{ID: "mutating-check", Argv: []string{"sh", "-c", "printf '\n// changed by check\n' >> fixture/greeting.go"}, TimeoutSeconds: 30}}
+	configBytes, err := yaml.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".sofa.yml"), configBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".sofa.yml")
+	git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "mutating check")
+	m.Grant.BaseSHA = git("rev-parse", "HEAD")
+	m.Grant.ConfigDigest, err = c.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Fence.AttemptID = state.AttemptID(ledgerAdmission(m.Grant))
+	b.BaseSHA = m.Grant.BaseSHA
+	b.AttemptID = m.Fence.AttemptID
+	if err := integrity.Seal(&b); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(manifestPath, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(bundlePath, b); err != nil {
+		t.Fatal(err)
+	}
+	mutatedEvidencePath := filepath.Join(transport, "mutated-checks.json")
+	if err := verify(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--bundle", bundlePath, "--out", mutatedEvidencePath}); !errors.Is(err, errExecutionValidation) {
+		t.Fatalf("mutating check was accepted: %v", err)
+	}
+	var failure ExecutionFailure
+	if err := readJSON(filepath.Join(transport, "verification-failure.json"), 4096, &failure); err != nil || failure.Kind != "validation" || failure.Reason != "workspace-changed" {
+		t.Fatalf("mutating check lacked a validation failure artifact: %+v, %v", failure, err)
+	}
+	if _, err := os.Stat(mutatedEvidencePath); !os.IsNotExist(err) {
+		t.Fatal("mutating check produced passing evidence")
 	}
 }
 

@@ -110,6 +110,22 @@ func (f *publishFixture) prObject() any {
 	return map[string]any{"number": 12, "html_url": "https://github.com/owner/fixture/pull/12", "state": "open", "draft": true, "head": map[string]any{"ref": "sofa/" + strings.Repeat("f", 24), "sha": testCommit, "repo": map[string]any{"full_name": testRepo}}}
 }
 
+func TestVerifyDraftAcceptsRepositoryCasingButNotChangedURL(t *testing.T) {
+	var pr prJSON
+	b, err := json.Marshal(new(publishFixture).prObject())
+	if err != nil || json.Unmarshal(b, &pr) != nil {
+		t.Fatal("invalid draft fixture")
+	}
+	branch := pr.Head.Ref
+	if _, err := verifyDraft(pr, "Owner/Fixture", branch, testCommit); err != nil {
+		t.Fatalf("rejected canonical GitHub PR with different repository casing: %v", err)
+	}
+	pr.HTMLURL += "/other"
+	if _, err := verifyDraft(pr, "Owner/Fixture", branch, testCommit); err == nil {
+		t.Fatal("accepted changed draft PR URL")
+	}
+}
+
 func inputFixture(f *publishFixture) PublishInput {
 	content := []byte("package fixture\n")
 	f.content = content

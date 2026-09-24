@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kevinmartin/sofa/internal/agent"
 )
 
 const (
@@ -57,15 +59,7 @@ func main() {
 		workspace = "/workspace"
 	}
 	c := config{workspace: workspace, token: token, timeout: 30 * time.Second}
-	if entry := os.Getenv("SOFA_COPILOT_ENTRY"); entry != "" {
-		c.command, c.args = "/usr/local/bin/node", []string{entry, "--acp", "--stdio"}
-	} else {
-		c.command = os.Getenv("SOFA_COPILOT_PATH")
-		if c.command == "" {
-			c.command = "/copilot/copilot"
-		}
-		c.args = []string{"--acp", "--stdio"}
-	}
+	c.command, c.args = agent.CopilotCommand()
 	r := run(c)
 	fmt.Println(r.String())
 	if !r.ok {
@@ -84,6 +78,7 @@ func run(c config) result {
 	}
 	defer os.RemoveAll(home)
 	cmd := exec.Command(c.command, c.args...)
+	cmd.WaitDelay = 2 * time.Second // A descendant may retain the child's output pipes.
 	cmd.Dir = c.workspace
 	cmd.Env = []string{
 		"PATH=/toolkit:/copilot:/usr/local/bin:/usr/bin:/bin",

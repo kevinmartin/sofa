@@ -18,7 +18,7 @@ func TestRecoveredCandidateCanReachPublisher(t *testing.T) {
 	}
 	var workflow struct {
 		Jobs map[string]struct {
-			Needs string `yaml:"needs"`
+			Needs any    `yaml:"needs"`
 			If    string `yaml:"if"`
 		} `yaml:"jobs"`
 	}
@@ -32,5 +32,32 @@ func TestRecoveredCandidateCanReachPublisher(t *testing.T) {
 	}
 	if !strings.Contains(verify.If, "always()") || !strings.Contains(publish.If, "always()") || !strings.Contains(publish.If, "needs.verify.result == 'success'") {
 		t.Fatal("recovered candidate cannot pass an intentionally skipped execution job to publication")
+	}
+}
+
+func TestFailedVerificationReachesFailureFinalizer(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/work.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Needs any    `yaml:"needs"`
+			If    string `yaml:"if"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	finalizer, ok := workflow.Jobs["finalize-failure"]
+	if !ok {
+		t.Fatal("failure finalizer missing")
+	}
+	needs, ok := finalizer.Needs.([]any)
+	if !ok || len(needs) != 2 || needs[0] != "execute" || needs[1] != "verify" {
+		t.Fatal("failure finalizer does not wait for both work stages")
+	}
+	if !strings.Contains(finalizer.If, "always()") || !strings.Contains(finalizer.If, "needs.verify.result == 'failure'") {
+		t.Fatal("failed verification cannot reach failure finalizer")
 	}
 }

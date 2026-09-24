@@ -214,24 +214,29 @@ func (s StateStore) write(ctx context.Context, expected string, updates map[stri
 	var result any
 	if expected == "" {
 		if err := s.Client.Request(ctx, http.MethodPost, s.prefix()+"/git/refs", map[string]any{"ref": "refs/heads/sofa-state", "sha": commit.SHA}, &result); err != nil {
-			return s.mapConflict(ctx, expected, err)
+			return s.mapConflict(ctx, expected, commit.SHA, err)
 		}
 	} else {
 		if err := s.Client.Request(ctx, http.MethodPatch, s.prefix()+"/git/refs/heads/sofa-state", map[string]any{"sha": commit.SHA, "force": false}, &result); err != nil {
-			return s.mapConflict(ctx, expected, err)
+			return s.mapConflict(ctx, expected, commit.SHA, err)
 		}
 	}
 	return nil
 }
 
-func (s StateStore) mapConflict(ctx context.Context, expected string, original error) error {
+func (s StateStore) mapConflict(ctx context.Context, expected, written string, original error) error {
 	var api *APIError
-	if errors.As(original, &api) && (api.Status == 409 || api.Status == 422) {
+	if errors.As(original, &api) && api.Status == 409 {
 		return state.ErrConflict
 	}
 	current, err := s.Load(ctx)
-	if err == nil && current.Revision != expected {
-		return state.ErrConflict
+	if err == nil {
+		if current.Revision == written {
+			return nil // The ref update succeeded, but its response was lost.
+		}
+		if current.Revision != expected {
+			return state.ErrConflict
+		}
 	}
 	return original
 }

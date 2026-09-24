@@ -138,9 +138,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  finalize-execution-failure:
-    needs: execute
-    if: always() && needs.execute.result == 'failure'
+  finalize-failure:
+    needs: [execute, verify]
+    if: always() && (needs.execute.result == 'failure' || needs.verify.result == 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -152,20 +152,32 @@ jobs:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download sanitized failure, when produced
+        if: needs.execute.result == 'failure'
         continue-on-error: true
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: sofa-execution-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: failure
+      - name: Download sanitized verification failure, when produced
+        if: needs.verify.result == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: failure
       - name: Build bounded infrastructure fallback
         shell: bash
         run: |
-          if [[ ! -f failure/execution-failure.json ]]; then
+          if [[ -f failure/verification-failure.json ]]; then
+            cp failure/verification-failure.json failure/failure.json
+          elif [[ -f failure/execution-failure.json ]]; then
+            cp failure/execution-failure.json failure/failure.json
+          else
             mkdir -p failure
             jq -n --arg id "$(jq -er '.fence.attempt_id' transport/manifest.json)" \
               --argjson gen "$(jq -er '.fence.generation' transport/manifest.json)" \
               '{version:1,attempt_id:$id,generation:$gen,kind:"infrastructure"}' \
-              > failure/execution-failure.json
+              > failure/failure.json
           fi
       - name: Read admitted base commit
         id: base
@@ -206,7 +218,7 @@ jobs:
           test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
           ./sofa fail --config consumer/.sofa.yml \
             --manifest transport/manifest.json \
-            --failure failure/execution-failure.json
+            --failure failure/failure.json
 
   verify:
     needs: execute
@@ -287,6 +299,14 @@ jobs:
           ./sofa verify --config consumer/.sofa.yml \
             --manifest transport/manifest.json --workspace "$PWD/consumer" \
             --bundle candidate/bundle.json --out evidence/checks.json
+      - name: Preserve sanitized verification failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/verification-failure.json
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Carry trusted evidence to publication
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,11 +17,23 @@ func TestPreflightHelper(t *testing.T) {
 	if !strings.HasPrefix(mode, "test-secret-") {
 		return
 	}
+	if mode == "test-secret-hold" {
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	}
 	in := bufio.NewScanner(os.Stdin)
 	if !in.Scan() || !strings.Contains(in.Text(), `"method":"initialize"`) {
 		os.Exit(9)
 	}
 	switch mode {
+	case "test-secret-descendant":
+		child := exec.Command(os.Args[0], "-test.run=^TestPreflightHelper$")
+		child.Env = []string{"GITHUB_TOKEN=test-secret-hold"}
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if child.Start() != nil || os.WriteFile("preflight-child.pid", []byte(strconv.Itoa(child.Process.Pid)), 0600) != nil {
+			os.Exit(9)
+		}
+		os.Exit(1)
 	case "test-secret-error":
 		fmt.Fprint(os.Stderr, "credential test-secret-error; ERR_DLOPEN_FAILED; Cannot find module\n")
 		fmt.Println(`{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"test-secret-error"}}`)
@@ -80,6 +95,29 @@ func TestRunClosedReportsFixedCategory(t *testing.T) {
 	}
 	if !strings.Contains(r.String(), "EROFS") || strings.Contains(r.String(), "credential") {
 		t.Fatalf("unsafe result: %+v", r)
+	}
+}
+
+func TestPreflightWaitIsBoundedWhenDescendantHoldsOutputPipes(t *testing.T) {
+	c := helperConfig(t, "descendant")
+	c.timeout = 100 * time.Millisecond
+	started := time.Now()
+	r := run(c)
+	if r.ok || time.Since(started) > 5*time.Second {
+		t.Fatalf("preflight waited for inherited pipes: %+v", r)
+	}
+	b, err := os.ReadFile(filepath.Join(c.workspace, "preflight-child.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, err := os.FindProcess(pid)
+	if err == nil {
+		_ = process.Kill()
+		_ = process.Release()
 	}
 }
 

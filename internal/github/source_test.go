@@ -36,7 +36,7 @@ func TestIssueReadsReadyRevisionWithoutCommentOrTimeline(t *testing.T) {
 		switch {
 		case strings.Contains(input.Query, "repository(owner"):
 			return jsonResponse(200, map[string]any{"data": map[string]any{"repository": map[string]any{
-				"id": policy.RepositoryID, "nameWithOwner": policy.Repository,
+				"id": policy.RepositoryID, "nameWithOwner": strings.ToUpper(policy.Repository),
 				"defaultBranchRef": map[string]any{"target": map[string]any{"oid": strings.Repeat("a", 40)}},
 				"issue":            map[string]any{"id": "I_1", "number": 1, "title": "Fix greeting", "body": "Return hello.", "state": "OPEN", "lastEditedAt": nil},
 			}}}), nil
@@ -56,7 +56,7 @@ func TestIssueReadsReadyRevisionWithoutCommentOrTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests != 2 || !s.ProjectPrivate || s.ProjectItemID != "PVTI_1" || s.StatusOptionID != "ready-id" || s.StatusUpdatedAt.Format(time.RFC3339) != readyAt || !s.Complete {
+	if requests != 2 || s.Repository != policy.Repository || !s.ProjectPrivate || s.ProjectItemID != "PVTI_1" || s.StatusOptionID != "ready-id" || s.StatusUpdatedAt.Format(time.RFC3339) != readyAt || !s.Complete {
 		t.Fatalf("unexpected Ready source: %#v; requests=%d", s, requests)
 	}
 	if _, _, err := admission.Authorize(policy, s); err != nil {

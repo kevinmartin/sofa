@@ -46,10 +46,10 @@ func (c *Client) Issue(ctx context.Context, policy config.Config, number int) (a
 		return s, err
 	}
 	r := data.Repository
-	if r == nil || r.Issue == nil || r.DefaultBranchRef == nil || r.ID != policy.RepositoryID || r.NameWithOwner != policy.Repository {
+	if r == nil || r.Issue == nil || r.DefaultBranchRef == nil || r.ID != policy.RepositoryID || !strings.EqualFold(r.NameWithOwner, policy.Repository) {
 		return s, errors.New("configured repository or issue unavailable")
 	}
-	s = admission.Snapshot{Repository: r.NameWithOwner, RepositoryID: r.ID, IssueID: r.Issue.ID, Number: r.Issue.Number, Title: r.Issue.Title, Body: r.Issue.Body, Open: r.Issue.State == "OPEN", BaseSHA: r.DefaultBranchRef.Target.OID}
+	s = admission.Snapshot{Repository: policy.Repository, RepositoryID: r.ID, IssueID: r.Issue.ID, Number: r.Issue.Number, Title: r.Issue.Title, Body: r.Issue.Body, Open: r.Issue.State == "OPEN", BaseSHA: r.DefaultBranchRef.Target.OID}
 	if r.Issue.LastEditedAt != nil {
 		s.IssueLastEditedAt = *r.Issue.LastEditedAt
 	}

@@ -43,6 +43,21 @@ func TestAuthorizeAndRevalidate(t *testing.T) {
 	}
 }
 
+func TestAuthorizePreservesConfiguredRepositoryCasing(t *testing.T) {
+	c, s := fixture(t)
+	s.Repository = strings.ToUpper(c.Repository)
+	g, _, err := Authorize(c, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Repository != c.Repository {
+		t.Fatalf("grant repository = %q, want %q", g.Repository, c.Repository)
+	}
+	if err := Revalidate(c, s, g); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRejectUnauthorizedEvidence(t *testing.T) {
 	for name, modify := range map[string]func(*Snapshot){
 		"partial pagination":      func(s *Snapshot) { s.Complete = false },

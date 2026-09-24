@@ -31,6 +31,8 @@ func workerFixture(t *testing.T) (Input, string) {
 }
 
 func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
+	t.Setenv("SOFA_COPILOT_ENTRY", "")
+	t.Setenv("SOFA_COPILOT_PATH", "")
 	in, path := workerFixture(t)
 	in.Runner = RunnerFunc(func(_ context.Context, c agent.Config, p string) (agent.Result, error) {
 		if len(c.AllowedPaths) != 1 || c.AllowedPaths[0] != "fixture/main.go" || !strings.Contains(p, "Make Greet return hello") {

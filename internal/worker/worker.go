@@ -112,9 +112,10 @@ func Execute(ctx context.Context, in Input) (Result, error) {
 			return out, errors.New("cannot create isolated agent home")
 		}
 		defer os.RemoveAll(dir)
+		command, args := agent.CopilotCommand()
 		ac := agent.Config{
-			Command:      "/usr/local/bin/node",
-			Args:         []string{"/copilot-package/package/index.js", "--acp", "--stdio"},
+			Command:      command,
+			Args:         args,
 			Dir:          in.Directory,
 			Env:          []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "XDG_CONFIG_HOME=" + dir, "GITHUB_TOKEN=" + in.ModelToken},
 			Timeout:      time.Duration(in.Config.Limits.AttemptSeconds) * time.Second,

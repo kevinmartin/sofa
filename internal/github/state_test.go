@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kevinmartin/sofa/internal/state"
 )
@@ -236,5 +237,75 @@ func TestStateStoreRetainsSpecAndRejectsStaleRevision(t *testing.T) {
 	}
 	if err := store.SaveSpec(ctx, "issue-1", digestText, spec); err != nil {
 		t.Fatalf("identical immutable replay failed: %v", err)
+	}
+}
+
+func TestStateStoreMapsAmbiguousRefUpdateByWrittenRevision(t *testing.T) {
+	ctx := context.Background()
+	fixture := newStateGitFixture()
+	client, err := New("fixture-token", roundTripFunc(fixture.trip))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := StateStore{Client: client, Repository: "owner/fixture"}
+	spec := []byte(`{"title":"fixture","body":"work"}`)
+	h := sha256.Sum256(spec)
+	if err := store.SaveSpec(ctx, "issue-1", hex.EncodeToString(h[:]), spec); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lostResponse := errors.New("lost ref-update response")
+	if err := store.mapConflict(ctx, "", first.Revision, lostResponse); err != nil {
+		t.Fatalf("applied update was misreported as a conflict: %v", err)
+	}
+	invalid := &APIError{Status: 422}
+	if err := store.mapConflict(ctx, first.Revision, strings.Repeat("a", 40), invalid); err != invalid {
+		t.Fatalf("unchanged ref hid validation error: %v", err)
+	}
+	if err := store.CompareAndSwap(ctx, first.Revision, first.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.mapConflict(ctx, first.Revision, strings.Repeat("a", 40), invalid); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("concurrent ref change was not a conflict: %v", err)
+	}
+}
+
+func TestLostRefResponseDoesNotChargeBudgetTwice(t *testing.T) {
+	ctx := context.Background()
+	fixture := newStateGitFixture()
+	loseResponse := false
+	client, err := New("fixture-token", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		response, err := fixture.trip(r)
+		if err != nil || !loseResponse || r.Method != http.MethodPatch || !strings.HasSuffix(r.URL.Path, "/git/refs/heads/sofa-state") {
+			return response, err
+		}
+		loseResponse = false
+		_ = response.Body.Close()
+		return nil, errors.New("lost response after ref advanced")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := StateStore{Client: client, Repository: "owner/fixture"}
+	engine := state.Engine{Store: store}
+	admission := state.Admission{Repository: "owner/fixture", Issue: 1, SpecDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), BaseSHA: strings.Repeat("c", 40), ProjectID: "P_1", ProjectItemID: "I_1", StatusOptionID: "ready", StatusUpdatedAt: time.Now().UTC()}
+	attempt, _, err := engine.Admit(ctx, admission, state.Limits{ModelCalls: 2, InfrastructureRetries: 1, RuntimeSeconds: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence, err := engine.Claim(ctx, attempt.ID, state.Owner{RunID: "42", RunAttempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loseResponse = true
+	if err := engine.Charge(ctx, fence, state.Counters{ModelCalls: 1}); err != nil {
+		t.Fatalf("applied charge returned an error: %v", err)
+	}
+	snapshot, err := store.Load(ctx)
+	if err != nil || snapshot.State.Attempts[attempt.ID].Counts.ModelCalls != 1 {
+		t.Fatalf("lost response double-charged budget: %+v, %v", snapshot.State.Attempts[attempt.ID].Counts, err)
 	}
 }

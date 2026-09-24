@@ -161,7 +161,19 @@ func (g GitStore) SaveSpec(ctx context.Context, issueID, specDigest string, cano
 		if err != nil {
 			return err
 		}
-		tree, err := g.treeWithUpdates(ctx, snapshot.Revision, map[string]string{path: strings.TrimSpace(string(blob))})
+		updates := map[string]string{path: strings.TrimSpace(string(blob))}
+		if snapshot.Revision == "" {
+			ledger, err := Encode(Empty())
+			if err != nil {
+				return err
+			}
+			ledgerBlob, err := g.command(ctx, ledger, "hash-object", "-w", "--stdin")
+			if err != nil {
+				return err
+			}
+			updates["ledger.json"] = strings.TrimSpace(string(ledgerBlob))
+		}
+		tree, err := g.treeWithUpdates(ctx, snapshot.Revision, updates)
 		if err != nil {
 			return err
 		}

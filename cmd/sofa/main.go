@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,9 +12,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kevinmartin/sofa/internal/admission"
@@ -38,7 +42,10 @@ type Manifest struct {
 }
 
 func main() {
-	if err := run(context.Background(), os.Args[1:]); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := run(ctx, os.Args[1:])
+	stop()
+	if err != nil {
 		// Package errors and local validation messages never include token values.
 		fmt.Fprintln(os.Stderr, "sofa:", err)
 		os.Exit(1)
@@ -156,7 +163,7 @@ func readManifest(name string, c config.Config) (Manifest, error) {
 }
 
 func ledgerAdmission(g admission.Grant) state.Admission {
-	return state.Admission{Repository: g.Repository, Issue: int64(g.IssueNumber), SpecDigest: g.SpecDigest, ConfigDigest: g.ConfigDigest, BaseSHA: g.BaseSHA, ProjectID: g.ProjectID, ProjectItemID: g.ProjectItemID, StatusOptionID: g.StatusOptionID, StatusUpdatedAt: g.StatusUpdatedAt}
+	return state.Admission{Repository: strings.ToLower(g.Repository), Issue: int64(g.IssueNumber), SpecDigest: g.SpecDigest, ConfigDigest: g.ConfigDigest, BaseSHA: g.BaseSHA, ProjectID: g.ProjectID, ProjectItemID: g.ProjectItemID, StatusOptionID: g.StatusOptionID, StatusUpdatedAt: g.StatusUpdatedAt}
 }
 
 func observeOnce(ctx context.Context, engine state.Engine, attemptID, stage, outcome, revision, evidenceRef, scope string) error {
@@ -411,7 +418,7 @@ func validateExecutionFailure(f ExecutionFailure, m Manifest) error {
 		return errors.New("invalid ACP observation telemetry")
 	}
 	switch f.Reason {
-	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation", "agent-error", "artifact-write", "unexpected":
+	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation", "configured-check", "workspace-changed", "agent-error", "artifact-write", "unexpected":
 	default:
 		return errors.New("unsupported execution failure reason")
 	}
@@ -419,7 +426,7 @@ func validateExecutionFailure(f ExecutionFailure, m Manifest) error {
 		return errors.New("invalid pre-execution failure telemetry")
 	}
 	switch f.Reason {
-	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation":
+	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation", "configured-check", "workspace-changed":
 		if f.Kind != "validation" {
 			return errors.New("execution failure reason and class mismatch")
 		}
@@ -530,6 +537,34 @@ func cleanBase(ctx context.Context, workspace, expected string) error {
 	return nil
 }
 
+type candidateWorkspaceState struct {
+	status []byte
+	files  map[string]integrity.BaseFile
+}
+
+func candidateState(ctx context.Context, workspace string, b integrity.Bundle) (candidateWorkspaceState, error) {
+	paths := make([]string, len(b.Files))
+	for i, change := range b.Files {
+		paths[i] = change.Path
+	}
+	files, err := integrity.Snapshot(workspace, paths)
+	if err != nil {
+		return candidateWorkspaceState{}, err
+	}
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "status", "--porcelain", "--untracked-files=all")
+	cmd.Dir = workspace
+	cmd.Env = gitEnv()
+	status, err := cmd.Output()
+	if err != nil {
+		return candidateWorkspaceState{}, errors.New("cannot inspect candidate workspace")
+	}
+	return candidateWorkspaceState{status: status, files: files}, nil
+}
+
+func (s candidateWorkspaceState) matches(other candidateWorkspaceState) bool {
+	return bytes.Equal(s.status, other.status) && reflect.DeepEqual(s.files, other.files)
+}
+
 func gitEnv() []string {
 	return []string{"PATH=" + os.Getenv("PATH"), "HOME=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}
 }
@@ -558,7 +593,7 @@ func bundleExpected(m Manifest, b integrity.Bundle) integrity.Expected {
 	return integrity.Expected{Repository: m.Grant.Repository, AttemptID: m.Fence.AttemptID, Generation: generation, BaseSHA: m.Grant.BaseSHA, CandidateDigest: b.CandidateDigest}
 }
 
-func verify(ctx context.Context, args []string) error {
+func verify(ctx context.Context, args []string) (retErr error) {
 	f := flags("verify")
 	configPath, manifestPath, workspace, bundlePath, out := f.String("config", "", ""), f.String("manifest", "", ""), f.String("workspace", "", ""), f.String("bundle", "", ""), f.String("out", "", "")
 	if f.Parse(args) != nil || f.NArg() != 0 || *configPath == "" || *manifestPath == "" || *workspace == "" || *bundlePath == "" || *out == "" {
@@ -580,6 +615,13 @@ func verify(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	failure := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Reason: "unexpected"}
+	defer func() {
+		if retErr != nil {
+			failure.Kind = executionFailureKind(retErr)
+			_ = writeJSON(filepath.Join(filepath.Dir(*out), "verification-failure.json"), failure)
+		}
+	}()
 	b, err := readBundle(*bundlePath)
 	if err != nil {
 		return err
@@ -588,6 +630,10 @@ func verify(ctx context.Context, args []string) error {
 		return err
 	}
 	if err := integrity.Apply(*workspace, b, bundleExpected(m, b), bundlePolicy(c)); err != nil {
+		return err
+	}
+	baseline, err := candidateState(ctx, *workspace, b)
+	if err != nil {
 		return err
 	}
 	checks := make([]integrity.CheckEvidence, 0, len(c.Checks))
@@ -600,7 +646,16 @@ func verify(ctx context.Context, args []string) error {
 		err := cmd.Run()
 		cancel()
 		if err != nil {
-			return fmt.Errorf("configured check %s failed", check.ID)
+			failure.Reason = "configured-check"
+			return fmt.Errorf("%w: configured check %s failed", errExecutionValidation, check.ID)
+		}
+		current, err := candidateState(ctx, *workspace, b)
+		if err != nil {
+			return err
+		}
+		if !baseline.matches(current) {
+			failure.Reason = "workspace-changed"
+			return fmt.Errorf("%w: configured check %s changed candidate workspace", errExecutionValidation, check.ID)
 		}
 		checks = append(checks, integrity.CheckEvidence{Version: integrity.Version, Name: check.ID, CandidateDigest: b.CandidateDigest, Passed: true})
 	}

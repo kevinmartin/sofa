@@ -79,3 +79,24 @@ func TestSaveSpecPreservesLedgerAndIsImmutable(t *testing.T) {
 		t.Fatal("unsafe path wrote outside Git state")
 	}
 }
+
+func TestSaveSpecInitializesLedgerOnEmptyStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s %v", out, err)
+	}
+	g := GitStore{Directory: dir}
+	content := []byte(`{"title":"Fixture","body":"Start with a specification"}`)
+	h := sha256.Sum256(content)
+	if err := g.SaveSpec(ctx, "I_first", hex.EncodeToString(h[:]), content); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := g.Load(ctx)
+	if err != nil || snapshot.Revision == "" || len(snapshot.State.Attempts) != 0 {
+		t.Fatalf("spec-first store is unreadable: %+v, %v", snapshot, err)
+	}
+	if err := g.CompareAndSwap(ctx, snapshot.Revision, snapshot.State); err != nil {
+		t.Fatalf("spec-first store cannot update ledger: %v", err)
+	}
+}
