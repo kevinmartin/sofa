@@ -304,7 +304,9 @@ jobs:
 
   publish:
     needs: verify
-    if: needs.verify.result == 'success'
+    # A recovered candidate skips execute. Explicit always() prevents GitHub's
+    # implicit success() from treating that intentional skip as a failed chain.
+    if: always() && needs.verify.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
