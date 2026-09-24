@@ -58,8 +58,12 @@ For recovery, rerun the same issue after the earlier Actions run is terminal.
 The ledger either suppresses duplicate work or reclaims the attempt. If a
 publication intent survived, the verifier fetches the previous run's candidate
 artifact and checks it again under the new fence. Artifacts have a one-day
-retention; if the needed artifact has expired, recovery stops rather than
-inventing evidence. Do not delete the `sofa-state` branch to retry. This slice
+retention. If a candidate checkpoint's artifact is missing before publication
+intent, admission checks the producer run and restarts execution within the
+original cumulative budget. If publication intent already exists, a missing
+artifact stops recovery for operator inspection of the branch and PR. An API
+error also stops recovery rather than inventing evidence. Do not delete the
+`sofa-state` branch to retry. This slice
 uses its own deterministic check evidence and leaves independent downstream CI
 qualification to later milestones.
 
