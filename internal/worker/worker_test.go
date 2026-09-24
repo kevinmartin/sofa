@@ -47,13 +47,13 @@ func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
 		if err := os.WriteFile(path, []byte("package fixture\n\nfunc Greet() string {return \"hello\"}\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		return agent.Result{StopReason: "end_turn", PromptRequests: 1}, nil
+		return agent.Result{StopReason: "end_turn", PromptRequests: 1, Updates: 5, PermissionRequests: 2, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolReads: 1, ToolEdits: 1, ToolExecutes: 1, ToolOthers: 1, ToolFailedUpdates: 1}, nil
 	})
 	out, err := Execute(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !out.UsedAgent || out.PromptRequests != 1 || out.ModelCalls != nil || len(out.Bundle.Files) != 1 || out.Bundle.Files[0].Path != "fixture/main.go" {
+	if !out.UsedAgent || out.PromptRequests != 1 || out.ModelCalls != nil || out.Updates != 5 || out.PermissionRequests != 2 || out.PermissionDenials != 1 || out.PermissionExecuteDenials != 1 || out.ToolReads != 1 || out.ToolEdits != 1 || out.ToolExecutes != 1 || out.ToolOthers != 1 || out.ToolFailedUpdates != 1 || len(out.Bundle.Files) != 1 || out.Bundle.Files[0].Path != "fixture/main.go" {
 		t.Fatal("incorrect candidate evidence")
 	}
 }
@@ -99,10 +99,10 @@ func TestRefusedAgentTurnCannotBecomeCandidate(t *testing.T) {
 func TestFailedAgentTurnRetainsPromptAccounting(t *testing.T) {
 	in, _ := workerFixture(t)
 	in.Runner = RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) {
-		return agent.Result{PromptRequests: 1}, agent.ErrQuota
+		return agent.Result{PromptRequests: 1, Updates: 2, PermissionRequests: 1, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolExecutes: 1, ToolFailedUpdates: 1}, agent.ErrQuota
 	})
 	out, err := Execute(context.Background(), in)
-	if err != agent.ErrQuota || !out.UsedAgent || out.PromptRequests != 1 || len(out.Bundle.Files) != 0 {
+	if err != agent.ErrQuota || !out.UsedAgent || out.PromptRequests != 1 || out.Updates != 2 || out.PermissionRequests != 1 || out.PermissionDenials != 1 || out.PermissionExecuteDenials != 1 || out.ToolExecutes != 1 || out.ToolFailedUpdates != 1 || len(out.Bundle.Files) != 0 {
 		t.Fatalf("failed ACP turn lost bounded accounting: %+v, %v", out, err)
 	}
 }

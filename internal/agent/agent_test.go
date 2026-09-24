@@ -111,12 +111,39 @@ func TestNegotiationStreamingAndPermissionDenial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PromptRequests != 1 || got.ModelCalls != nil || got.Updates != 1 || got.PermissionRequests != 1 || got.PermissionDenials != 1 || got.StopReason != "end_turn" || len(got.SessionID) != 64 {
+	if got.PromptRequests != 1 || got.ModelCalls != nil || got.Updates != 1 || got.PermissionRequests != 1 || got.PermissionDenials != 1 || got.PermissionExecuteDenials != 1 || got.StopReason != "end_turn" || len(got.SessionID) != 64 {
 		t.Fatalf("unexpected metadata: %+v", got)
 	}
 	encoded, _ := json.Marshal(got)
 	if strings.Contains(string(encoded), "SECRET") {
 		t.Fatal("raw agent content retained")
+	}
+}
+
+func TestSessionUpdateCountsOnlyFixedToolCategories(t *testing.T) {
+	c := &client{session: "session"}
+	sensitive := "SECRET_SHOULD_NEVER_APPEAR"
+	for _, kind := range []acp.ToolKind{acp.ToolKindRead, acp.ToolKindEdit, acp.ToolKindExecute, acp.ToolKind("SECRET_KIND_SHOULD_NEVER_APPEAR")} {
+		if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{Kind: kind, Title: sensitive, RawInput: sensitive}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failed := acp.ToolCallStatusFailed
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{Status: &failed, Title: &sensitive}}}); err != nil {
+		t.Fatal(err)
+	}
+	if c.updates != 5 || c.toolReads != 1 || c.toolEdits != 1 || c.toolExecutes != 1 || c.toolOthers != 1 || c.toolFailedUpdates != 1 {
+		t.Fatalf("unexpected fixed counters: %+v", c)
+	}
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{Kind: acp.ToolKindRead, Status: failed}, ToolCallUpdate: &acp.SessionToolCallUpdate{Status: &failed}}}); err != nil || c.updates != 6 || c.toolFailedUpdates != 2 {
+		t.Fatal("failed status counted more than once per notification")
+	}
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: "other"}); !errors.Is(err, ErrProtocol) || c.updates != 6 {
+		t.Fatal("cross-session update changed counters")
+	}
+	c.updates = MaxObservationCount
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{Kind: acp.ToolKindRead}}}); err != nil || c.updates != MaxObservationCount || c.toolReads != 2 {
+		t.Fatal("untrusted update counter exceeded cap")
 	}
 }
 func TestProtocolAuthenticationAndQuotaFailures(t *testing.T) {

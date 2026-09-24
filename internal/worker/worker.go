@@ -48,11 +48,20 @@ type Input struct {
 	Runner        Runner
 }
 type Result struct {
-	Bundle         integrity.Bundle `json:"bundle"`
-	UsedAgent      bool             `json:"used_agent"`
-	PromptRequests int              `json:"prompt_requests"`
-	ModelCalls     *int             `json:"model_calls"`
-	NoChange       bool             `json:"no_change"`
+	Bundle                   integrity.Bundle `json:"bundle"`
+	UsedAgent                bool             `json:"used_agent"`
+	PromptRequests           int              `json:"prompt_requests"`
+	Updates                  int              `json:"updates"`
+	PermissionRequests       int              `json:"permission_requests"`
+	PermissionDenials        int              `json:"permission_denials"`
+	PermissionExecuteDenials int              `json:"permission_execute_denials"`
+	ToolReads                int              `json:"tool_reads"`
+	ToolEdits                int              `json:"tool_edits"`
+	ToolExecutes             int              `json:"tool_executes"`
+	ToolOthers               int              `json:"tool_others"`
+	ToolFailedUpdates        int              `json:"tool_failed_updates"`
+	ModelCalls               *int             `json:"model_calls"`
+	NoChange                 bool             `json:"no_change"`
 }
 
 func Execute(ctx context.Context, in Input) (Result, error) {
@@ -111,12 +120,21 @@ func Execute(ctx context.Context, in Input) (Result, error) {
 			Timeout:      time.Duration(in.Config.Limits.AttemptSeconds) * time.Second,
 			AllowedPaths: allowed,
 		}
-		prompt := fmt.Sprintf("Implement the approved issue in this disposable checkout. Title: %s\nSpecification: %s\nEdit only these approved existing files: %s\nDo not alter tests or policy to make a failure appear green. Return a completed ACP turn after the change.", spec.Title, spec.Body, strings.Join(allowed, ", "))
+		prompt := fmt.Sprintf("Implement the approved issue in this disposable checkout. Title: %s\nSpecification: %s\nEdit only these approved existing files: %s\nUse file read/edit capabilities to make the actual source change; shell execution permission is unavailable. Do not stop at proposing a patch. Do not alter tests or policy to make a failure appear green. Return a completed ACP turn after the change.", spec.Title, spec.Body, strings.Join(allowed, ", "))
 		result, err := runner.Run(ctx, ac, prompt)
 		// A failed ACP turn can still have sent a prompt. Preserve the bounded
 		// accounting returned by the adapter without retaining agent text.
 		out.UsedAgent = true
 		out.PromptRequests = result.PromptRequests
+		out.Updates = result.Updates
+		out.PermissionRequests = result.PermissionRequests
+		out.PermissionDenials = result.PermissionDenials
+		out.PermissionExecuteDenials = result.PermissionExecuteDenials
+		out.ToolReads = result.ToolReads
+		out.ToolEdits = result.ToolEdits
+		out.ToolExecutes = result.ToolExecutes
+		out.ToolOthers = result.ToolOthers
+		out.ToolFailedUpdates = result.ToolFailedUpdates
 		out.ModelCalls = result.ModelCalls
 		if err != nil {
 			return out, err

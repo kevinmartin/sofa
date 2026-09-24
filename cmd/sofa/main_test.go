@@ -109,7 +109,7 @@ func TestFailureClassificationKeepsDeterministicErrorsOutOfRetry(t *testing.T) {
 
 func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
 	_, m := testManifest(t)
-	base := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "candidate-no-change", UsedAgent: true, PromptRequests: 1}
+	base := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "candidate-no-change", UsedAgent: true, PromptRequests: 1, Updates: 5, PermissionRequests: 2, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolReads: 1, ToolEdits: 1, ToolExecutes: 1, ToolOthers: 1, ToolFailedUpdates: 1}
 	if err := validateExecutionFailure(base, m); err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +125,18 @@ func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
 		func(f *ExecutionFailure) { f.Reason = "agent-supplied text" },
 		func(f *ExecutionFailure) { f.PromptRequests = -1 },
 		func(f *ExecutionFailure) { f.PromptRequests = 2 },
+		func(f *ExecutionFailure) { f.Updates = -1 },
+		func(f *ExecutionFailure) { f.Updates = maxACPObservationCount + 1 },
+		func(f *ExecutionFailure) { f.PermissionRequests = -1 },
+		func(f *ExecutionFailure) { f.PermissionRequests = maxACPObservationCount + 1 },
+		func(f *ExecutionFailure) { f.PermissionDenials = -1 },
+		func(f *ExecutionFailure) { f.PermissionDenials = 3 },
+		func(f *ExecutionFailure) { f.PermissionExecuteDenials = -1 },
+		func(f *ExecutionFailure) { f.PermissionExecuteDenials = 2 },
+		func(f *ExecutionFailure) { f.ToolReads = -1 },
+		func(f *ExecutionFailure) { f.ToolReads = 6 },
+		func(f *ExecutionFailure) { f.ToolEdits = 3 },
+		func(f *ExecutionFailure) { f.ToolFailedUpdates = 6 },
 		func(f *ExecutionFailure) { f.UsedAgent = false },
 		func(f *ExecutionFailure) { f.AttemptID = "other" },
 		func(f *ExecutionFailure) { f.Kind = "retry-anyway" },
@@ -137,6 +149,17 @@ func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
 		if err := validateExecutionFailure(candidate, m); err == nil {
 			t.Fatalf("accepted invalid failure telemetry: %+v", candidate)
 		}
+	}
+	withoutAgent := base
+	withoutAgent.UsedAgent = false
+	withoutAgent.PromptRequests = 0
+	if err := validateExecutionFailure(withoutAgent, m); err == nil {
+		t.Fatal("accepted ACP activity without an agent")
+	}
+	legacy.Updates = 1
+	legacy.Kind = "infrastructure"
+	if err := validateExecutionFailure(legacy, m); err == nil {
+		t.Fatal("accepted legacy failure with ACP telemetry")
 	}
 }
 
@@ -344,16 +367,25 @@ func TestExecuteExactRecipeUsesNoModelCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		Version         int    `json:"version"`
-		UsedAgent       bool   `json:"used_agent"`
-		PromptRequests  int    `json:"prompt_requests"`
-		ModelCalls      *int   `json:"model_calls"`
-		CandidateDigest string `json:"candidate_digest"`
+		Version                  int    `json:"version"`
+		UsedAgent                bool   `json:"used_agent"`
+		PromptRequests           int    `json:"prompt_requests"`
+		Updates                  int    `json:"updates"`
+		PermissionRequests       int    `json:"permission_requests"`
+		PermissionDenials        int    `json:"permission_denials"`
+		PermissionExecuteDenials int    `json:"permission_execute_denials"`
+		ToolReads                int    `json:"tool_reads"`
+		ToolEdits                int    `json:"tool_edits"`
+		ToolExecutes             int    `json:"tool_executes"`
+		ToolOthers               int    `json:"tool_others"`
+		ToolFailedUpdates        int    `json:"tool_failed_updates"`
+		ModelCalls               *int   `json:"model_calls"`
+		CandidateDigest          string `json:"candidate_digest"`
 	}
 	if err := readJSON(filepath.Join(transport, "execution.json"), 4096, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Version != 1 || result.UsedAgent || result.PromptRequests != 0 || result.ModelCalls != nil {
+	if result.Version != 1 || result.UsedAgent || result.PromptRequests != 0 || result.Updates != 0 || result.PermissionRequests != 0 || result.PermissionDenials != 0 || result.PermissionExecuteDenials != 0 || result.ToolReads != 0 || result.ToolEdits != 0 || result.ToolExecutes != 0 || result.ToolOthers != 0 || result.ToolFailedUpdates != 0 || result.ModelCalls != nil {
 		t.Fatal("exact recipe invoked or reported model use")
 	}
 	b, err := readBundle(bundlePath)

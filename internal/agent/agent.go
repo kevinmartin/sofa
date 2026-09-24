@@ -30,14 +30,23 @@ type Config struct {
 }
 
 type Result struct {
-	SessionID          string `json:"session_id_hash,omitempty"` // SHA-256, never raw agent-controlled text.
-	Updates            int    `json:"updates"`
-	PermissionRequests int    `json:"permission_requests"`
-	PermissionDenials  int    `json:"permission_denials"`
-	PromptRequests     int    `json:"prompt_requests"` // ACP turns attempted, not provider model calls.
-	ModelCalls         *int   `json:"model_calls"`     // Unknown: ACP does not expose internal inference count.
-	StopReason         string `json:"stop_reason,omitempty"`
+	SessionID                string `json:"session_id_hash,omitempty"` // SHA-256, never raw agent-controlled text.
+	Updates                  int    `json:"updates"`
+	PermissionRequests       int    `json:"permission_requests"`
+	PermissionDenials        int    `json:"permission_denials"`
+	PermissionExecuteDenials int    `json:"permission_execute_denials"`
+	ToolReads                int    `json:"tool_reads"`
+	ToolEdits                int    `json:"tool_edits"`
+	ToolExecutes             int    `json:"tool_executes"`
+	ToolOthers               int    `json:"tool_others"`
+	ToolFailedUpdates        int    `json:"tool_failed_updates"` // Failed-status notifications, not unique tools.
+	PromptRequests           int    `json:"prompt_requests"`     // ACP turns attempted, not provider model calls.
+	ModelCalls               *int   `json:"model_calls"`         // Unknown: ACP does not expose internal inference count.
+	StopReason               string `json:"stop_reason,omitempty"`
 }
+
+// MaxObservationCount caps untrusted ACP notification counters in artifacts.
+const MaxObservationCount = 100000
 
 var (
 	ErrConfiguration  = errors.New("agent: invalid configuration")
@@ -143,6 +152,12 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 		result.Updates = c.updates
 		result.PermissionRequests = c.permissions
 		result.PermissionDenials = c.denials
+		result.PermissionExecuteDenials = c.executeDenials
+		result.ToolReads = c.toolReads
+		result.ToolEdits = c.toolEdits
+		result.ToolExecutes = c.toolExecutes
+		result.ToolOthers = c.toolOthers
+		result.ToolFailedUpdates = c.toolFailedUpdates
 		c.mu.Unlock()
 	}()
 	init, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber, ClientInfo: &acp.Implementation{Name: "sofa", Version: "prototype"}, ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}}})
@@ -269,11 +284,12 @@ func protocolFailure(stage string, err error, stderr *stderrOSCode) error {
 }
 
 type client struct {
-	mu                            sync.Mutex
-	root                          string
-	allowed                       map[string]bool
-	session                       acp.SessionId
-	updates, permissions, denials int
+	mu                                                                sync.Mutex
+	root                                                              string
+	allowed                                                           map[string]bool
+	session                                                           acp.SessionId
+	updates, permissions, denials, executeDenials                     int
+	toolReads, toolEdits, toolExecutes, toolOthers, toolFailedUpdates int
 }
 
 func (c *client) SessionUpdate(_ context.Context, p acp.SessionNotification) error {
@@ -282,13 +298,40 @@ func (c *client) SessionUpdate(_ context.Context, p acp.SessionNotification) err
 	if p.SessionId != c.session {
 		return ErrProtocol
 	}
+	if c.updates >= MaxObservationCount {
+		return nil
+	}
 	c.updates++
+	failedStatus := false
+	if call := p.Update.ToolCall; call != nil {
+		switch call.Kind {
+		case acp.ToolKindRead:
+			c.toolReads++
+		case acp.ToolKindEdit:
+			c.toolEdits++
+		case acp.ToolKindExecute:
+			c.toolExecutes++
+		default:
+			c.toolOthers++
+		}
+		if call.Status == acp.ToolCallStatusFailed {
+			failedStatus = true
+		}
+	}
+	if call := p.Update.ToolCallUpdate; call != nil && call.Status != nil && *call.Status == acp.ToolCallStatusFailed {
+		failedStatus = true
+	}
+	if failedStatus {
+		c.toolFailedUpdates++
+	}
 	return nil
 }
 func (c *client) RequestPermission(ctx context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.permissions++
+	if c.permissions < MaxObservationCount {
+		c.permissions++
+	}
 	allow := ctx.Err() == nil && p.SessionId == c.session && p.ToolCall.Kind != nil && (*p.ToolCall.Kind == "read" || *p.ToolCall.Kind == "edit") && len(p.ToolCall.Locations) > 0
 	for _, loc := range p.ToolCall.Locations {
 		if !c.permissionPath(loc.Path, p.ToolCall.Kind != nil && *p.ToolCall.Kind == "edit") {
@@ -302,7 +345,12 @@ func (c *client) RequestPermission(ctx context.Context, p acp.RequestPermissionR
 			}
 		}
 	}
-	c.denials++
+	if c.denials < MaxObservationCount {
+		c.denials++
+	}
+	if p.ToolCall.Kind != nil && *p.ToolCall.Kind == acp.ToolKindExecute && c.executeDenials < MaxObservationCount {
+		c.executeDenials++
+	}
 	return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}}}, nil
 }
 

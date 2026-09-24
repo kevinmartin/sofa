@@ -353,14 +353,25 @@ func forbidPrivilegedEnv(modelEnv string, includeModel bool) error {
 }
 
 type ExecutionFailure struct {
-	Version        int    `json:"version"`
-	AttemptID      string `json:"attempt_id"`
-	Generation     int64  `json:"generation"`
-	Kind           string `json:"kind"`
-	Reason         string `json:"reason,omitempty"`
-	UsedAgent      bool   `json:"used_agent,omitempty"`
-	PromptRequests int    `json:"prompt_requests,omitempty"`
+	Version                  int    `json:"version"`
+	AttemptID                string `json:"attempt_id"`
+	Generation               int64  `json:"generation"`
+	Kind                     string `json:"kind"`
+	Reason                   string `json:"reason,omitempty"`
+	UsedAgent                bool   `json:"used_agent,omitempty"`
+	PromptRequests           int    `json:"prompt_requests,omitempty"`
+	Updates                  int    `json:"updates,omitempty"`
+	PermissionRequests       int    `json:"permission_requests,omitempty"`
+	PermissionDenials        int    `json:"permission_denials,omitempty"`
+	PermissionExecuteDenials int    `json:"permission_execute_denials,omitempty"`
+	ToolReads                int    `json:"tool_reads,omitempty"`
+	ToolEdits                int    `json:"tool_edits,omitempty"`
+	ToolExecutes             int    `json:"tool_executes,omitempty"`
+	ToolOthers               int    `json:"tool_others,omitempty"`
+	ToolFailedUpdates        int    `json:"tool_failed_updates,omitempty"`
 }
+
+const maxACPObservationCount = agent.MaxObservationCount
 
 var errExecutionValidation = errors.New("execution input or candidate validation failed")
 
@@ -390,18 +401,21 @@ func validateExecutionFailure(f ExecutionFailure, m Manifest) error {
 	}
 	// Version one is the workflow's bounded infrastructure fallback when the
 	// execution job could not upload an artifact. It cannot assert telemetry.
-	if f.Version == 1 && f.Kind == "infrastructure" && f.Reason == "" && !f.UsedAgent && f.PromptRequests == 0 {
+	if f.Version == 1 && f.Kind == "infrastructure" && f.Reason == "" && !f.UsedAgent && f.PromptRequests == 0 && f.Updates == 0 && f.PermissionRequests == 0 && f.PermissionDenials == 0 && f.PermissionExecuteDenials == 0 && f.ToolReads == 0 && f.ToolEdits == 0 && f.ToolExecutes == 0 && f.ToolOthers == 0 && f.ToolFailedUpdates == 0 {
 		return nil
 	}
 	if f.Version != 2 || f.PromptRequests < 0 || f.PromptRequests > 1 || (!f.UsedAgent && f.PromptRequests != 0) {
 		return errors.New("invalid execution failure telemetry")
+	}
+	if f.Updates < 0 || f.Updates > maxACPObservationCount || f.PermissionRequests < 0 || f.PermissionRequests > maxACPObservationCount || f.PermissionDenials < 0 || f.PermissionDenials > f.PermissionRequests || f.PermissionExecuteDenials < 0 || f.PermissionExecuteDenials > f.PermissionDenials || f.ToolReads < 0 || f.ToolEdits < 0 || f.ToolExecutes < 0 || f.ToolOthers < 0 || f.ToolFailedUpdates < 0 || f.ToolReads > f.Updates || f.ToolEdits > f.Updates || f.ToolExecutes > f.Updates || f.ToolOthers > f.Updates || f.ToolFailedUpdates > f.Updates || int64(f.ToolReads)+int64(f.ToolEdits)+int64(f.ToolExecutes)+int64(f.ToolOthers) > int64(f.Updates) || (!f.UsedAgent && (f.Updates != 0 || f.PermissionRequests != 0 || f.PermissionDenials != 0 || f.PermissionExecuteDenials != 0 || f.ToolReads != 0 || f.ToolEdits != 0 || f.ToolExecutes != 0 || f.ToolOthers != 0 || f.ToolFailedUpdates != 0)) {
+		return errors.New("invalid ACP observation telemetry")
 	}
 	switch f.Reason {
 	case "recovery-input", "base-checkout", "candidate-no-change", "worker-validation", "agent-error", "artifact-write", "unexpected":
 	default:
 		return errors.New("unsupported execution failure reason")
 	}
-	if (f.Reason == "recovery-input" || f.Reason == "base-checkout") && (f.UsedAgent || f.PromptRequests != 0) {
+	if (f.Reason == "recovery-input" || f.Reason == "base-checkout") && (f.UsedAgent || f.PromptRequests != 0 || f.Updates != 0 || f.PermissionRequests != 0 || f.PermissionDenials != 0 || f.PermissionExecuteDenials != 0 || f.ToolReads != 0 || f.ToolEdits != 0 || f.ToolExecutes != 0 || f.ToolOthers != 0 || f.ToolFailedUpdates != 0) {
 		return errors.New("invalid pre-execution failure telemetry")
 	}
 	switch f.Reason {
@@ -439,7 +453,7 @@ func execute(ctx context.Context, args []string) (retErr error) {
 		if retErr != nil {
 			failure.Kind = executionFailureKind(retErr)
 			_ = writeJSON(filepath.Join(filepath.Dir(*out), "execution-failure.json"), failure)
-			fmt.Fprintf(os.Stderr, "sofa: execution failure reason=%s used_agent=%t prompt_requests=%d\n", failure.Reason, failure.UsedAgent, failure.PromptRequests)
+			fmt.Fprintf(os.Stderr, "sofa: execution failure reason=%s used_agent=%t prompt_requests=%d updates=%d permission_requests=%d permission_denials=%d permission_execute_denials=%d tool_reads=%d tool_edits=%d tool_executes=%d tool_others=%d tool_failed_updates=%d\n", failure.Reason, failure.UsedAgent, failure.PromptRequests, failure.Updates, failure.PermissionRequests, failure.PermissionDenials, failure.PermissionExecuteDenials, failure.ToolReads, failure.ToolEdits, failure.ToolExecutes, failure.ToolOthers, failure.ToolFailedUpdates)
 		}
 	}()
 	if m.Recovery != nil || m.RecoveryCheckpoint != nil {
@@ -453,6 +467,15 @@ func execute(ctx context.Context, args []string) (retErr error) {
 	result, err := worker.Execute(ctx, worker.Input{Config: c, CanonicalSpec: m.CanonicalSpec, Directory: *workspace, AttemptID: m.Fence.AttemptID, Generation: uint64(m.Fence.Generation), BaseSHA: m.Grant.BaseSHA, ModelToken: os.Getenv(c.Profile.SecretEnv)})
 	failure.UsedAgent = result.UsedAgent
 	failure.PromptRequests = result.PromptRequests
+	failure.Updates = result.Updates
+	failure.PermissionRequests = result.PermissionRequests
+	failure.PermissionDenials = result.PermissionDenials
+	failure.PermissionExecuteDenials = result.PermissionExecuteDenials
+	failure.ToolReads = result.ToolReads
+	failure.ToolEdits = result.ToolEdits
+	failure.ToolExecutes = result.ToolExecutes
+	failure.ToolOthers = result.ToolOthers
+	failure.ToolFailedUpdates = result.ToolFailedUpdates
 	if err != nil {
 		failure.Reason = "agent-error"
 		if errors.Is(err, worker.ErrValidation) {
@@ -469,12 +492,21 @@ func execute(ctx context.Context, args []string) (retErr error) {
 		return err
 	}
 	return writeJSON(filepath.Join(filepath.Dir(*out), "execution.json"), struct {
-		Version         int    `json:"version"`
-		UsedAgent       bool   `json:"used_agent"`
-		PromptRequests  int    `json:"prompt_requests"`
-		ModelCalls      *int   `json:"model_calls"`
-		CandidateDigest string `json:"candidate_digest"`
-	}{Version: 1, UsedAgent: result.UsedAgent, PromptRequests: result.PromptRequests, ModelCalls: result.ModelCalls, CandidateDigest: result.Bundle.CandidateDigest})
+		Version                  int    `json:"version"`
+		UsedAgent                bool   `json:"used_agent"`
+		PromptRequests           int    `json:"prompt_requests"`
+		Updates                  int    `json:"updates"`
+		PermissionRequests       int    `json:"permission_requests"`
+		PermissionDenials        int    `json:"permission_denials"`
+		PermissionExecuteDenials int    `json:"permission_execute_denials"`
+		ToolReads                int    `json:"tool_reads"`
+		ToolEdits                int    `json:"tool_edits"`
+		ToolExecutes             int    `json:"tool_executes"`
+		ToolOthers               int    `json:"tool_others"`
+		ToolFailedUpdates        int    `json:"tool_failed_updates"`
+		ModelCalls               *int   `json:"model_calls"`
+		CandidateDigest          string `json:"candidate_digest"`
+	}{Version: 1, UsedAgent: result.UsedAgent, PromptRequests: result.PromptRequests, Updates: result.Updates, PermissionRequests: result.PermissionRequests, PermissionDenials: result.PermissionDenials, PermissionExecuteDenials: result.PermissionExecuteDenials, ToolReads: result.ToolReads, ToolEdits: result.ToolEdits, ToolExecutes: result.ToolExecutes, ToolOthers: result.ToolOthers, ToolFailedUpdates: result.ToolFailedUpdates, ModelCalls: result.ModelCalls, CandidateDigest: result.Bundle.CandidateDigest})
 }
 
 func cleanBase(ctx context.Context, workspace, expected string) error {
