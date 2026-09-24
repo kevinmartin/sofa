@@ -67,6 +67,36 @@ error also stops recovery rather than inventing evidence. Do not delete the
 uses its own deterministic check evidence and leaves independent downstream CI
 qualification to later milestones.
 
+For this disposable installation, the following commands dispatch and inspect
+one issue. Replace the issue and run numbers with the ones being investigated:
+
+```sh
+gh workflow run 'sofa disposable canary' -R kevinmartin/sofa-disposable --ref main -f issue_number=22
+gh run list -R kevinmartin/sofa-disposable --workflow 'sofa disposable canary' --limit 5
+gh run view RUN_NUMBER -R kevinmartin/sofa-disposable --json status,conclusion,jobs
+gh run download RUN_NUMBER -R kevinmartin/sofa-disposable --dir ./sofa-run-artifacts
+```
+
+Check that admission succeeded before looking for agent work. A completed issue
+should have the `work` job skipped. A candidate run should retain a
+`sofa-manifest-<run>-<attempt>` artifact, a candidate or verified-candidate
+artifact, and `sofa-evidence-<run>-<attempt>` with `passed=true` for the exact
+candidate digest. Only the trusted publisher should create a draft PR. Artifact
+JSON and the orphan `sofa-state` ledger use schema version 1; reject an unknown
+version instead of guessing how to resume it. Inspect fixed error categories,
+job status, and attempt counters; do not copy credentials or raw model output
+into a support ticket.
+
+If a run is cancelled, wait for its terminal status before dispatching the same
+issue again, and keep the admitted base and issue text unchanged. A retained
+candidate is reverified without another agent prompt. If the publisher reports
+`existing branch does not match admitted candidate`, inspect that branch and
+its PR, then stop. The publisher will not overwrite the branch; use a new
+issue on a reviewed base for a different candidate. Authentication failures
+block until credentials are repaired; structured quota failures defer work.
+Repeated runs retain their original attempt limits rather than receiving a
+fresh budget.
+
 The worker image, Copilot CLI package and external actions are pinned. Copilot
 CLI v1.0.86's Linux x64 package is checked against its published SHA-256 before
 execution. The worker runs as a non-root UID in a read-only container with only
