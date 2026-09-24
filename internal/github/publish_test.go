@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -142,6 +143,53 @@ func TestPublishDraftIdempotenceAndRogueTree(t *testing.T) {
 	f.extra = true
 	if _, err := c.PublishDraft(context.Background(), in); err == nil {
 		t.Fatal("accepted forged branch with extra file under matching commit marker")
+	}
+}
+
+func TestPublishDraftRecoversWhenPRResponseAndFirstLookupAreLost(t *testing.T) {
+	f := new(publishFixture)
+	in := inputFixture(f)
+	prPosts := 0
+	losePRResponse := true
+	loseFirstLookup := false
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pulls") {
+			prPosts++
+			response, err := f.trip(r)
+			if err != nil {
+				return response, err
+			}
+			if losePRResponse {
+				losePRResponse = false
+				loseFirstLookup = true
+				_ = response.Body.Close()
+				return nil, errors.New("simulated lost PR creation response")
+			}
+			return response, nil
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/pulls") && loseFirstLookup {
+			loseFirstLookup = false
+			return nil, errors.New("simulated lost PR reconciliation response")
+		}
+		return f.trip(r)
+	})
+	c, err := New("fixture-token", transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PublishDraft(context.Background(), in); err == nil {
+		t.Fatal("lost PR response and lookup were treated as confirmed publication")
+	}
+	if !f.branch || !f.pr || prPosts != 1 {
+		t.Fatal("fixture did not create exactly one branch and PR before response loss")
+	}
+	mutations := f.mutations
+	pr, err := c.PublishDraft(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 12 || pr.CommitSHA != testCommit || prPosts != 1 || f.mutations != mutations {
+		t.Fatal("retry did not reconcile the existing draft PR without another write")
 	}
 }
 

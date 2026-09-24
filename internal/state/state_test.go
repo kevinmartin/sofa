@@ -225,6 +225,74 @@ func TestCheckpointRecoveryExpiryAndProvenance(t *testing.T) {
 	}
 }
 
+func TestDiscardUnavailableCheckpointPreservesBudgetAndPublicationGuard(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	f := claimed(t, e, a.ID)
+	if err := e.Charge(ctx, f, Counters{ModelCalls: 1, RuntimeSeconds: 40}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, f, Validating); err != nil {
+		t.Fatal(err)
+	}
+	cp := Checkpoint{Version, Validating, "sofa-verified-candidate-42-1", strings.Repeat("d", 64), strings.Repeat("e", 40), f.Owner, f.Generation, testNow, testNow.Add(time.Hour)}
+	if err := e.SaveCheckpoint(ctx, f, cp); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DiscardUnavailableCheckpoint(ctx, a.ID, cp); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("active checkpoint discarded: %v", err)
+	}
+	if err := e.Recover(ctx, a.ID, proof(f.Owner)); err != nil {
+		t.Fatal(err)
+	}
+	wrong := cp
+	wrong.Digest = strings.Repeat("f", 64)
+	if err := e.DiscardUnavailableCheckpoint(ctx, a.ID, wrong); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed checkpoint discarded: %v", err)
+	}
+	if err := e.DiscardUnavailableCheckpoint(ctx, a.ID, cp); err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot(t, e, a.ID)
+	if got.Checkpoint != nil || got.Counts.ModelCalls != 1 || got.Counts.RuntimeSeconds != 40 || got.Counts.InfrastructureRetries != 1 || got.Generation != f.Generation+1 || got.Phase != Pending {
+		t.Fatalf("recovery changed durable budget or state: %+v", got)
+	}
+	if err := e.DiscardUnavailableCheckpoint(ctx, a.ID, cp); !errors.Is(err, ErrConflict) {
+		t.Fatalf("repeated discard accepted: %v", err)
+	}
+	newFence, err := e.Claim(ctx, a.ID, Owner{"43", 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Charge(ctx, newFence, Counters{ModelCalls: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Charge(ctx, newFence, Counters{ModelCalls: 1}); !errors.Is(err, ErrLimit) {
+		t.Fatalf("fresh execution reset model budget: %v", err)
+	}
+
+	e2 := engine()
+	a2 := admitted(t, e2)
+	f2 := claimed(t, e2, a2.ID)
+	if err := e2.Advance(ctx, f2, Validating); err != nil {
+		t.Fatal(err)
+	}
+	cp.Producer, cp.Generation = f2.Owner, f2.Generation
+	if err := e2.SaveCheckpoint(ctx, f2, cp); err != nil {
+		t.Fatal(err)
+	}
+	if err := e2.BeginPublication(ctx, f2, Publication{Branch: "sofa/issue-7", ExpectedHead: a2.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e2.Recover(ctx, a2.ID, proof(f2.Owner)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e2.DiscardUnavailableCheckpoint(ctx, a2.ID, cp); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("publication candidate discarded: %v", err)
+	}
+}
+
 func TestPublicationCrashAcknowledgementIsIdempotent(t *testing.T) {
 	e := engine()
 	a := admitted(t, e)

@@ -16,6 +16,53 @@ import (
 	"github.com/kevinmartin/sofa/internal/state"
 )
 
+func TestRetainedCandidateAvailabilityFailsClosed(t *testing.T) {
+	checkpoint := state.Checkpoint{Version: state.Version, Phase: state.Validating, ArtifactID: "sofa-verified-candidate-42-2", Producer: state.Owner{RunID: "42", RunAttempt: 2}}
+	artifact := map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": false, "workflow_run": map[string]any{"id": 42}}
+	cases := []struct {
+		name      string
+		code      int
+		body      any
+		want      bool
+		wantError bool
+	}{
+		{"present", 200, map[string]any{"total_count": 1, "artifacts": []any{artifact}}, true, false},
+		{"missing", 200, map[string]any{"total_count": 0, "artifacts": []any{}}, false, false},
+		{"expired", 200, map[string]any{"total_count": 1, "artifacts": []any{map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": true, "workflow_run": map[string]any{"id": 42}}}}, false, false},
+		{"ambiguous", 200, map[string]any{"total_count": 2, "artifacts": []any{artifact, artifact}}, false, true},
+		{"wrong-run", 200, map[string]any{"total_count": 1, "artifacts": []any{map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": false, "workflow_run": map[string]any{"id": 43}}}}, false, true},
+		{"forbidden", 403, map[string]any{}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := New("fixture-token", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodGet || r.URL.Path != "/repos/owner/fixture/actions/runs/42/artifacts" || r.URL.Query().Get("name") != checkpoint.ArtifactID || r.URL.Query().Get("per_page") != "2" {
+					t.Errorf("unexpected artifact request %s", r.URL.Redacted())
+				}
+				return jsonResponse(tc.code, tc.body), nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			available, err := client.RetainedCandidateAvailable(context.Background(), "owner/fixture", checkpoint)
+			if available != tc.want || (err != nil) != tc.wantError {
+				t.Fatalf("available=%v err=%v", available, err)
+			}
+		})
+	}
+	checkpoint.ArtifactID = "wrong"
+	client, err := New("fixture-token", roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("invalid identity made an API call")
+		return nil, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RetainedCandidateAvailable(context.Background(), "owner/fixture", checkpoint); err == nil {
+		t.Fatal("invalid artifact identity accepted")
+	}
+}
+
 // This fake models GitHub's non-forced ref update: two commits built on the
 // same observed parent cannot both advance a branch. It also preserves a base
 // tree when the ledger alone is rewritten.

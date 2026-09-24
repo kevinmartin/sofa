@@ -228,6 +228,32 @@ func (e Engine) SaveCheckpoint(ctx context.Context, f Fence, checkpoint Checkpoi
 	})
 }
 
+// DiscardUnavailableCheckpoint permits a fresh execution only after the
+// controller has proved the retained artifact is absent or expired. The
+// checkpoint identity is compared under CAS, and a publication intent can
+// never be discarded here: its branch or PR may already exist.
+func (e Engine) DiscardUnavailableCheckpoint(ctx context.Context, id string, expected Checkpoint) error {
+	if !expected.valid() {
+		return fmt.Errorf("%w: checkpoint", ErrInvalid)
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[id]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if a.Phase != Pending || a.Owner != nil || a.Publication != nil {
+			return false, ErrClaimed
+		}
+		if a.Checkpoint == nil || *a.Checkpoint != expected {
+			return false, ErrConflict
+		}
+		a.Checkpoint = nil
+		a.UpdatedAt = e.now()
+		s.Attempts[id] = a
+		return true, nil
+	})
+}
+
 func (e Engine) BeginPublication(ctx context.Context, f Fence, publication Publication) error {
 	if !publication.valid() || publication.PRNumber != 0 {
 		return fmt.Errorf("%w: publication intent", ErrInvalid)

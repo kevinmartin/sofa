@@ -241,13 +241,10 @@ func admit(ctx context.Context, args []string) error {
 		return errors.New("cannot create admission output")
 	}
 	status := filepath.Join(*outDir, "status.json")
-	var recoverySource *state.Owner
 	if attempt.Owner != nil && attempt.Phase != state.Draft && attempt.Phase != state.Blocked {
-		previous := *attempt.Owner
 		proof, proofErr := ledgerClient.RunProof(ctx, c.Repository, *attempt.Owner)
 		if proofErr == nil {
 			if err := engine.Recover(ctx, attempt.ID, proof); err == nil {
-				recoverySource = &previous
 				loaded, loadErr := store.Load(ctx)
 				if loadErr != nil {
 					return loadErr
@@ -273,6 +270,31 @@ func admit(ctx context.Context, args []string) error {
 		}
 		return writeJSON(status, map[string]any{"dispatch": false, "reason": reason, "attempt_id": attempt.ID})
 	}
+	if attempt.Checkpoint != nil {
+		available := attempt.Checkpoint.ExpiresAt.After(time.Now().UTC())
+		if available {
+			available, err = ledgerClient.RetainedCandidateAvailable(ctx, c.Repository, *attempt.Checkpoint)
+			if err != nil {
+				return err // An API failure cannot justify discarding a checkpoint.
+			}
+		}
+		if !available {
+			if attempt.Publication != nil {
+				return errors.New("publication recovery candidate unavailable; inspect existing branch and PR")
+			}
+			if err := engine.DiscardUnavailableCheckpoint(ctx, attempt.ID, *attempt.Checkpoint); err != nil {
+				return err
+			}
+			loaded, loadErr := store.Load(ctx)
+			if loadErr != nil {
+				return loadErr
+			}
+			attempt = loaded.State.Attempts[attempt.ID]
+		}
+	}
+	if attempt.Publication != nil && attempt.Checkpoint == nil {
+		return errors.New("publication recovery checkpoint unavailable; inspect existing branch and PR")
+	}
 	if err := store.SaveSpec(ctx, grant.IssueID, grant.SpecDigest, spec); err != nil {
 		return err
 	}
@@ -296,14 +318,8 @@ func admit(ctx context.Context, args []string) error {
 	}
 	manifest := Manifest{Version: 1, Grant: grant, Fence: fence, CanonicalSpec: spec}
 	if attempt.Publication != nil || attempt.Checkpoint != nil {
-		if recoverySource == nil {
-			return errors.New("candidate recovery source unavailable")
-		}
 		// The last terminal owner may be a second or third recovery run. The
 		// retained artifact is identified by the checkpoint's original producer.
-		if attempt.Checkpoint == nil {
-			return errors.New("candidate recovery checkpoint unavailable")
-		}
 		artifactSource := attempt.Checkpoint.Producer
 		manifest.RecoverySource = &artifactSource
 		if attempt.Publication != nil {

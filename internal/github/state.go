@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -259,4 +260,43 @@ func (c *Client) RunProof(ctx context.Context, repo string, owner state.Owner) (
 		return state.RunProof{}, errors.New("run attempt identity mismatch")
 	}
 	return state.RunProof{Owner: owner, Status: run.Status, Conclusion: run.Conclusion, ObservedAt: time.Now().UTC()}, nil
+}
+
+// RetainedCandidateAvailable checks the exact artifact name in the producer
+// run. A failed or ambiguous API response is not proof of absence; callers
+// must retain the checkpoint in those cases.
+func (c *Client) RetainedCandidateAvailable(ctx context.Context, repo string, checkpoint state.Checkpoint) (bool, error) {
+	if !repositoryPattern.MatchString(repo) || checkpoint.Phase != state.Validating || checkpoint.Producer.RunAttempt < 1 || checkpoint.ArtifactID != fmt.Sprintf("sofa-verified-candidate-%s-%d", checkpoint.Producer.RunID, checkpoint.Producer.RunAttempt) {
+		return false, errors.New("invalid retained candidate identity")
+	}
+	id, err := strconv.ParseInt(checkpoint.Producer.RunID, 10, 64)
+	if err != nil || id <= 0 {
+		return false, errors.New("invalid retained candidate run ID")
+	}
+	var listing struct {
+		TotalCount int `json:"total_count"`
+		Artifacts  []struct {
+			ID          int64  `json:"id"`
+			Name        string `json:"name"`
+			Expired     *bool  `json:"expired"`
+			WorkflowRun struct {
+				ID int64 `json:"id"`
+			} `json:"workflow_run"`
+		} `json:"artifacts"`
+	}
+	path := fmt.Sprintf("/repos/%s/actions/runs/%d/artifacts?per_page=2&name=%s", repo, id, url.QueryEscape(checkpoint.ArtifactID))
+	if err := c.Request(ctx, http.MethodGet, path, nil, &listing); err != nil {
+		return false, err
+	}
+	if listing.TotalCount == 0 && len(listing.Artifacts) == 0 {
+		return false, nil
+	}
+	if listing.TotalCount != 1 || len(listing.Artifacts) != 1 {
+		return false, errors.New("retained candidate artifact listing ambiguous")
+	}
+	artifact := listing.Artifacts[0]
+	if artifact.ID <= 0 || artifact.Name != checkpoint.ArtifactID || artifact.Expired == nil || artifact.WorkflowRun.ID != id {
+		return false, errors.New("retained candidate artifact identity mismatch")
+	}
+	return !*artifact.Expired, nil
 }
