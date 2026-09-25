@@ -26,7 +26,7 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 		return err
 	}
 	if !reflect.DeepEqual(jobNames(work), []string{"execute", "finalize-failure", "publish", "verify"}) ||
-		!reflect.DeepEqual(jobNames(fake), []string{"execute", "publish", "verify"}) ||
+		!reflect.DeepEqual(jobNames(fake), []string{"assert-denied", "execute", "publish", "verify"}) ||
 		!reflect.DeepEqual(jobNames(reconcile), []string{"admit"}) {
 		return fmt.Errorf("production, admission, or fake job inventory changed")
 	}
