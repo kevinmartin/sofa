@@ -30,16 +30,33 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 		!reflect.DeepEqual(jobNames(reconcile), []string{"admit"}) {
 		return fmt.Errorf("production, admission, or fake job inventory changed")
 	}
+	sharedVerify := "(needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))"
+	fakeGuard := "github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'edit' && inputs.denial_kind == ''"
+	conditions := []struct {
+		job      contractJob
+		expected string
+	}{
+		{work.Jobs["execute"], "github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.reconcile_candidate"},
+		{work.Jobs["verify"], "always() && " + sharedVerify},
+		{work.Jobs["publish"], "always() && needs.verify.result == 'success'"},
+		{work.Jobs["finalize-failure"], "always() && (needs.execute.result == 'failure' || needs.verify.result == 'failure')"},
+		{fake.Jobs["execute"], fakeGuard + " && !inputs.reconcile_candidate"},
+		{fake.Jobs["verify"], "always() && " + fakeGuard + " && " + sharedVerify},
+		{fake.Jobs["publish"], "always() && " + fakeGuard + " && needs.verify.result == 'success'"},
+		{fake.Jobs["assert-denied"], "always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'denied' && (inputs.denial_kind == 'non-ready' || inputs.denial_kind == 'completed-redelivery') && !inputs.reconcile_candidate"},
+	}
+	for _, condition := range conditions {
+		if strings.Join(strings.Fields(condition.job.If), " ") != condition.expected {
+			return fmt.Errorf("production or fake scheduler condition diverged")
+		}
+	}
 	for _, w := range []contractWorkflow{work, fake} {
-		verify, publish := w.Jobs["verify"], w.Jobs["publish"]
-		if verify.Needs != "execute" || publish.Needs != "verify" ||
-			!strings.Contains(verify.If, "always()") ||
-			!strings.Contains(verify.If, "needs.execute.result == 'success'") ||
-			!strings.Contains(verify.If, "needs.execute.result == 'skipped' && inputs.reconcile_candidate") ||
-			!strings.Contains(publish.If, "always() &&") ||
-			!strings.Contains(publish.If, "needs.verify.result == 'success'") {
+		if w.Jobs["verify"].Needs != "execute" || w.Jobs["publish"].Needs != "verify" {
 			return fmt.Errorf("shared execute/verify/publish recovery graph diverged")
 		}
+	}
+	if !reflect.DeepEqual(work.Jobs["finalize-failure"].Needs, []any{"execute", "verify"}) {
+		return fmt.Errorf("production failure finalizer lost a required dependency")
 	}
 	for _, edge := range []struct {
 		producer, consumer contractJob
@@ -125,6 +142,8 @@ func TestHostedGraphParityAndBoundaries(t *testing.T) {
 		{"recovery edge", "needs: verify", "needs: execute"},
 		{"verified payload", "            evidence/checks.json", "            evidence/other.json"},
 		{"secretless simulation", "TestHostedArtifactPublication", "TestRealPublication"},
+		{"unexpected fake skip", "needs.verify.result == 'success'", "needs.verify.result == 'success' && false"},
+		{"unexpected denial skip", "inputs.denial_kind == 'completed-redelivery') && !inputs.reconcile_candidate", "inputs.denial_kind == 'completed-redelivery') && !inputs.reconcile_candidate && false"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := strings.Replace(string(fake), test.old, test.next, 1)
@@ -135,5 +154,11 @@ func TestHostedGraphParityAndBoundaries(t *testing.T) {
 				t.Fatal("drifted graph passed parity check")
 			}
 		})
+	}
+	if err := checkHostedGraphParity(reconcile, []byte(strings.Replace(string(work), "needs.verify.result == 'success'", "needs.verify.result == 'success' && false", 1)), fake); err == nil {
+		t.Fatal("production publication condition accepted an unexpected skip")
+	}
+	if err := checkHostedGraphParity(reconcile, []byte(strings.Replace(string(work), "needs: [execute, verify]", "needs: execute", 1)), fake); err == nil {
+		t.Fatal("production finalizer lost verification dependency")
 	}
 }

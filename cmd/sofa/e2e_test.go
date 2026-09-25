@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -159,6 +160,163 @@ func TestNoChangeACPTurnCannotPublish(t *testing.T) {
 	_, err = client.PublishDraft(context.Background(), github.PublishInput{Bundle: result.Bundle, Expected: integrity.Expected{Repository: c.Repository, AttemptID: m.Fence.AttemptID, Generation: 1, BaseSHA: baseSHA}, Policy: integrity.Policy{AllowedPaths: c.AllowedPaths, MaxFiles: c.Limits.MaxFiles, MaxFileBytes: c.Limits.MaxFileBytes, MaxTotalBytes: c.Limits.MaxTotalBytes}, RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "No change", Guard: func(context.Context) error { guardCalls++; return nil }})
 	if err == nil || guardCalls != 0 || fixture.writes != 0 || fixture.prPosts != 0 || fixture.providerRequests != 0 {
 		t.Fatalf("empty candidate reached publication boundary: %v, guard=%d writes=%d PRs=%d provider=%d", err, guardCalls, fixture.writes, fixture.prPosts, fixture.providerRequests)
+	}
+}
+
+func TestFailedVerificationCannotPublish(t *testing.T) {
+	ctx := context.Background()
+	c, m := testManifest(t)
+	root := e2eFixture(t)
+	testPath := filepath.Join(root, "fixture/greeting_test.go")
+	testSource := e2eRead(t, testPath)
+	broken := bytes.Replace(testSource, []byte(`"Hello, Ada"`), []byte(`"Goodbye, Ada"`), 1)
+	if bytes.Equal(broken, testSource) {
+		t.Fatal("independent fixture assertion was not changed")
+	}
+	if err := os.WriteFile(testPath, broken, 0600); err != nil {
+		t.Fatal(err)
+	}
+	e2eGit(t, root, "add", "fixture/greeting_test.go")
+	e2eGit(t, root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "failing independent check")
+	baseSHA := e2eGit(t, root, "rev-parse", "HEAD")
+	m.Grant.BaseSHA = baseSHA
+	ledger := state.Engine{Store: &state.MemoryStore{}}
+	attempt, created, err := ledger.Admit(ctx, ledgerAdmission(m.Grant), state.Limits{ModelCalls: 1, RuntimeSeconds: 600})
+	if err != nil || !created {
+		t.Fatalf("admit failing-check fixture: %+v, created=%t, %v", attempt, created, err)
+	}
+	fence, err := ledger.Claim(ctx, attempt.ID, m.Fence.Owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Fence = fence
+	t.Setenv("SOFA_COPILOT_PATH", e2eFakeACP(t, "edit"))
+	t.Setenv("SOFA_COPILOT_ENTRY", "")
+	result, err := worker.Execute(ctx, worker.Input{Config: c, CanonicalSpec: m.CanonicalSpec, Directory: e2eClone(t, root), AttemptID: attempt.ID, Generation: uint64(fence.Generation), BaseSHA: baseSHA, ModelToken: "sofa-fake-acp-inert-token"})
+	if err != nil || result.PromptRequests != 1 || len(result.Bundle.Files) != 1 {
+		t.Fatalf("fake ACP did not produce the candidate: %+v, %v", result, err)
+	}
+	if err := ledger.Charge(ctx, fence, state.Counters{ModelCalls: 1, RuntimeSeconds: 60}); err != nil {
+		t.Fatal(err)
+	}
+	transport := t.TempDir()
+	manifestPath, bundlePath := filepath.Join(transport, "manifest.json"), filepath.Join(transport, "bundle.json")
+	evidencePath := filepath.Join(transport, "checks.json")
+	if err := writeJSON(manifestPath, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(bundlePath, result.Bundle); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify(ctx, []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", e2eClone(t, root), "--bundle", bundlePath, "--out", evidencePath}); err == nil {
+		t.Fatal("failing independent check passed verification")
+	}
+	if _, err := os.Stat(evidencePath); !os.IsNotExist(err) {
+		t.Fatalf("failed verification emitted passing evidence: %v", err)
+	}
+	var failure ExecutionFailure
+	if err := readJSON(filepath.Join(transport, "verification-failure.json"), 4096, &failure); err != nil || failure.Kind != "validation" || failure.Reason != "configured-check" {
+		t.Fatalf("verification failure was not classified: %+v, %v", failure, err)
+	}
+	fixture := &e2ePublisher{repo: c.Repository, baseSHA: baseSHA, original: e2eRead(t, filepath.Join(root, "fixture/greeting.go")), candidate: result.Bundle.Files[0].Content}
+	client, err := github.New("inert-publisher-token", fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardCalls := 0
+	_, err = client.PublishDraft(ctx, github.PublishInput{Bundle: result.Bundle, Expected: bundleExpected(m, result.Bundle), Policy: bundlePolicy(c), RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "Failed verification", Guard: func(ctx context.Context) error { guardCalls++; return ledger.AssertOwner(ctx, fence) }})
+	if err == nil || guardCalls != 0 || fixture.writes != 0 || fixture.prPosts != 0 {
+		t.Fatalf("unverified candidate reached publication: err=%v guard=%d writes=%d PRs=%d", err, guardCalls, fixture.writes, fixture.prPosts)
+	}
+	if err := ledger.Fail(ctx, fence, failure.Kind); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ledger.Store.Load(ctx)
+	if err != nil || current.State.Attempts[attempt.ID].Phase != state.Blocked || current.State.Attempts[attempt.ID].Counts.ModelCalls != 1 || fixture.providerRequests != 0 {
+		t.Fatalf("verification failure altered publication or budget state: %+v, provider=%d, %v", current, fixture.providerRequests, err)
+	}
+}
+
+func TestCancelledTurnCannotPublishOrResetBudget(t *testing.T) {
+	ctx := context.Background()
+	c, m := testManifest(t)
+	root := e2eFixture(t)
+	baseSHA := e2eGit(t, root, "rev-parse", "HEAD")
+	m.Grant.BaseSHA = baseSHA
+	ledger := state.Engine{Store: &state.MemoryStore{}}
+	attempt, created, err := ledger.Admit(ctx, ledgerAdmission(m.Grant), state.Limits{ModelCalls: 1, InfrastructureRetries: 1, RuntimeSeconds: 600})
+	if err != nil || !created {
+		t.Fatalf("admit cancellable fixture: %+v, created=%t, %v", attempt, created, err)
+	}
+	old, err := ledger.Claim(ctx, attempt.ID, m.Fence.Owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workerRoot := e2eClone(t, root)
+	started := make(chan struct{})
+	done := make(chan struct {
+		result worker.Result
+		err    error
+	}, 1)
+	go func() {
+		result, err := worker.Execute(turnCtx, worker.Input{Config: c, CanonicalSpec: m.CanonicalSpec, Directory: workerRoot, AttemptID: attempt.ID, Generation: uint64(old.Generation), BaseSHA: baseSHA, ModelToken: "sofa-fake-acp-inert-token", Runner: worker.RunnerFunc(func(ctx context.Context, _ agent.Config, _ string) (agent.Result, error) {
+			close(started)
+			<-ctx.Done()
+			return agent.Result{PromptRequests: 1}, ctx.Err()
+		})})
+		done <- struct {
+			result worker.Result
+			err    error
+		}{result, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ACP turn did not start")
+	}
+	cancel()
+	var turn struct {
+		result worker.Result
+		err    error
+	}
+	select {
+	case turn = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelled ACP turn did not return")
+	}
+	if !errors.Is(turn.err, context.Canceled) || !turn.result.UsedAgent || turn.result.PromptRequests != 1 || len(turn.result.Bundle.Files) != 0 {
+		t.Fatalf("cancelled ACP turn yielded usable work or lost prompt count: %+v, %v", turn.result, turn.err)
+	}
+	if err := ledger.Charge(ctx, old, state.Counters{ModelCalls: int64(turn.result.PromptRequests), RuntimeSeconds: 30}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := &e2ePublisher{repo: c.Repository, baseSHA: baseSHA}
+	client, err := github.New("inert-publisher-token", fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.PublishDraft(ctx, github.PublishInput{Bundle: turn.result.Bundle, Expected: integrity.Expected{Repository: c.Repository, AttemptID: attempt.ID, Generation: uint64(old.Generation), BaseSHA: baseSHA}, Policy: bundlePolicy(c), RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "Cancelled turn", Guard: func(ctx context.Context) error { return ledger.AssertOwner(ctx, old) }})
+	if err == nil || fixture.writes != 0 || fixture.prPosts != 0 {
+		t.Fatalf("cancelled turn reached publication: %v, writes=%d PRs=%d", err, fixture.writes, fixture.prPosts)
+	}
+	if err := ledger.Recover(ctx, attempt.ID, state.RunProof{Owner: old.Owner, Status: "completed", Conclusion: "cancelled", ObservedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.AssertOwner(ctx, old); !errors.Is(err, state.ErrStale) {
+		t.Fatalf("cancelled owner retained publication authority: %v", err)
+	}
+	fresh, err := ledger.Claim(ctx, attempt.ID, state.Owner{RunID: "recovery", RunAttempt: 2})
+	if err != nil || fresh.Generation <= old.Generation {
+		t.Fatalf("recovery did not fence cancelled turn: %+v, %v", fresh, err)
+	}
+	if err := ledger.Charge(ctx, fresh, state.Counters{ModelCalls: 1}); !errors.Is(err, state.ErrLimit) {
+		t.Fatalf("recovery reset prompt budget: %v", err)
+	}
+	current, err := ledger.Store.Load(ctx)
+	if err != nil || current.State.Attempts[attempt.ID].Counts.ModelCalls != 1 || current.State.Attempts[attempt.ID].Counts.InfrastructureRetries != 1 || fixture.providerRequests != 0 {
+		t.Fatalf("cancelled turn lost cumulative limits: %+v, provider=%d, %v", current, fixture.providerRequests, err)
 	}
 }
 
