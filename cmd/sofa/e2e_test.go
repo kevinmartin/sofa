@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/agent"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/state"
@@ -51,9 +52,86 @@ func TestAdmissionDenialMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			observed := snapshot
 			tc.change(&observed)
+			ledger := state.Engine{Store: &state.MemoryStore{}}
+			dispatches, prompts := 0, 0
+			fixture := &e2ePublisher{repo: c.Repository, baseSHA: m.Grant.BaseSHA}
 			grant, spec, err := admission.Authorize(c, observed)
+			if err == nil {
+				if _, created, admitErr := ledger.Admit(context.Background(), ledgerAdmission(grant), state.Limits{ModelCalls: 1, RuntimeSeconds: 600}); admitErr == nil && created {
+					dispatches++
+					prompts++
+				}
+			}
 			if err == nil || grant != (admission.Grant{}) || len(spec) != 0 {
 				t.Fatalf("denied input returned usable authority: grant=%+v, spec length=%d, error=%v", grant, len(spec), err)
+			}
+			stateSnapshot, loadErr := ledger.Store.Load(context.Background())
+			if loadErr != nil || len(stateSnapshot.State.Attempts) != 0 || dispatches != 0 || prompts != 0 || fixture.writes != 0 || fixture.prPosts != 0 {
+				t.Fatalf("denied input crossed work boundary: attempts=%d dispatches=%d prompts=%d writes=%d PRs=%d, load=%v", len(stateSnapshot.State.Attempts), dispatches, prompts, fixture.writes, fixture.prPosts, loadErr)
+			}
+		})
+	}
+}
+
+// The initial Ready grant is insufficient at publication time. A late status,
+// issue or scope change must stop the real publisher before its first write.
+func TestPublicationRevalidatesReadyGrantBeforeWrites(t *testing.T) {
+	ctx := context.Background()
+	c, m := testManifest(t)
+	root := e2eFixture(t)
+	baseSHA := e2eGit(t, root, "rev-parse", "HEAD")
+	now := m.Grant.StatusUpdatedAt
+	snapshot := admission.Snapshot{
+		Repository: c.Repository, RepositoryID: c.RepositoryID,
+		IssueID: m.Grant.IssueID, Number: m.Grant.IssueNumber,
+		Title: "Fixture", Body: "Change the fixture", Open: true,
+		ProjectID: c.ProjectID, ProjectPrivate: true,
+		ProjectItemID: m.Grant.ProjectItemID, CurrentStatus: c.ReadyStatus,
+		StatusOptionID: m.Grant.StatusOptionID, StatusUpdatedAt: now,
+		IssueLastEditedAt: now.Add(-time.Minute), BaseSHA: baseSHA, Complete: true,
+	}
+	grant, spec, err := admission.Authorize(c, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake ACP edit supplies the candidate used to probe the publication
+	// boundary. It makes exactly one prompt in setup.
+	t.Setenv("SOFA_COPILOT_PATH", e2eFakeACP(t, "edit"))
+	t.Setenv("SOFA_COPILOT_ENTRY", "")
+	result, err := worker.Execute(ctx, worker.Input{Config: c, CanonicalSpec: spec, Directory: e2eClone(t, root), AttemptID: state.AttemptID(ledgerAdmission(grant)), Generation: 1, BaseSHA: baseSHA, ModelToken: "sofa-fake-acp-inert-token"})
+	if err != nil || result.PromptRequests != 1 || len(result.Bundle.Files) != 1 {
+		t.Fatalf("candidate setup failed: %+v, %v", result, err)
+	}
+	checks := []integrity.CheckEvidence{{Version: integrity.Version, Name: "go-test", CandidateDigest: result.Bundle.CandidateDigest, Passed: true}}
+	cases := []struct {
+		name        string
+		change      func(*admission.Snapshot)
+		changedBase bool
+	}{
+		{name: "no-longer-ready", change: func(s *admission.Snapshot) { s.CurrentStatus = "Todo" }},
+		{name: "edited-after-ready", change: func(s *admission.Snapshot) { s.IssueLastEditedAt = now.Add(time.Second) }},
+		{name: "ambiguous-project", change: func(s *admission.Snapshot) { s.Complete = false }},
+		{name: "foreign-repository", change: func(s *admission.Snapshot) { s.RepositoryID = "foreign" }},
+		{name: "malformed-specification", change: func(s *admission.Snapshot) { s.Body = "" }},
+		{name: "new-ready-revision", change: func(s *admission.Snapshot) { s.StatusUpdatedAt = now.Add(time.Minute) }},
+		{name: "changed-base", change: func(s *admission.Snapshot) { s.BaseSHA = strings.Repeat("9", 40) }, changedBase: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			current := snapshot
+			tc.change(&current)
+			fixture := &e2ePublisher{repo: c.Repository, baseSHA: baseSHA, original: e2eRead(t, filepath.Join(root, "fixture/greeting.go")), candidate: result.Bundle.Files[0].Content}
+			if tc.changedBase {
+				fixture.mainOverride = current.BaseSHA
+			}
+			client, err := github.New("inert-publisher-token", fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			guardCalls := 0
+			_, err = client.PublishDraft(ctx, github.PublishInput{Bundle: result.Bundle, Expected: integrity.Expected{Repository: c.Repository, AttemptID: result.Bundle.AttemptID, Generation: 1, BaseSHA: baseSHA, CandidateDigest: result.Bundle.CandidateDigest}, Policy: bundlePolicy(c), Checks: checks, RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "Validated fixture", Guard: func(context.Context) error { guardCalls++; return admission.Revalidate(c, current, grant) }})
+			if err == nil || guardCalls != 1 || fixture.writes != 0 || fixture.prPosts != 0 || fixture.providerRequests != 0 {
+				t.Fatalf("changed authority reached publication: error=%v guard=%d writes=%d PRs=%d provider=%d", err, guardCalls, fixture.writes, fixture.prPosts, fixture.providerRequests)
 			}
 		})
 	}
@@ -77,9 +155,44 @@ func TestNoChangeACPTurnCannotPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.PublishDraft(context.Background(), github.PublishInput{Bundle: result.Bundle, Expected: integrity.Expected{Repository: c.Repository, AttemptID: m.Fence.AttemptID, Generation: 1, BaseSHA: baseSHA}, Policy: integrity.Policy{AllowedPaths: c.AllowedPaths, MaxFiles: c.Limits.MaxFiles, MaxFileBytes: c.Limits.MaxFileBytes, MaxTotalBytes: c.Limits.MaxTotalBytes}, RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "No change", Guard: func(context.Context) error { return nil }})
-	if err == nil || fixture.writes != 0 || fixture.prPosts != 0 {
-		t.Fatalf("empty candidate reached GitHub mutation: %v, writes=%d, PRs=%d", err, fixture.writes, fixture.prPosts)
+	guardCalls := 0
+	_, err = client.PublishDraft(context.Background(), github.PublishInput{Bundle: result.Bundle, Expected: integrity.Expected{Repository: c.Repository, AttemptID: m.Fence.AttemptID, Generation: 1, BaseSHA: baseSHA}, Policy: integrity.Policy{AllowedPaths: c.AllowedPaths, MaxFiles: c.Limits.MaxFiles, MaxFileBytes: c.Limits.MaxFileBytes, MaxTotalBytes: c.Limits.MaxTotalBytes}, RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "No change", Guard: func(context.Context) error { guardCalls++; return nil }})
+	if err == nil || guardCalls != 0 || fixture.writes != 0 || fixture.prPosts != 0 || fixture.providerRequests != 0 {
+		t.Fatalf("empty candidate reached publication boundary: %v, guard=%d writes=%d PRs=%d provider=%d", err, guardCalls, fixture.writes, fixture.prPosts, fixture.providerRequests)
+	}
+}
+
+func TestInvalidExactRecipeStopsBeforeAgentOrPublication(t *testing.T) {
+	ctx := context.Background()
+	c, m := testManifest(t)
+	root := e2eFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "fixture/greeting.go"), []byte("package fixture\nfunc ("), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e2eGit(t, root, "add", "fixture/greeting.go")
+	e2eGit(t, root, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "invalid recipe input")
+	baseSHA := e2eGit(t, root, "rev-parse", "HEAD")
+	spec, _, err := admission.CanonicalSpec("Format fixture", "Format the fixture.\n<!-- sofa:recipe=gofmt -->")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerCalls := 0
+	result, err := worker.Execute(ctx, worker.Input{Config: c, CanonicalSpec: spec, Directory: e2eClone(t, root), AttemptID: m.Fence.AttemptID, Generation: 1, BaseSHA: baseSHA, Runner: worker.RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) {
+		runnerCalls++
+		return agent.Result{PromptRequests: 1, StopReason: "end_turn"}, nil
+	})})
+	if err == nil || runnerCalls != 0 || result.UsedAgent || result.PromptRequests != 0 || len(result.Bundle.Files) != 0 {
+		t.Fatalf("invalid recipe escaped zero-token boundary: result=%+v error=%v runner=%d", result, err, runnerCalls)
+	}
+	fixture := &e2ePublisher{repo: c.Repository, baseSHA: baseSHA}
+	client, err := github.New("inert-publisher-token", fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardCalls := 0
+	_, err = client.PublishDraft(ctx, github.PublishInput{Bundle: result.Bundle, Expected: integrity.Expected{Repository: c.Repository, AttemptID: m.Fence.AttemptID, Generation: 1, BaseSHA: baseSHA}, Policy: bundlePolicy(c), RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "Invalid recipe", Guard: func(context.Context) error { guardCalls++; return nil }})
+	if err == nil || guardCalls != 0 || fixture.writes != 0 || fixture.prPosts != 0 {
+		t.Fatalf("invalid recipe reached publication: %v guard=%d writes=%d PRs=%d", err, guardCalls, fixture.writes, fixture.prPosts)
 	}
 }
 
@@ -290,14 +403,18 @@ func TestDeliveryBoundaryMatrix(t *testing.T) {
 	if err := ledger.MarkPublished(ctx, fence, intent); err != nil {
 		t.Fatal(err)
 	}
+	completed, newWork, err := ledger.Admit(ctx, ledgerAdmission(m.Grant), a.Limits)
+	if err != nil || newWork || completed.ID != a.ID || completed.Phase != state.Draft {
+		t.Fatalf("completed redelivery created dispatchable work: %+v, new=%t, %v", completed, newWork, err)
+	}
 	if _, err := ledger.Claim(ctx, a.ID, state.Owner{RunID: "redelivery", RunAttempt: 1}); err != state.ErrClaimed {
 		t.Fatalf("completed redelivery claimed work: %v", err)
 	}
 	final, err := ledger.Store.Load(ctx)
-	if err != nil || final.State.Attempts[a.ID].Phase != state.Draft || final.State.Attempts[a.ID].Counts.ModelCalls != 1 {
+	if err != nil || len(final.State.Attempts) != 1 || final.State.Attempts[a.ID].Phase != state.Draft || final.State.Attempts[a.ID].Counts.ModelCalls != 1 {
 		t.Fatalf("ledger did not preserve draft and budget: %+v, %v", final, err)
 	}
-	if fixture.providerRequests != 0 || fixture.prPosts != 1 {
+	if result.PromptRequests != 1 || fixture.providerRequests != 0 || fixture.prPosts != 1 {
 		t.Fatalf("fake test used provider or made duplicate PR: %+v", fixture)
 	}
 }
