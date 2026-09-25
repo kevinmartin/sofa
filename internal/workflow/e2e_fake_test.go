@@ -3,6 +3,7 @@ package workflow
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -23,12 +24,13 @@ func checkFakeWorkflowContract(data []byte) error {
 	execute, verify, publish := w.Jobs["execute"], w.Jobs["verify"], w.Jobs["publish"]
 	denial := w.Jobs["assert-denied"]
 	for name, job := range map[string]contractJob{"execute": execute, "verify": verify, "publish": publish} {
-		if job.Permissions["contents"] != "read" || job.Permissions["contents"] == "write" || job.Permissions["copilot-requests"] != "" || job.Permissions["statuses"] != "" || job.Permissions["pull-requests"] != "" || !strings.Contains(job.If, "github.repository == 'kevinmartin/sofa-disposable'") || !strings.Contains(job.If, "startsWith(github.ref, 'refs/heads/sofa-e2e/')") {
+		want := map[string]string{"contents": "read"}
+		if name == "verify" {
+			want["actions"] = "read"
+		}
+		if !reflect.DeepEqual(job.Permissions, want) || !strings.Contains(job.If, "github.repository == 'kevinmartin/sofa-disposable'") || !strings.Contains(job.If, "startsWith(github.ref, 'refs/heads/sofa-e2e/')") {
 			return fmt.Errorf("fake %s job has an unsafe identity or permission boundary", name)
 		}
-	}
-	if verify.Permissions["actions"] != "read" || execute.Permissions["actions"] != "" || publish.Permissions["actions"] != "" {
-		return fmt.Errorf("fake artifact read permission changed")
 	}
 	for name, job := range map[string]contractJob{"execute": execute, "verify": verify, "publish": publish} {
 		if !strings.Contains(job.If, "inputs.scenario == 'edit'") || !strings.Contains(job.If, "inputs.denial_kind == ''") {
@@ -126,6 +128,7 @@ func TestFakeHostedWorkflowContract(t *testing.T) {
 		{"artifact sentinel scan", "done < <(find transport candidate -type f -print0)", "done < <(find nowhere -type f -print0)"},
 		{"host environment injection", "-e SOFA_E2E_HOST_ONLY_FILE=\"$host_file\"", "-e SOFA_E2E_HOST_ONLY_TOKEN -e SOFA_E2E_HOST_ONLY_FILE=\"$host_file\""},
 		{"job permission", "      contents: read\n      actions: read", "      contents: write\n      actions: read"},
+		{"unlisted write scope", "      contents: read\n      actions: read", "      contents: read\n      actions: read\n      id-token: write"},
 		{"recovery scheduler", "if: always() && github.repository", "if: github.repository"},
 		{"verified artifact", "name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}", "name: sofa-e2e-other-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}"},
 		{"denial execution gate", "inputs.scenario == 'edit' && inputs.denial_kind == ''", "inputs.scenario == 'denied' && inputs.denial_kind == ''"},
