@@ -15,6 +15,10 @@ on:
         required: false
         default: ''
         type: string
+      publish_fault:
+        required: false
+        default: ''
+        type: string
       candidate_sha:
         required: true
         type: string
@@ -289,7 +293,18 @@ jobs:
         with:
           go-version-file: toolkit/go.mod
           cache: false
+      - name: Reject unsupported or incompatible publication fault
+        if: (inputs.publish_fault != '' && inputs.publish_fault != 'before-publication') || (inputs.reconcile_candidate && inputs.publish_fault != '')
+        shell: bash
+        run: exit 1
+      - name: Inject controlled publication interruption
+        if: inputs.publish_fault == 'before-publication' && !inputs.reconcile_candidate
+        shell: bash
+        run: |
+          echo 'Controlled hosted publication interruption before simulated write' >&2
+          exit 42
       - name: Simulate trusted publication against controlled GitHub API
+        if: inputs.publish_fault == ''
         shell: bash
         working-directory: toolkit
         env:

@@ -12,7 +12,7 @@ func checkFakeWorkflowContract(data []byte) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range []string{"suite_id", "scenario", "denial_kind", "candidate_sha", "base_sha", "disposable_base_sha", "producer_run_id", "producer_run_attempt"} {
+	for _, name := range []string{"suite_id", "scenario", "denial_kind", "publish_fault", "candidate_sha", "base_sha", "disposable_base_sha", "producer_run_id", "producer_run_attempt"} {
 		if w.On.WorkflowCall.Inputs[name].Type != "string" {
 			return fmt.Errorf("fake workflow input %s is not typed as string", name)
 		}
@@ -92,6 +92,18 @@ func checkFakeWorkflowContract(data []byte) error {
 	if artifactName(publish, "actions/upload-artifact", "sofa-e2e-report-") == "" {
 		return fmt.Errorf("fake scenario report artifact missing")
 	}
+	for _, required := range []string{
+		"name: Inject controlled publication interruption",
+		"if: inputs.publish_fault == 'before-publication' && !inputs.reconcile_candidate",
+		"exit 42",
+		"name: Simulate trusted publication against controlled GitHub API\n        if: inputs.publish_fault == ''",
+		"name: Reject unsupported or incompatible publication fault",
+		"inputs.reconcile_candidate && inputs.publish_fault != ''",
+	} {
+		if !strings.Contains(content, required) {
+			return fmt.Errorf("controlled publication failure or recovery guard missing %q", required)
+		}
+	}
 	if artifactName(denial, "actions/upload-artifact", "sofa-e2e-denial-") == "" || !strings.Contains(content, "bin/e2e-fixture deny") || !strings.Contains(content, "--execute-result \"$SOFA_E2E_EXECUTE_RESULT\"") || !strings.Contains(content, "--verify-result \"$SOFA_E2E_VERIFY_RESULT\"") || !strings.Contains(content, "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"") {
 		return fmt.Errorf("fake denial report or scheduler assertions are missing")
 	}
@@ -118,6 +130,8 @@ func TestFakeHostedWorkflowContract(t *testing.T) {
 		{"verified artifact", "name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}", "name: sofa-e2e-other-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}"},
 		{"denial execution gate", "inputs.scenario == 'edit' && inputs.denial_kind == ''", "inputs.scenario == 'denied' && inputs.denial_kind == ''"},
 		{"denial scheduler result", "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"", "--publish-result skipped"},
+		{"publication failure insertion", "exit 42", "exit 0"},
+		{"publication recovery guard", "inputs.reconcile_candidate && inputs.publish_fault != ''", "false"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := strings.Replace(string(data), test.old, test.next, 1)
