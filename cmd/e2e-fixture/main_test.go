@@ -94,3 +94,45 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 		t.Fatal("accepted retained bundle from a different base")
 	}
 }
+
+func TestDeniedReportRequiresRealSchedulerSkips(t *testing.T) {
+	for _, tc := range []struct{ kind, decision string }{
+		{"non-ready", "admission-denied"},
+		{"completed-redelivery", "already-completed"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "denial.json")
+			args := []string{"deny", "--config", "../../examples/consumer/.sofa.yml", "--out", out, "--suite-id", "suite-1", "--denial-kind", tc.kind,
+				"--candidate-sha", strings.Repeat("b", 40), "--pr-base-sha", strings.Repeat("c", 40), "--disposable-base-sha", strings.Repeat("a", 40),
+				"--run-id", "101", "--run-attempt", "1", "--execute-result", "skipped", "--verify-result", "skipped", "--publish-result", "skipped"}
+			if err := run(args); err != nil {
+				t.Fatal(err)
+			}
+			var report struct {
+				Scenario           string   `json:"scenario"`
+				DenialKind         string   `json:"denial_kind"`
+				Decision           string   `json:"decision"`
+				SkippedJobs        []string `json:"skipped_jobs"`
+				FakePromptRequests int      `json:"fake_prompt_requests"`
+				ProviderRequests   int      `json:"provider_requests"`
+				PublicationWrites  int      `json:"publication_writes"`
+				WriteCredentials   int      `json:"write_credentials"`
+			}
+			if err := readJSON(out, &report); err != nil || report.Scenario != "denied" || report.DenialKind != tc.kind || report.Decision != tc.decision || strings.Join(report.SkippedJobs, ",") != "execute,verify,publish" || report.FakePromptRequests != 0 || report.ProviderRequests != 0 || report.PublicationWrites != 0 || report.WriteCredentials != 0 {
+				t.Fatalf("denial evidence mismatch: %+v, %v", report, err)
+			}
+			for _, name := range []string{"--execute-result", "--verify-result", "--publish-result"} {
+				bad := append([]string(nil), args...)
+				for i := range bad {
+					if bad[i] == name {
+						bad[i+1] = "success"
+						break
+					}
+				}
+				if err := run(bad); err == nil {
+					t.Fatalf("accepted running %s job", name)
+				}
+			}
+		})
+	}
+}

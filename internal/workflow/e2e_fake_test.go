@@ -12,7 +12,7 @@ func checkFakeWorkflowContract(data []byte) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range []string{"suite_id", "scenario", "candidate_sha", "base_sha", "disposable_base_sha", "producer_run_id", "producer_run_attempt"} {
+	for _, name := range []string{"suite_id", "scenario", "denial_kind", "candidate_sha", "base_sha", "disposable_base_sha", "producer_run_id", "producer_run_attempt"} {
 		if w.On.WorkflowCall.Inputs[name].Type != "string" {
 			return fmt.Errorf("fake workflow input %s is not typed as string", name)
 		}
@@ -21,6 +21,7 @@ func checkFakeWorkflowContract(data []byte) error {
 		return fmt.Errorf("fake recovery input is not boolean")
 	}
 	execute, verify, publish := w.Jobs["execute"], w.Jobs["verify"], w.Jobs["publish"]
+	denial := w.Jobs["assert-denied"]
 	for name, job := range map[string]contractJob{"execute": execute, "verify": verify, "publish": publish} {
 		if job.Permissions["contents"] != "read" || job.Permissions["contents"] == "write" || job.Permissions["copilot-requests"] != "" || job.Permissions["statuses"] != "" || job.Permissions["pull-requests"] != "" || !strings.Contains(job.If, "github.repository == 'kevinmartin/sofa-disposable'") || !strings.Contains(job.If, "startsWith(github.ref, 'refs/heads/sofa-e2e/')") {
 			return fmt.Errorf("fake %s job has an unsafe identity or permission boundary", name)
@@ -28,6 +29,17 @@ func checkFakeWorkflowContract(data []byte) error {
 	}
 	if verify.Permissions["actions"] != "read" || execute.Permissions["actions"] != "" || publish.Permissions["actions"] != "" {
 		return fmt.Errorf("fake artifact read permission changed")
+	}
+	for name, job := range map[string]contractJob{"execute": execute, "verify": verify, "publish": publish} {
+		if !strings.Contains(job.If, "inputs.scenario == 'edit'") || !strings.Contains(job.If, "inputs.denial_kind == ''") {
+			return fmt.Errorf("fake %s job can run for a denial scenario", name)
+		}
+	}
+	if denial.Permissions["contents"] != "read" || len(denial.Permissions) != 1 || !strings.Contains(denial.If, "always()") || !strings.Contains(denial.If, "github.repository == 'kevinmartin/sofa-disposable'") || !strings.Contains(denial.If, "startsWith(github.ref, 'refs/heads/sofa-e2e/')") || !strings.Contains(denial.If, "inputs.scenario == 'denied'") || !strings.Contains(denial.If, "inputs.denial_kind == 'non-ready'") || !strings.Contains(denial.If, "inputs.denial_kind == 'completed-redelivery'") || !strings.Contains(denial.If, "!inputs.reconcile_candidate") {
+		return fmt.Errorf("fake denial assertion identity or permission boundary changed")
+	}
+	if needs, ok := denial.Needs.([]any); !ok || len(needs) != 3 || needs[0] != "execute" || needs[1] != "verify" || needs[2] != "publish" {
+		return fmt.Errorf("fake denial assertion does not observe all three scheduler results")
 	}
 	content := string(data)
 	for _, forbidden := range []string{"${{ secrets.", "SOFA_PROJECTS_TOKEN", "SOFA_PUBLISH_TOKEN", "SOFA_GATE_APP_PRIVATE_KEY", "copilot-requests: write"} {
@@ -80,6 +92,9 @@ func checkFakeWorkflowContract(data []byte) error {
 	if artifactName(publish, "actions/upload-artifact", "sofa-e2e-report-") == "" {
 		return fmt.Errorf("fake scenario report artifact missing")
 	}
+	if artifactName(denial, "actions/upload-artifact", "sofa-e2e-denial-") == "" || !strings.Contains(content, "bin/e2e-fixture deny") || !strings.Contains(content, "--execute-result \"$SOFA_E2E_EXECUTE_RESULT\"") || !strings.Contains(content, "--verify-result \"$SOFA_E2E_VERIFY_RESULT\"") || !strings.Contains(content, "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"") {
+		return fmt.Errorf("fake denial report or scheduler assertions are missing")
+	}
 	return nil
 }
 
@@ -101,6 +116,8 @@ func TestFakeHostedWorkflowContract(t *testing.T) {
 		{"job permission", "      contents: read\n      actions: read", "      contents: write\n      actions: read"},
 		{"recovery scheduler", "if: always() && github.repository", "if: github.repository"},
 		{"verified artifact", "name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}", "name: sofa-e2e-other-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}"},
+		{"denial execution gate", "inputs.scenario == 'edit' && inputs.denial_kind == ''", "inputs.scenario == 'denied' && inputs.denial_kind == ''"},
+		{"denial scheduler result", "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"", "--publish-result skipped"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := strings.Replace(string(data), test.old, test.next, 1)

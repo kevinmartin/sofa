@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -69,6 +70,8 @@ func run(args []string) error {
 		return recoverCandidate(args[1:])
 	case "report":
 		return reportCandidate(args[1:])
+	case "deny":
+		return reportDenial(args[1:])
 	default:
 		return errors.New("unsupported fixture command")
 	}
@@ -163,6 +166,97 @@ func prepare(args []string) error {
 		return err
 	}
 	return writeJSON(filepath.Join(*outDir, "identity.json"), id)
+}
+
+// reportDenial is a test-only proof for the hosted scheduler's denied path.
+// It cannot create a grant, candidate, or publication artifact.
+func reportDenial(args []string) error {
+	f := flag.NewFlagSet("deny", flag.ContinueOnError)
+	f.SetOutput(os.Stderr)
+	configPath, out := f.String("config", "", ""), f.String("out", "", "")
+	suiteID, kind := f.String("suite-id", "", ""), f.String("denial-kind", "", "")
+	candidateSHA, prBaseSHA, disposableBaseSHA := f.String("candidate-sha", "", ""), f.String("pr-base-sha", "", ""), f.String("disposable-base-sha", "", "")
+	runID, runAttempt := f.String("run-id", "", ""), f.String("run-attempt", "", "")
+	executeResult, verifyResult, publishResult := f.String("execute-result", "", ""), f.String("verify-result", "", ""), f.String("publish-result", "", "")
+	if err := f.Parse(args); err != nil || f.NArg() != 0 || *configPath == "" || *out == "" || !suitePattern.MatchString(*suiteID) || (*kind != "non-ready" && *kind != "completed-redelivery") || !shaPattern.MatchString(*candidateSHA) || !shaPattern.MatchString(*prBaseSHA) || !shaPattern.MatchString(*disposableBaseSHA) || *executeResult != "skipped" || *verifyResult != "skipped" || *publishResult != "skipped" {
+		return errors.New("invalid denied fixture input or hosted job was not skipped")
+	}
+	currentOwner, err := owner(*runID, *runAttempt)
+	if err != nil {
+		return err
+	}
+	c, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	snapshot := admission.Snapshot{
+		Repository: c.Repository, RepositoryID: c.RepositoryID,
+		IssueID: "I_sofa_e2e_" + *suiteID, Number: 1,
+		Title: "Format fixture greeting", Body: "Format the approved fixture greeting file.", Open: true,
+		ProjectID: c.ProjectID, ProjectPrivate: true, ProjectItemID: "PVTI_" + *suiteID,
+		CurrentStatus: c.ReadyStatus, StatusOptionID: "ready-e2e", StatusUpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		BaseSHA: *disposableBaseSHA, Complete: true,
+	}
+	decision := ""
+	if *kind == "non-ready" {
+		snapshot.CurrentStatus = "In Progress"
+		if _, _, err := admission.Authorize(c, snapshot); err == nil {
+			return errors.New("non-Ready fixture received authorization")
+		}
+		decision = "admission-denied"
+	} else {
+		grant, _, err := admission.Authorize(c, snapshot)
+		if err != nil {
+			return err
+		}
+		a := state.Admission{Repository: grant.Repository, Issue: int64(grant.IssueNumber), SpecDigest: grant.SpecDigest, ConfigDigest: grant.ConfigDigest, BaseSHA: grant.BaseSHA, ProjectID: grant.ProjectID, ProjectItemID: grant.ProjectItemID, StatusOptionID: grant.StatusOptionID, StatusUpdatedAt: grant.StatusUpdatedAt}
+		ctx := context.Background()
+		engine := state.Engine{Store: &state.MemoryStore{}}
+		attempt, created, err := engine.Admit(ctx, a, state.Limits{ModelCalls: 1, RuntimeSeconds: 600})
+		if err != nil || !created {
+			return errors.New("cannot seed completed fixture attempt")
+		}
+		fence, err := engine.Claim(ctx, attempt.ID, currentOwner)
+		if err != nil || engine.Advance(ctx, fence, state.Validating) != nil {
+			return errors.New("cannot advance completed fixture attempt")
+		}
+		publication := state.Publication{Branch: "sofa/e2e-completed", ExpectedHead: *disposableBaseSHA, CandidateDigest: fmt.Sprintf("%064x", sha256.Sum256([]byte(*suiteID)))}
+		if err := engine.BeginPublication(ctx, fence, publication); err != nil {
+			return err
+		}
+		publication.HeadSHA = *candidateSHA
+		publication.PRNumber = 1
+		publication.PRURL = "https://github.com/kevinmartin/sofa-disposable/pull/1"
+		if err := engine.MarkPublished(ctx, fence, publication); err != nil {
+			return err
+		}
+		replayed, created, err := engine.Admit(ctx, a, state.Limits{ModelCalls: 1, RuntimeSeconds: 600})
+		if err != nil || created || replayed.ID != attempt.ID || replayed.Phase != state.Draft {
+			return errors.New("completed redelivery minted a new attempt")
+		}
+		if _, err := engine.Claim(ctx, replayed.ID, currentOwner); !errors.Is(err, state.ErrClaimed) {
+			return errors.New("completed redelivery was claimable")
+		}
+		decision = "already-completed"
+	}
+	report := struct {
+		SchemaVersion      int      `json:"schema_version"`
+		SuiteID            string   `json:"suite_id"`
+		Scenario           string   `json:"scenario"`
+		DenialKind         string   `json:"denial_kind"`
+		Decision           string   `json:"decision"`
+		CandidateSHA       string   `json:"candidate_sha"`
+		PRBaseSHA          string   `json:"pr_base_sha"`
+		DisposableBaseSHA  string   `json:"disposable_base_sha"`
+		RunID              string   `json:"run_id"`
+		RunAttempt         int      `json:"run_attempt"`
+		SkippedJobs        []string `json:"skipped_jobs"`
+		FakePromptRequests int      `json:"fake_prompt_requests"`
+		ProviderRequests   int      `json:"provider_requests"`
+		PublicationWrites  int      `json:"publication_writes"`
+		WriteCredentials   int      `json:"write_credentials"`
+	}{1, *suiteID, "denied", *kind, decision, *candidateSHA, *prBaseSHA, *disposableBaseSHA, currentOwner.RunID, currentOwner.RunAttempt, []string{"execute", "verify", "publish"}, 0, 0, 0, 0}
+	return writeJSON(*out, report)
 }
 
 func recoverCandidate(args []string) error {

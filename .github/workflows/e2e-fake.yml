@@ -11,6 +11,10 @@ on:
       scenario:
         required: true
         type: string
+      denial_kind:
+        required: false
+        default: ''
+        type: string
       candidate_sha:
         required: true
         type: string
@@ -37,7 +41,7 @@ permissions: {}
 
 jobs:
   execute:
-    if: github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && !inputs.reconcile_candidate
+    if: github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'edit' && inputs.denial_kind == '' && !inputs.reconcile_candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -162,7 +166,7 @@ jobs:
 
   verify:
     needs: execute
-    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && (needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))
+    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'edit' && inputs.denial_kind == '' && (needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -256,7 +260,7 @@ jobs:
 
   publish:
     needs: verify
-    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && needs.verify.result == 'success'
+    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'edit' && inputs.denial_kind == '' && needs.verify.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -325,5 +329,63 @@ jobs:
             evidence/checks.json
             report/publication.json
             report/scenario.json
+          if-no-files-found: error
+          retention-days: 1
+
+  assert-denied:
+    needs: [execute, verify, publish]
+    if: always() && github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'denied' && (inputs.denial_kind == 'non-ready' || inputs.denial_kind == 'completed-redelivery') && !inputs.reconcile_candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact disposable fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.disposable_base_sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out exact sofa candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Assert scheduler skips and denied fixture
+        shell: bash
+        env:
+          SOFA_E2E_SUITE: ${{ inputs.suite_id }}
+          SOFA_E2E_DENIAL_KIND: ${{ inputs.denial_kind }}
+          SOFA_E2E_CANDIDATE: ${{ inputs.candidate_sha }}
+          SOFA_E2E_PR_BASE: ${{ inputs.base_sha }}
+          SOFA_E2E_DISPOSABLE_BASE: ${{ inputs.disposable_base_sha }}
+          SOFA_E2E_EXECUTE_RESULT: ${{ needs.execute.result }}
+          SOFA_E2E_VERIFY_RESULT: ${{ needs.verify.result }}
+          SOFA_E2E_PUBLISH_RESULT: ${{ needs.publish.result }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_E2E_CANDIDATE"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_E2E_DISPOSABLE_BASE"
+          mkdir -p bin report
+          (cd toolkit && CGO_ENABLED=0 go build -trimpath -o ../bin/e2e-fixture ./cmd/e2e-fixture)
+          bin/e2e-fixture deny --config consumer/.sofa.yml \
+            --out report/denial.json --suite-id "$SOFA_E2E_SUITE" \
+            --denial-kind "$SOFA_E2E_DENIAL_KIND" --candidate-sha "$SOFA_E2E_CANDIDATE" \
+            --pr-base-sha "$SOFA_E2E_PR_BASE" --disposable-base-sha "$SOFA_E2E_DISPOSABLE_BASE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --execute-result "$SOFA_E2E_EXECUTE_RESULT" \
+            --verify-result "$SOFA_E2E_VERIFY_RESULT" \
+            --publish-result "$SOFA_E2E_PUBLISH_RESULT"
+      - name: Carry redacted denial report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-e2e-denial-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report/denial.json
           if-no-files-found: error
           retention-days: 1
