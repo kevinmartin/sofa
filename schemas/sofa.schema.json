@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/kevinmartin/sofa/main/schemas/sofa.schema.json",
+  "title": "Sofa consumer configuration",
+  "$comment": "Editor assistance for internal/config/config.go. Decode remains authoritative for YAML syntax, byte limits, and cross-field policy. See docs/configuration.md.",
+  "type": "object",
+  "description": "Trusted version 1 .sofa.yml policy for a consumer repository.",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "repository_id",
+    "project_id",
+    "owner_id",
+    "ready_status",
+    "allowed_paths",
+    "profile",
+    "limits",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Configuration schema version; currently only version 1 is supported."
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$",
+      "description": "Consumer repository in owner/name form."
+    },
+    "repository_id": {
+      "$ref": "#/$defs/immutableID",
+      "description": "Immutable GitHub repository node ID."
+    },
+    "project_id": {
+      "$ref": "#/$defs/immutableID",
+      "description": "Immutable node ID of the private GitHub Project granting Ready authority."
+    },
+    "owner_id": {
+      "$ref": "#/$defs/immutableID",
+      "description": "Immutable GitHub node ID of the designated owner."
+    },
+    "ready_status": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "not": {
+        "pattern": "[\\r\\n\u0000]"
+      },
+      "description": "Exact Project status that grants admission. Runtime limits this to 100 UTF-8 bytes."
+    },
+    "allowed_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/allowedPath"
+      },
+      "description": "Bounded candidate scope: exact files or slash-terminated directory prefixes."
+    },
+    "profile": {
+      "type": "object",
+      "description": "Model harness and credential reference. Store secret values in the caller, never in this file.",
+      "additionalProperties": false,
+      "required": [
+        "agent",
+        "secret_env"
+      ],
+      "properties": {
+        "agent": {
+          "const": "copilot",
+          "description": "The Copilot ACP harness is the only supported agent."
+        },
+        "secret_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+          "not": {
+            "enum": [
+              "SOFA_PROJECTS_TOKEN",
+              "SOFA_PUBLISH_TOKEN",
+              "SOFA_STATE_TOKEN",
+              "SOFA_APP_PRIVATE_KEY"
+            ]
+          },
+          "description": "Environment variable containing model authentication; privileged credential references are forbidden.",
+          "examples": [
+            "SOFA_MODEL_TOKEN"
+          ]
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "description": "Finite per-attempt limits and cumulative retry bounds. Runtime additionally requires max_total_bytes >= max_file_bytes.",
+      "additionalProperties": false,
+      "required": [
+        "attempt_seconds",
+        "max_agent_turns",
+        "max_files",
+        "max_file_bytes",
+        "max_total_bytes"
+      ],
+      "properties": {
+        "attempt_seconds": {
+          "type": "integer",
+          "description": "Maximum duration of an execution attempt, in seconds.",
+          "minimum": 1,
+          "maximum": 21600
+        },
+        "repair_attempts": {
+          "type": "integer",
+          "description": "Maximum repair attempts; omitted means zero.",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 0
+        },
+        "infra_retries": {
+          "type": "integer",
+          "description": "Maximum infrastructure retries; omitted means zero.",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 0
+        },
+        "max_agent_turns": {
+          "type": "integer",
+          "description": "Maximum ACP prompt turns per attempt.",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "max_files": {
+          "type": "integer",
+          "description": "Maximum number of candidate files.",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "description": "Maximum size of each candidate file, in bytes.",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_total_bytes": {
+          "type": "integer",
+          "description": "Maximum combined candidate size, in bytes; must be at least max_file_bytes.",
+          "minimum": 1,
+          "maximum": 10485760
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/check"
+      },
+      "description": "Required deterministic verification commands, each with a distinct ID."
+    },
+    "recipe": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/recipe"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional exact formatter recipe; omitted or null disables recipes."
+    }
+  },
+  "$defs": {
+    "immutableID": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "not": {
+        "pattern": "[ \\t\\r\\n\u0000]"
+      },
+      "description": "Nonempty immutable node ID without spaces, tabs, line breaks, or NUL; runtime limits this to 128 UTF-8 bytes."
+    },
+    "pathComponents": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\\\:\u0000\\r\\n\\t*?\\[\\]]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^/|//"
+          }
+        },
+        {
+          "not": {
+            "pattern": "\\.(?:/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.[gG][iI][tT](?:/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)[\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]|[\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000](?:/|$)"
+          }
+        }
+      ]
+    },
+    "safePath": {
+      "description": "Exact portable relative file path; runtime also enforces a 512-byte UTF-8 limit.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/pathComponents"
+        },
+        {
+          "maxLength": 512
+        },
+        {
+          "not": {
+            "pattern": "/$"
+          }
+        }
+      ]
+    },
+    "allowedPath": {
+      "description": "Exact file path, or directory prefix ending in /. No globs, traversal, Git metadata, or ambiguous path components. Runtime limits the path without its optional slash to 512 UTF-8 bytes.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/safePath"
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/pathComponents"
+            },
+            {
+              "maxLength": 513,
+              "pattern": "/$"
+            }
+          ]
+        }
+      ]
+    },
+    "argument": {
+      "type": "string",
+      "maxLength": 4096,
+      "not": {
+        "pattern": "\u0000"
+      },
+      "description": "Literal argv entry; runtime also enforces a 4096-byte UTF-8 limit. No shell expansion is performed."
+    },
+    "check": {
+      "type": "object",
+      "description": "Deterministic secretless command. IDs must be unique across checks, and timeout_seconds must not exceed limits.attempt_seconds (runtime checks).",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "argv",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+          "description": "Unique check identifier included in evidence."
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/argument"
+                },
+                {
+                  "minLength": 1
+                }
+              ]
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/argument"
+          },
+          "description": "Executable followed by literal arguments; the first entry must not be empty."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "description": "Command timeout in seconds; must not exceed limits.attempt_seconds.",
+          "minimum": 1,
+          "maximum": 21600
+        }
+      }
+    },
+    "recipe": {
+      "type": "object",
+      "description": "Optional deterministic formatter that bypasses the agent. Runtime requires each path to be allowed and the count not to exceed limits.max_files.",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "paths"
+      ],
+      "properties": {
+        "kind": {
+          "const": "gofmt",
+          "description": "The exact Go formatting recipe is the only supported recipe."
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/safePath"
+              },
+              {
+                "pattern": "\\.go$"
+              }
+            ]
+          },
+          "description": "Exact allowed .go files to format."
+        }
+      }
+    }
+  }
+}
