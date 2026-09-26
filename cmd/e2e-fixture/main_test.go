@@ -118,8 +118,27 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 		NetworkTXPackets uint64 `json:"network_tx_packets"`
 		NetworkSource    string `json:"network_measurement_source"`
 	}
-	if err := readJSON(reportPath, &report); err != nil || report.CandidateSHA != candidate || report.PRBaseSHA != prBase || report.ProducerRunID != "101" || report.BundleGeneration != 1 || report.SchemaVersion != 2 || report.NetworkTXPackets != 0 || report.NetworkSource != "proc-net-dev" {
-		t.Fatalf("redacted report lost exact source or producer identity: %+v, %v", report, err)
+	if err := readJSON(reportPath, &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []struct{ name, got, want string }{
+		{"report candidate SHA", report.CandidateSHA, candidate},
+		{"report PR base SHA", report.PRBaseSHA, prBase},
+		{"report producer run ID", report.ProducerRunID, "101"},
+		{"report network source", report.NetworkSource, "proc-net-dev"},
+	} {
+		if field.got != field.want {
+			t.Errorf("%s: got %q, want %q", field.name, field.got, field.want)
+		}
+	}
+	if report.BundleGeneration != 1 {
+		t.Errorf("report bundle generation: got %d, want 1", report.BundleGeneration)
+	}
+	if report.SchemaVersion != 2 {
+		t.Errorf("report schema version: got %d, want 2", report.SchemaVersion)
+	}
+	if report.NetworkTXPackets != 0 {
+		t.Errorf("report network TX packets: got %d, want 0", report.NetworkTXPackets)
 	}
 	for _, tc := range []struct {
 		name     string
