@@ -297,6 +297,28 @@ jobs:
         if: (inputs.publish_fault != '' && inputs.publish_fault != 'before-publication') || (inputs.reconcile_candidate && inputs.publish_fault != '')
         shell: bash
         run: exit 1
+      - name: Prove an unexpected existing branch remains untouched
+        if: '!inputs.reconcile_candidate'
+        shell: bash
+        working-directory: toolkit
+        env:
+          SOFA_E2E_CONFIG: ${{ github.workspace }}/transport/config.yml
+          SOFA_E2E_MANIFEST: ${{ github.workspace }}/transport/manifest.json
+          SOFA_E2E_BUNDLE: ${{ github.workspace }}/candidate/bundle.json
+          SOFA_E2E_EVIDENCE: ${{ github.workspace }}/evidence/checks.json
+          SOFA_E2E_BASE_ROOT: ${{ github.workspace }}/consumer
+          SOFA_E2E_CONFLICT_RESULT: ${{ github.workspace }}/report/conflict.json
+        run: |
+          mkdir -p ../report
+          go test -count=1 -run '^TestHostedArtifactPublicationConflict$' ./cmd/sofa
+      - name: Carry redacted branch-conflict report
+        if: '!inputs.reconcile_candidate'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-e2e-conflict-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: report/conflict.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Inject controlled publication interruption
         if: inputs.publish_fault == 'before-publication' && !inputs.reconcile_candidate
         shell: bash
