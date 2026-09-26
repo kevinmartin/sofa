@@ -34,19 +34,19 @@ type Snapshot struct {
 	Complete          bool      `json:"complete"` // all relevant pagination succeeded
 }
 type Grant struct {
-	Version         int       `json:"schema_version"`
+	Version         int       `json:"schema_version" validate:"eq=1"`
 	Repository      string    `json:"repository"`
 	RepositoryID    string    `json:"repository_id"`
-	IssueID         string    `json:"issue_id"`
-	IssueNumber     int       `json:"issue_number"`
+	IssueID         string    `json:"issue_id" validate:"required"`
+	IssueNumber     int       `json:"issue_number" validate:"gt=0"`
 	ProjectID       string    `json:"project_id"`
 	OwnerID         string    `json:"owner_id"`
 	SpecDigest      string    `json:"spec_digest"`
 	ConfigDigest    string    `json:"config_digest"`
-	BaseSHA         string    `json:"base_sha"`
+	BaseSHA         string    `json:"base_sha" validate:"required"`
 	ProjectItemID   string    `json:"project_item_id"`
 	StatusOptionID  string    `json:"status_option_id"`
-	StatusUpdatedAt time.Time `json:"status_updated_at"`
+	StatusUpdatedAt time.Time `json:"status_updated_at" validate:"required"`
 }
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)

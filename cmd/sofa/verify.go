@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -85,11 +83,7 @@ func runVerify(ctx context.Context, opts verifyOptions) (retErr error) {
 	checks := make([]integrity.CheckEvidence, 0, len(c.Checks))
 	for _, check := range c.Checks {
 		checkCtx, cancel := context.WithTimeout(ctx, time.Duration(check.TimeoutSeconds)*time.Second)
-		cmd := exec.CommandContext(checkCtx, check.Argv[0], check.Argv[1:]...)
-		cmd.Dir = opts.workspace
-		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + checkHome, "GOCACHE=" + filepath.Join(checkHome, "cache"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GOPROXY=off", "GOSUMDB=off", "GOENV=off"}
-		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-		err := cmd.Run()
+		err := runCheckProcess(checkCtx, opts.workspace, checkHome, check.Argv)
 		cancel()
 		if err != nil {
 			failure.Reason = "configured-check"

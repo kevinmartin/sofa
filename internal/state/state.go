@@ -69,14 +69,14 @@ type Counters struct {
 }
 
 type Owner struct {
-	RunID      string `json:"run_id"`
-	RunAttempt int    `json:"run_attempt"`
+	RunID      string `json:"run_id" validate:"required"`
+	RunAttempt int    `json:"run_attempt" validate:"gt=0"`
 }
 
 type Fence struct {
-	AttemptID  string `json:"attempt_id"`
-	Generation int64  `json:"generation"`
-	Owner      Owner  `json:"owner"`
+	AttemptID  string `json:"attempt_id" validate:"required"`
+	Generation int64  `json:"generation" validate:"gt=0"`
+	Owner      Owner  `json:"owner" validate:"required"`
 }
 
 type Checkpoint struct {

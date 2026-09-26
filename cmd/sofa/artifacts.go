@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/go-playground/validator/v10"
+
 	"github.com/kevinmartin/sofa/internal/admission"
 	"github.com/kevinmartin/sofa/internal/config"
 	"github.com/kevinmartin/sofa/internal/integrity"
@@ -18,13 +20,32 @@ import (
 // Manifest is emitted by the privileged admission job, then treated as input
 // data by each later stage. Publication checks it against live source and state.
 type Manifest struct {
-	Version            int                `json:"version"`
-	Grant              admission.Grant    `json:"grant"`
-	Fence              state.Fence        `json:"fence"`
-	CanonicalSpec      json.RawMessage    `json:"canonical_spec"`
+	Version            int                `json:"version" validate:"eq=1"`
+	Grant              admission.Grant    `json:"grant" validate:"required"`
+	Fence              state.Fence        `json:"fence" validate:"required"`
+	CanonicalSpec      json.RawMessage    `json:"canonical_spec" validate:"required"`
 	Recovery           *state.Publication `json:"recovery_publication,omitempty"`
 	RecoveryCheckpoint *state.Checkpoint  `json:"recovery_checkpoint,omitempty"`
 	RecoverySource     *state.Owner       `json:"recovery_source,omitempty"`
+}
+
+var artifactValidator = validator.New(validator.WithRequiredStructEnabled())
+
+// Static field rules live on the decoded types. Values tied to the current
+// configuration and canonical specification are checked as pairs below.
+type manifestBinding struct {
+	Repository           string `validate:"eqfield=ExpectedRepository"`
+	ExpectedRepository   string `validate:"-"`
+	RepositoryID         string `validate:"eqfield=ExpectedRepositoryID"`
+	ExpectedRepositoryID string `validate:"-"`
+	ProjectID            string `validate:"eqfield=ExpectedProjectID"`
+	ExpectedProjectID    string `validate:"-"`
+	OwnerID              string `validate:"eqfield=ExpectedOwnerID"`
+	ExpectedOwnerID      string `validate:"-"`
+	ConfigDigest         string `validate:"eqfield=ExpectedConfigDigest"`
+	ExpectedConfigDigest string `validate:"-"`
+	SpecDigest           string `validate:"eqfield=ExpectedSpecDigest"`
+	ExpectedSpecDigest   string `validate:"-"`
 }
 
 func readConfig(name string) (config.Config, error) {
@@ -84,7 +105,24 @@ func readManifest(name string, c config.Config) (Manifest, error) {
 		return m, err
 	}
 	h := sha256.Sum256(m.CanonicalSpec)
-	if m.Version != 1 || m.Grant.Version != 1 || m.Grant.Repository != c.Repository || m.Grant.RepositoryID != c.RepositoryID || m.Grant.ProjectID != c.ProjectID || m.Grant.OwnerID != c.OwnerID || m.Grant.ConfigDigest != digest || m.Grant.SpecDigest != hex.EncodeToString(h[:]) || m.Fence.AttemptID == "" || m.Fence.Generation < 1 || m.Fence.Owner.RunID == "" || m.Fence.Owner.RunAttempt < 1 || m.Grant.BaseSHA == "" {
+	if err := artifactValidator.Struct(m); err != nil {
+		return Manifest{}, errors.New("manifest identity does not match configuration")
+	}
+	binding := manifestBinding{
+		Repository:           m.Grant.Repository,
+		ExpectedRepository:   c.Repository,
+		RepositoryID:         m.Grant.RepositoryID,
+		ExpectedRepositoryID: c.RepositoryID,
+		ProjectID:            m.Grant.ProjectID,
+		ExpectedProjectID:    c.ProjectID,
+		OwnerID:              m.Grant.OwnerID,
+		ExpectedOwnerID:      c.OwnerID,
+		ConfigDigest:         m.Grant.ConfigDigest,
+		ExpectedConfigDigest: digest,
+		SpecDigest:           m.Grant.SpecDigest,
+		ExpectedSpecDigest:   hex.EncodeToString(h[:]),
+	}
+	if err := artifactValidator.Struct(binding); err != nil {
 		return Manifest{}, errors.New("manifest identity does not match configuration")
 	}
 	a := ledgerAdmission(m.Grant)

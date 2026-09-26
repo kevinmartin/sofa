@@ -3,10 +3,21 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/kevinmartin/sofa/internal/state"
 )
+
+// Execution can be retried under a later fence generation with a new digest.
+// Each generation gets its own immutable execution and verification records.
+func observeCandidate(ctx context.Context, engine state.Engine, fence state.Fence, digest string) error {
+	scope := fmt.Sprintf("g%d", fence.Generation)
+	if err := observeOnce(ctx, engine, fence.AttemptID, "execution", "candidate", digest, "", scope); err != nil {
+		return err
+	}
+	return observeOnce(ctx, engine, fence.AttemptID, "verification", "passed", digest, "", scope)
+}
 
 func observeOnce(ctx context.Context, engine state.Engine, attemptID, stage, outcome, revision, evidenceRef, scope string) error {
 	id := stage + "-" + attemptID

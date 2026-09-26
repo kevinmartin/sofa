@@ -90,6 +90,55 @@ func TestManifestBindsSpecAndConfiguration(t *testing.T) {
 	}
 }
 
+func TestManifestRejectsInvalidIdentityFields(t *testing.T) {
+	c, original := testManifest(t)
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	for _, test := range []struct {
+		name   string
+		mutate func(*Manifest)
+	}{
+		{
+			name:   "manifest version",
+			mutate: func(m *Manifest) { m.Version = 2 },
+		},
+		{
+			name:   "grant version",
+			mutate: func(m *Manifest) { m.Grant.Version = 2 },
+		},
+		{
+			name:   "repository binding",
+			mutate: func(m *Manifest) { m.Grant.Repository = "other/repository" },
+		},
+		{
+			name:   "issue identity",
+			mutate: func(m *Manifest) { m.Grant.IssueID = "" },
+		},
+		{
+			name:   "fence generation",
+			mutate: func(m *Manifest) { m.Fence.Generation = 0 },
+		},
+		{
+			name:   "fence owner",
+			mutate: func(m *Manifest) { m.Fence.Owner.RunID = "" },
+		},
+		{
+			name:   "configuration digest",
+			mutate: func(m *Manifest) { m.Grant.ConfigDigest = strings.Repeat("b", 64) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := original
+			test.mutate(&m)
+			if err := writeJSON(path, m); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readManifest(path, c); err == nil {
+				t.Fatal("invalid manifest identity accepted")
+			}
+		})
+	}
+}
+
 func TestLedgerAdmissionNormalizesRepositoryCasing(t *testing.T) {
 	_, m := testManifest(t)
 	m.Grant.Repository = "Owner/Fixture"
@@ -283,6 +332,39 @@ func TestFailureObservationsRemainDistinctAcrossRecoveredGenerations(t *testing.
 	snapshot, err := e.Store.Load(context.Background())
 	if err != nil || len(snapshot.State.Observations) != 2 {
 		t.Fatalf("expected both failed generations in append-only observations: %v", err)
+	}
+}
+
+func TestCandidateObservationsRemainDistinctAcrossGenerations(t *testing.T) {
+	_, m := testManifest(t)
+	e := state.Engine{
+		Store: &state.MemoryStore{},
+	}
+	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{
+		ModelCalls:            2,
+		InfrastructureRetries: 2,
+		RuntimeSeconds:        1200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := strings.Repeat("a", 64)
+	second := strings.Repeat("b", 64)
+	if err := observeCandidate(context.Background(), e, m.Fence, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := observeCandidate(context.Background(), e, m.Fence, first); err != nil {
+		t.Fatalf("candidate replay was not idempotent: %v", err)
+	}
+	m.Fence.Generation++
+	if err := observeCandidate(context.Background(), e, m.Fence, second); err != nil {
+		t.Fatalf("new generation conflicted with previous candidate: %v", err)
+	}
+	snapshot, err := e.Store.Load(context.Background())
+	if err != nil || len(snapshot.State.Observations) != 4 {
+		t.Fatalf("expected execution and verification in both generations: %v", err)
+	}
+	if snapshot.State.Observations[0].Revision != first || snapshot.State.Observations[2].Revision != second {
+		t.Fatal("generation-scoped candidate revisions were lost")
 	}
 }
 

@@ -112,10 +112,7 @@ func runPublish(ctx context.Context, opts publishOptions) error {
 	if !ok || attempt.Admission != ledgerAdmission(m.Grant) || attempt.Generation != m.Fence.Generation || attempt.Owner == nil || *attempt.Owner != m.Fence.Owner {
 		return errors.New("publication ledger identity mismatch")
 	}
-	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "execution", "candidate", b.CandidateDigest, "", ""); err != nil {
-		return err
-	}
-	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "verification", "passed", b.CandidateDigest, "", ""); err != nil {
+	if err := observeCandidate(ctx, engine, m.Fence, b.CandidateDigest); err != nil {
 		return err
 	}
 	if m.Recovery != nil && (attempt.Publication == nil || *attempt.Publication != *m.Recovery) {
