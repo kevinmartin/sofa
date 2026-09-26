@@ -136,9 +136,24 @@ jobs:
                 echo "host-only credential file reached worker" >&2
                 exit 1
               fi
-              exec /toolkit/sofa execute --config /transport/config.yml \
+              interfaces=$(awk "NR > 2 { print \$1 }" /proc/net/dev)
+              if [ "$interfaces" != "lo:" ]; then
+                echo "networkless worker has an unexpected interface" >&2
+                exit 1
+              fi
+              network_tx_packets() {
+                awk "NR > 2 { total += \$11 } END { printf \"%.0f\\n\", total+0 }" /proc/net/dev
+              }
+              before=$(network_tx_packets)
+              /toolkit/sofa execute --config /transport/config.yml \
                 --manifest /transport/manifest.json --workspace /workspace \
                 --out /candidate/bundle.json
+              after=$(network_tx_packets)
+              if [ "$after" -lt "$before" ] || [ "$after" -ne "$before" ]; then
+                echo "networkless worker transmitted packets" >&2
+                exit 1
+              fi
+              printf "{\"schema_version\":1,\"network_mode\":\"none\",\"source\":\"proc-net-dev\",\"tx_packets_before\":%s,\"tx_packets_after\":%s,\"tx_packets_delta\":0}\n" "$before" "$after" > /candidate/network.json
             '
           while IFS= read -r -d '' artifact; do
             if grep -Fq -- "$SOFA_E2E_HOST_ONLY_TOKEN" "$artifact" || \
@@ -165,6 +180,7 @@ jobs:
           path: |
             candidate/bundle.json
             candidate/execution.json
+            candidate/network.json
           if-no-files-found: error
           retention-days: 1
 
@@ -258,6 +274,7 @@ jobs:
             transport/identity.json
             candidate/bundle.json
             candidate/execution.json
+            candidate/network.json
             evidence/checks.json
           if-no-files-found: error
           retention-days: 1
@@ -353,7 +370,8 @@ jobs:
           ../bin/e2e-fixture report --identity ../transport/identity.json \
             --manifest ../transport/manifest.json --bundle ../candidate/bundle.json \
             --execution ../candidate/execution.json --evidence ../evidence/checks.json \
-            --publication ../report/publication.json --out ../report/scenario.json
+            --publication ../report/publication.json --network ../candidate/network.json \
+            --out ../report/scenario.json
       - name: Carry redacted candidate report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -363,6 +381,7 @@ jobs:
             transport/manifest.json
             candidate/execution.json
             candidate/bundle.json
+            candidate/network.json
             evidence/checks.json
             report/publication.json
             report/scenario.json

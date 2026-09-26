@@ -61,7 +61,7 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 	if recovered.Fence.AttemptID != original.Fence.AttemptID || recovered.Fence.Generation != 2 || recovered.RecoveryCheckpoint == nil || recovered.RecoveryCheckpoint.CandidateSHA != bundle.CandidateDigest || recovered.RecoverySource == nil || recovered.RecoverySource.RunID != "101" || after.CandidateSHA != candidate || after.PRBaseSHA != prBase || after.Generation != 2 {
 		t.Fatalf("recovery lost attempt, producer, or PR identity: %+v %+v", recovered, after)
 	}
-	executionPath, evidencePath, publicationPath, reportPath := filepath.Join(root, "execution.json"), filepath.Join(root, "evidence.json"), filepath.Join(root, "publication.json"), filepath.Join(root, "report.json")
+	executionPath, evidencePath, publicationPath, networkPath, reportPath := filepath.Join(root, "execution.json"), filepath.Join(root, "evidence.json"), filepath.Join(root, "publication.json"), filepath.Join(root, "network.json"), filepath.Join(root, "report.json")
 	for _, artifact := range []struct {
 		path  string
 		value any
@@ -69,12 +69,14 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 		{executionPath, map[string]any{"version": 1, "used_agent": true, "prompt_requests": 1, "model_calls": nil, "candidate_digest": bundle.CandidateDigest}},
 		{evidencePath, []integrity.CheckEvidence{{Version: integrity.Version, Name: "go-test", CandidateDigest: bundle.CandidateDigest, Passed: true}}},
 		{publicationPath, map[string]any{"schema_version": 1, "simulation": "fake-github-transport", "candidate_digest": bundle.CandidateDigest, "base_sha": base, "attempt_id": bundle.AttemptID, "generation": 1, "pr_number": 7, "pr_url": "https://github.com/kevinmartin/sofa-disposable/pull/7", "pr_posts": 1, "provider_requests": 0}},
+		{networkPath, map[string]any{"schema_version": 1, "network_mode": "none", "source": "proc-net-dev", "tx_packets_before": 0, "tx_packets_after": 0, "tx_packets_delta": 0}},
 	} {
 		if err := writeJSON(artifact.path, artifact.value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := run([]string{"report", "--identity", filepath.Join(second, "identity.json"), "--manifest", filepath.Join(second, "manifest.json"), "--bundle", bundlePath, "--execution", executionPath, "--evidence", evidencePath, "--publication", publicationPath, "--out", reportPath}); err != nil {
+	reportArgs := []string{"report", "--identity", filepath.Join(second, "identity.json"), "--manifest", filepath.Join(second, "manifest.json"), "--bundle", bundlePath, "--execution", executionPath, "--evidence", evidencePath, "--publication", publicationPath, "--network", networkPath, "--out", reportPath}
+	if err := run(reportArgs); err != nil {
 		t.Fatal(err)
 	}
 	var report struct {
@@ -82,9 +84,28 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 		PRBaseSHA        string `json:"pr_base_sha"`
 		ProducerRunID    string `json:"producer_run_id"`
 		BundleGeneration int    `json:"bundle_generation"`
+		SchemaVersion    int    `json:"schema_version"`
+		NetworkTXPackets uint64 `json:"network_tx_packets"`
+		NetworkSource    string `json:"network_measurement_source"`
 	}
-	if err := readJSON(reportPath, &report); err != nil || report.CandidateSHA != candidate || report.PRBaseSHA != prBase || report.ProducerRunID != "101" || report.BundleGeneration != 1 {
+	if err := readJSON(reportPath, &report); err != nil || report.CandidateSHA != candidate || report.PRBaseSHA != prBase || report.ProducerRunID != "101" || report.BundleGeneration != 1 || report.SchemaVersion != 2 || report.NetworkTXPackets != 0 || report.NetworkSource != "proc-net-dev" {
 		t.Fatalf("redacted report lost exact source or producer identity: %+v, %v", report, err)
+	}
+	for _, tc := range []struct {
+		name     string
+		evidence map[string]any
+	}{
+		{"missing packet count", map[string]any{"schema_version": 1, "network_mode": "none", "source": "proc-net-dev", "tx_packets_after": 0, "tx_packets_delta": 0}},
+		{"transmitted packet", map[string]any{"schema_version": 1, "network_mode": "none", "source": "proc-net-dev", "tx_packets_before": 0, "tx_packets_after": 1, "tx_packets_delta": 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := writeJSON(networkPath, tc.evidence); err != nil {
+				t.Fatal(err)
+			}
+			if err := run(reportArgs); err == nil {
+				t.Fatal("accepted missing or nonzero packet evidence")
+			}
+		})
 	}
 	bundle.BaseSHA = strings.Repeat("d", 40)
 	if err := writeJSON(bundlePath, bundle); err != nil {

@@ -318,8 +318,9 @@ func reportCandidate(args []string) error {
 	f.SetOutput(os.Stderr)
 	identityPath, manifestPath, bundlePath := f.String("identity", "", ""), f.String("manifest", "", ""), f.String("bundle", "", "")
 	executionPath, evidencePath, publicationPath := f.String("execution", "", ""), f.String("evidence", "", ""), f.String("publication", "", "")
+	networkPath := f.String("network", "", "")
 	out := f.String("out", "", "")
-	if err := f.Parse(args); err != nil || f.NArg() != 0 || *identityPath == "" || *manifestPath == "" || *bundlePath == "" || *executionPath == "" || *evidencePath == "" || *publicationPath == "" || *out == "" {
+	if err := f.Parse(args); err != nil || f.NArg() != 0 || *identityPath == "" || *manifestPath == "" || *bundlePath == "" || *executionPath == "" || *evidencePath == "" || *publicationPath == "" || *networkPath == "" || *out == "" {
 		return errors.New("invalid report input")
 	}
 	var id identity
@@ -345,16 +346,27 @@ func reportCandidate(args []string) error {
 		PRPosts          int    `json:"pr_posts"`
 		ProviderRequests int    `json:"provider_requests"`
 	}
+	var network struct {
+		SchemaVersion   *int    `json:"schema_version"`
+		NetworkMode     *string `json:"network_mode"`
+		Source          *string `json:"source"`
+		TXPacketsBefore *uint64 `json:"tx_packets_before"`
+		TXPacketsAfter  *uint64 `json:"tx_packets_after"`
+		TXPacketsDelta  *uint64 `json:"tx_packets_delta"`
+	}
 	for _, item := range []struct {
 		path  string
 		value any
 	}{
 		{*identityPath, &id}, {*manifestPath, &m}, {*bundlePath, &b},
-		{*executionPath, &execution}, {*evidencePath, &evidence}, {*publicationPath, &publication},
+		{*executionPath, &execution}, {*evidencePath, &evidence}, {*publicationPath, &publication}, {*networkPath, &network},
 	} {
 		if err := readJSON(item.path, item.value); err != nil {
 			return err
 		}
+	}
+	if network.SchemaVersion == nil || *network.SchemaVersion != 1 || network.NetworkMode == nil || *network.NetworkMode != "none" || network.Source == nil || *network.Source != "proc-net-dev" || network.TXPacketsBefore == nil || network.TXPacketsAfter == nil || network.TXPacketsDelta == nil || *network.TXPacketsAfter < *network.TXPacketsBefore || *network.TXPacketsDelta != *network.TXPacketsAfter-*network.TXPacketsBefore || *network.TXPacketsDelta != 0 {
+		return errors.New("networkless worker packet evidence mismatch")
 	}
 	if id.Version != 1 || id.FakeAgent != "fake-acp" || !suitePattern.MatchString(id.SuiteID) || id.Scenario != "edit" || !shaPattern.MatchString(id.CandidateSHA) || !shaPattern.MatchString(id.PRBaseSHA) || !shaPattern.MatchString(id.DisposableBaseSHA) || m.Version != 1 || m.Grant.Repository != disposableRepository || m.Grant.BaseSHA != id.DisposableBaseSHA || m.Fence.AttemptID != id.AttemptID || m.Fence.Generation != id.Generation || b.AttemptID != id.AttemptID || b.BaseSHA != id.DisposableBaseSHA || b.Generation > uint64(id.Generation) || b.CandidateDigest == "" || execution.Version != 1 || !execution.UsedAgent || execution.PromptRequests != 1 || execution.ModelCalls != nil || execution.CandidateDigest != b.CandidateDigest || publication.SchemaVersion != 1 || publication.Simulation != "fake-github-transport" || publication.CandidateDigest != b.CandidateDigest || publication.BaseSHA != b.BaseSHA || publication.AttemptID != b.AttemptID || publication.Generation != b.Generation || publication.PRNumber < 1 || publication.PRURL == "" || publication.PRPosts != 1 || publication.ProviderRequests != 0 || len(evidence) != 1 || !evidence[0].Passed || evidence[0].CandidateDigest != b.CandidateDigest {
 		return errors.New("candidate report identity or fake-ACP evidence mismatch")
@@ -378,11 +390,13 @@ func reportCandidate(args []string) error {
 		FakePromptRequests   int    `json:"fake_prompt_requests"`
 		ProviderRequests     int    `json:"provider_requests"`
 		ProviderRequestBasis string `json:"provider_request_basis"`
+		NetworkTXPackets     uint64 `json:"network_tx_packets"`
+		NetworkSource        string `json:"network_measurement_source"`
 		SimulatedPRNumber    int64  `json:"simulated_pr_number"`
 		SimulatedPRURL       string `json:"simulated_pr_url"`
 		SimulatedPRPostCount int    `json:"simulated_pr_post_count"`
 		VerifiedCheckCount   int    `json:"verified_check_count"`
 		RealPublicationOwner string `json:"real_publication_owner"`
-	}{1, id.SuiteID, id.Scenario, id.CandidateSHA, id.PRBaseSHA, id.DisposableBaseSHA, id.AttemptID, id.Generation, b.Generation, id.ProducerRunID, b.CandidateDigest, id.FakeAgent, execution.PromptRequests, publication.ProviderRequests, "networkless-container-and-fake-peer-without-provider-client", publication.PRNumber, publication.PRURL, publication.PRPosts, len(evidence), "trusted-disposable-coordinator-only"}
+	}{2, id.SuiteID, id.Scenario, id.CandidateSHA, id.PRBaseSHA, id.DisposableBaseSHA, id.AttemptID, id.Generation, b.Generation, id.ProducerRunID, b.CandidateDigest, id.FakeAgent, execution.PromptRequests, publication.ProviderRequests, "measured-zero-network-tx-packets-in-networkless-fake-peer", *network.TXPacketsDelta, *network.Source, publication.PRNumber, publication.PRURL, publication.PRPosts, len(evidence), "trusted-disposable-coordinator-only"}
 	return writeJSON(*out, report)
 }
