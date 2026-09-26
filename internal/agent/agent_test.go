@@ -102,7 +102,14 @@ func config(t *testing.T, mode string) Config {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Config{Command: exe, Args: []string{"-test.run=^TestACPHelper$"}, Dir: dir, Env: []string{"SOFA_ACP_HELPER=1", "SOFA_ACP_MODE=" + mode}, Timeout: 3 * time.Second, AllowedPaths: []string{"hello.go"}}
+	return Config{
+		Command:      exe,
+		Args:         []string{"-test.run=^TestACPHelper$"},
+		Dir:          dir,
+		Env:          []string{"SOFA_ACP_HELPER=1", "SOFA_ACP_MODE=" + mode},
+		Timeout:      3 * time.Second,
+		AllowedPaths: []string{"hello.go"},
+	}
 }
 
 func TestNegotiationStreamingAndPermissionDenial(t *testing.T) {
@@ -121,28 +128,67 @@ func TestNegotiationStreamingAndPermissionDenial(t *testing.T) {
 }
 
 func TestSessionUpdateCountsOnlyFixedToolCategories(t *testing.T) {
-	c := &client{session: "session"}
+	c := &client{
+		session: "session",
+	}
 	sensitive := "SECRET_SHOULD_NEVER_APPEAR"
 	for _, kind := range []acp.ToolKind{acp.ToolKindRead, acp.ToolKindEdit, acp.ToolKindExecute, acp.ToolKind("SECRET_KIND_SHOULD_NEVER_APPEAR")} {
-		if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{Kind: kind, Title: sensitive, RawInput: sensitive}}}); err != nil {
+		if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+			SessionId: c.session,
+			Update: acp.SessionUpdate{
+				ToolCall: &acp.SessionUpdateToolCall{
+					Kind:     kind,
+					Title:    sensitive,
+					RawInput: sensitive,
+				},
+			},
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	failed := acp.ToolCallStatusFailed
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{Status: &failed, Title: &sensitive}}}); err != nil {
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: c.session,
+		Update: acp.SessionUpdate{
+			ToolCallUpdate: &acp.SessionToolCallUpdate{
+				Status: &failed,
+				Title:  &sensitive,
+			},
+		},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if c.updates != 5 || c.toolReads != 1 || c.toolEdits != 1 || c.toolExecutes != 1 || c.toolOthers != 1 || c.toolFailedUpdates != 1 {
 		t.Fatalf("unexpected fixed counters: %+v", c)
 	}
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{Kind: acp.ToolKindRead, Status: failed}, ToolCallUpdate: &acp.SessionToolCallUpdate{Status: &failed}}}); err != nil || c.updates != 6 || c.toolFailedUpdates != 2 {
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: c.session,
+		Update: acp.SessionUpdate{
+			ToolCall: &acp.SessionUpdateToolCall{
+				Kind:   acp.ToolKindRead,
+				Status: failed,
+			},
+			ToolCallUpdate: &acp.SessionToolCallUpdate{
+				Status: &failed,
+			},
+		},
+	}); err != nil || c.updates != 6 || c.toolFailedUpdates != 2 {
 		t.Fatal("failed status counted more than once per notification")
 	}
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: "other"}); !errors.Is(err, ErrProtocol) || c.updates != 6 {
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: "other",
+	}); !errors.Is(err, ErrProtocol) || c.updates != 6 {
 		t.Fatal("cross-session update changed counters")
 	}
 	c.updates = MaxObservationCount
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{SessionId: c.session, Update: acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{Kind: acp.ToolKindRead}}}); err != nil || c.updates != MaxObservationCount || c.toolReads != 2 {
+	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+		SessionId: c.session,
+		Update: acp.SessionUpdate{
+			ToolCall: &acp.SessionUpdateToolCall{
+				Kind: acp.ToolKindRead,
+			},
+		},
+	}); err != nil || c.updates != MaxObservationCount || c.toolReads != 2 {
 		t.Fatal("untrusted update counter exceeded cap")
 	}
 }
@@ -151,7 +197,19 @@ func TestProtocolAuthenticationAndQuotaFailures(t *testing.T) {
 		mode  string
 		want  error
 		turns int
-	}{{"malformed", ErrProtocol, 0}, {"auth", ErrAuthentication, 0}, {"quota", ErrQuota, 1}} {
+	}{{
+		mode:  "malformed",
+		want:  ErrProtocol,
+		turns: 0,
+	}, {
+		mode:  "auth",
+		want:  ErrAuthentication,
+		turns: 0,
+	}, {
+		mode:  "quota",
+		want:  ErrQuota,
+		turns: 1,
+	}} {
 		t.Run(tc.mode, func(t *testing.T) {
 			got, err := Run(context.Background(), config(t, tc.mode), "test")
 			if !errors.Is(err, tc.want) || got.PromptRequests != tc.turns {
@@ -224,15 +282,26 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &client{root: root, session: "s", allowed: map[string]bool{"ok.go": true, "link.go": true, "dir/nested.go": true, "hard.go": true}}
+	c := &client{
+		root:    root,
+		session: "s",
+		allowed: map[string]bool{"ok.go": true, "link.go": true, "dir/nested.go": true, "hard.go": true},
+	}
 	if err := os.WriteFile(filepath.Join(root, "ok.go"), []byte("before"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.WriteTextFile(context.Background(), acp.WriteTextFileRequest{SessionId: "s", Path: filepath.Join(root, "ok.go"), Content: "after"})
+	_, err = c.WriteTextFile(context.Background(), acp.WriteTextFileRequest{
+		SessionId: "s",
+		Path:      filepath.Join(root, "ok.go"),
+		Content:   "after",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	read, err := c.ReadTextFile(context.Background(), acp.ReadTextFileRequest{SessionId: "s", Path: filepath.Join(root, "ok.go")})
+	read, err := c.ReadTextFile(context.Background(), acp.ReadTextFileRequest{
+		SessionId: "s",
+		Path:      filepath.Join(root, "ok.go"),
+	})
 	if err != nil || read.Content != "after" {
 		t.Fatalf("%+v %v", read, err)
 	}
@@ -250,10 +319,17 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{filepath.Join(outside, "secret"), filepath.Join(root, "link.go"), filepath.Join(root, "dir/nested.go"), filepath.Join(root, "hard.go"), filepath.Join(root, ".git/config"), "relative.go"} {
-		if _, err := c.ReadTextFile(context.Background(), acp.ReadTextFileRequest{SessionId: "s", Path: p}); !errors.Is(err, ErrPermission) {
+		if _, err := c.ReadTextFile(context.Background(), acp.ReadTextFileRequest{
+			SessionId: "s",
+			Path:      p,
+		}); !errors.Is(err, ErrPermission) {
 			t.Fatalf("read allowed %q", p)
 		}
-		if _, err := c.WriteTextFile(context.Background(), acp.WriteTextFileRequest{SessionId: "s", Path: p, Content: "bad"}); !errors.Is(err, ErrPermission) {
+		if _, err := c.WriteTextFile(context.Background(), acp.WriteTextFileRequest{
+			SessionId: "s",
+			Path:      p,
+			Content:   "bad",
+		}); !errors.Is(err, ErrPermission) {
 			t.Fatalf("write allowed %q", p)
 		}
 	}
@@ -261,12 +337,26 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	kind := acp.ToolKind("edit")
-	p := acp.RequestPermissionRequest{SessionId: "s", ToolCall: acp.ToolCallUpdate{Kind: &kind, Locations: []acp.ToolCallLocation{{Path: filepath.Join(root, "ok.go")}}}, Options: []acp.PermissionOption{{Kind: "allow_once", OptionId: "yes"}}}
+	p := acp.RequestPermissionRequest{
+		SessionId: "s",
+		ToolCall: acp.ToolCallUpdate{
+			Kind: &kind,
+			Locations: []acp.ToolCallLocation{{
+				Path: filepath.Join(root, "ok.go"),
+			}},
+		},
+		Options: []acp.PermissionOption{{
+			Kind:     "allow_once",
+			OptionId: "yes",
+		}},
+	}
 	answer, err := c.RequestPermission(context.Background(), p)
 	if err != nil || answer.Outcome.Selected == nil {
 		t.Fatal("scoped edit permission denied")
 	}
-	p.ToolCall.Locations = []acp.ToolCallLocation{{Path: filepath.Join(root, "link.go")}}
+	p.ToolCall.Locations = []acp.ToolCallLocation{{
+		Path: filepath.Join(root, "link.go"),
+	}}
 	answer, err = c.RequestPermission(context.Background(), p)
 	if err != nil || answer.Outcome.Cancelled == nil {
 		t.Fatal("symlink permission allowed")

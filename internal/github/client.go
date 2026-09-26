@@ -28,7 +28,14 @@ func New(token string, transport http.RoundTripper) (*Client, error) {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	return &Client{token: token, http: &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("GitHub redirect refused") }}}, nil
+	return &Client{
+		token: token,
+		http: &http.Client{
+			Transport:     transport,
+			Timeout:       30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("GitHub redirect refused") },
+		},
+	}, nil
 }
 
 type APIError struct {
@@ -70,7 +77,10 @@ func (c *Client) Request(ctx context.Context, method, p string, input, output an
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &APIError{Status: resp.StatusCode, RateLimited: resp.StatusCode == 429 || resp.Header.Get("X-RateLimit-Remaining") == "0"}
+		return &APIError{
+			Status:      resp.StatusCode,
+			RateLimited: resp.StatusCode == 429 || resp.Header.Get("X-RateLimit-Remaining") == "0",
+		}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if err != nil {

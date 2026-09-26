@@ -132,11 +132,19 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 		return result, ErrStart
 	}
 	defer func() { killProcessGroup(cmd); stdin.Close(); stdout.Close(); _ = cmd.Wait() }()
-	c := &client{root: root, allowed: allowed}
+	c := &client{
+		root:    root,
+		allowed: allowed,
+	}
 	conn, err := acp.NewClientSideConnectionWithOptions(c, stdin, stdout, acp.ConnectionOptions{
-		MaxFrameSize: 2 << 20, MaxPendingRequests: 8, MaxHandlerConcurrency: 4,
-		MaxQueuedRequests: 16, MaxQueuedNotifications: 64, MaxNotificationBytes: 4 << 20,
-		MaxQueuedWrites: 32, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MaxFrameSize:           2 << 20,
+		MaxPendingRequests:     8,
+		MaxHandlerConcurrency:  4,
+		MaxQueuedRequests:      16,
+		MaxQueuedNotifications: 64,
+		MaxNotificationBytes:   4 << 20,
+		MaxQueuedWrites:        32,
+		Logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		return result, protocolFailure("connection setup", err, stderr)
@@ -160,14 +168,29 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 		result.ToolFailedUpdates = c.toolFailedUpdates
 		c.mu.Unlock()
 	}()
-	init, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber, ClientInfo: &acp.Implementation{Name: "sofa", Version: "prototype"}, ClientCapabilities: acp.ClientCapabilities{Fs: acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true}}})
+	init, err := conn.Initialize(ctx, acp.InitializeRequest{
+		ProtocolVersion: acp.ProtocolVersionNumber,
+		ClientInfo: &acp.Implementation{
+			Name:    "sofa",
+			Version: "prototype",
+		},
+		ClientCapabilities: acp.ClientCapabilities{
+			Fs: acp.FileSystemCapabilities{
+				ReadTextFile:  true,
+				WriteTextFile: true,
+			},
+		},
+	})
 	if err != nil {
 		return result, classify(ctx, "initialize", err, stderr)
 	}
 	if init.ProtocolVersion != acp.ProtocolVersionNumber {
 		return result, protocolFailure("initialize", nil, stderr)
 	}
-	session, err := conn.NewSessionWithResponseHook(ctx, acp.NewSessionRequest{Cwd: root, McpServers: []acp.McpServer{}}, func(_ context.Context, s acp.NewSessionResponse) error {
+	session, err := conn.NewSessionWithResponseHook(ctx, acp.NewSessionRequest{
+		Cwd:        root,
+		McpServers: []acp.McpServer{},
+	}, func(_ context.Context, s acp.NewSessionResponse) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		c.session = s.SessionId
@@ -182,11 +205,16 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 	id := sha256.Sum256([]byte(session.SessionId))
 	result.SessionID = hex.EncodeToString(id[:])
 	result.PromptRequests++
-	response, err := conn.Prompt(ctx, acp.PromptRequest{SessionId: session.SessionId, Prompt: []acp.ContentBlock{acp.TextBlock(prompt)}})
+	response, err := conn.Prompt(ctx, acp.PromptRequest{
+		SessionId: session.SessionId,
+		Prompt:    []acp.ContentBlock{acp.TextBlock(prompt)},
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			stop, done := context.WithTimeout(context.Background(), 250*time.Millisecond)
-			_ = conn.Cancel(stop, acp.CancelNotification{SessionId: session.SessionId})
+			_ = conn.Cancel(stop, acp.CancelNotification{
+				SessionId: session.SessionId,
+			})
 			done()
 		}
 		return result, classify(ctx, "session/prompt", err, stderr)
@@ -341,7 +369,13 @@ func (c *client) RequestPermission(ctx context.Context, p acp.RequestPermissionR
 	if allow {
 		for _, o := range p.Options {
 			if o.Kind == "allow_once" {
-				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Selected: &acp.RequestPermissionOutcomeSelected{OptionId: o.OptionId}}}, nil
+				return acp.RequestPermissionResponse{
+					Outcome: acp.RequestPermissionOutcome{
+						Selected: &acp.RequestPermissionOutcomeSelected{
+							OptionId: o.OptionId,
+						},
+					},
+				}, nil
 			}
 		}
 	}
@@ -351,7 +385,11 @@ func (c *client) RequestPermission(ctx context.Context, p acp.RequestPermissionR
 	if p.ToolCall.Kind != nil && *p.ToolCall.Kind == acp.ToolKindExecute && c.executeDenials < MaxObservationCount {
 		c.executeDenials++
 	}
-	return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}}}, nil
+	return acp.RequestPermissionResponse{
+		Outcome: acp.RequestPermissionOutcome{
+			Cancelled: &acp.RequestPermissionOutcomeCancelled{},
+		},
+	}, nil
 }
 
 func safeRelative(p string) bool {

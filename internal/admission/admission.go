@@ -64,7 +64,10 @@ func CanonicalSpec(title, body string) ([]byte, string, error) {
 	spec := struct {
 		Title string `json:"title"`
 		Body  string `json:"body"`
-	}{normalize(title), normalize(body)}
+	}{
+		Title: normalize(title),
+		Body:  normalize(body),
+	}
 	if spec.Title == "" || spec.Body == "" {
 		return nil, "", errors.New("specification title and body are required")
 	}
@@ -91,7 +94,21 @@ func Authorize(c config.Config, s Snapshot) (Grant, []byte, error) {
 	if err != nil {
 		return Grant{}, nil, err
 	}
-	return Grant{Version: 1, Repository: c.Repository, RepositoryID: s.RepositoryID, IssueID: s.IssueID, IssueNumber: s.Number, ProjectID: c.ProjectID, OwnerID: c.OwnerID, SpecDigest: digest, ConfigDigest: configDigest, BaseSHA: s.BaseSHA, ProjectItemID: s.ProjectItemID, StatusOptionID: s.StatusOptionID, StatusUpdatedAt: s.StatusUpdatedAt}, spec, nil
+	return Grant{
+		Version:         1,
+		Repository:      c.Repository,
+		RepositoryID:    s.RepositoryID,
+		IssueID:         s.IssueID,
+		IssueNumber:     s.Number,
+		ProjectID:       c.ProjectID,
+		OwnerID:         c.OwnerID,
+		SpecDigest:      digest,
+		ConfigDigest:    configDigest,
+		BaseSHA:         s.BaseSHA,
+		ProjectItemID:   s.ProjectItemID,
+		StatusOptionID:  s.StatusOptionID,
+		StatusUpdatedAt: s.StatusUpdatedAt,
+	}, spec, nil
 }
 
 // Revalidate retains the admitted base even when the default branch advances.

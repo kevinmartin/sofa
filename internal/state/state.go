@@ -148,7 +148,11 @@ type Store interface {
 }
 
 func Empty() State {
-	return State{Version: Version, Attempts: map[string]Attempt{}, Observations: []Observation{}}
+	return State{
+		Version:      Version,
+		Attempts:     map[string]Attempt{},
+		Observations: []Observation{},
+	}
 }
 
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -192,7 +196,14 @@ func AttemptID(a Admission) string {
 		Issue                                     int64
 		SpecDigest, ProjectItemID, StatusOptionID string
 		StatusUpdatedAt                           time.Time
-	}{strings.ToLower(a.Repository), a.Issue, a.SpecDigest, a.ProjectItemID, a.StatusOptionID, a.StatusUpdatedAt})
+	}{
+		Repository:      strings.ToLower(a.Repository),
+		Issue:           a.Issue,
+		SpecDigest:      a.SpecDigest,
+		ProjectItemID:   a.ProjectItemID,
+		StatusOptionID:  a.StatusOptionID,
+		StatusUpdatedAt: a.StatusUpdatedAt,
+	})
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
 }

@@ -1,6 +1,8 @@
 package agent
 
-import "os"
+import (
+	"os"
+)
 
 // CopilotCommand resolves the same ACP entrypoint for preflight and execution.
 // Overrides are supplied by trusted runner configuration, never issue text.

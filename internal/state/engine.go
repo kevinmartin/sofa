@@ -76,7 +76,15 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 			}
 		}
 		now := e.now()
-		attempt = Attempt{ID: id, Admission: admission, Phase: Pending, Dispatch: "pending", Limits: limits, CreatedAt: now, UpdatedAt: now}
+		attempt = Attempt{
+			ID:        id,
+			Admission: admission,
+			Phase:     Pending,
+			Dispatch:  "pending",
+			Limits:    limits,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
 		s.Attempts[id] = attempt
 		created = true
 		return true, nil
@@ -128,7 +136,11 @@ func (e Engine) Claim(ctx context.Context, id string, owner Owner) (fence Fence,
 			a.Checkpoint = nil
 		}
 		s.Attempts[id] = a
-		fence = Fence{id, a.Generation, owner}
+		fence = Fence{
+			AttemptID:  id,
+			Generation: a.Generation,
+			Owner:      owner,
+		}
 		return true, nil
 	})
 	return
@@ -191,7 +203,12 @@ func (e Engine) Charge(ctx context.Context, f Fence, delta Counters) error {
 		if a.Phase == Draft || a.Phase == Blocked || a.Phase == Deferred {
 			return ErrClaimed
 		}
-		next := Counters{a.Counts.ModelCalls + delta.ModelCalls, a.Counts.Repairs + delta.Repairs, a.Counts.InfrastructureRetries + delta.InfrastructureRetries, a.Counts.RuntimeSeconds + delta.RuntimeSeconds}
+		next := Counters{
+			ModelCalls:            a.Counts.ModelCalls + delta.ModelCalls,
+			Repairs:               a.Counts.Repairs + delta.Repairs,
+			InfrastructureRetries: a.Counts.InfrastructureRetries + delta.InfrastructureRetries,
+			RuntimeSeconds:        a.Counts.RuntimeSeconds + delta.RuntimeSeconds,
+		}
 		if !a.Limits.permits(next) {
 			return ErrLimit
 		}

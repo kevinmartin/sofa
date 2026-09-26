@@ -1,0 +1,47 @@
+# Consumer configuration
+
+A consumer keeps `.sofa.yml` on its trusted default branch. The
+[version 1 JSON Schema](../schemas/sofa.schema.json) documents supported fields
+and provides editor completion and diagnostics. It rejects unknown properties,
+unsupported agent/recipe types, privileged model credential references, unsafe
+paths, and values outside static limits. Retry counts default to zero when
+omitted; `recipe` may be omitted or null. Credentials are environment variable
+references, never secret values.
+
+The [consumer example](../examples/consumer/.sofa.yml) starts with a
+[YAML language server](https://github.com/redhat-developer/vscode-yaml)
+association that resolves within this toolkit checkout:
+
+```yaml
+# yaml-language-server: $schema=../../schemas/sofa.schema.json
+```
+
+After copying the example into a consumer repository, replace that relative
+path with the raw schema URL at the **same published toolkit commit** used by
+both reusable workflows and their `toolkit_sha` inputs:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/kevinmartin/sofa/TOOLKIT_COMMIT_SHA/schemas/sofa.schema.json
+```
+
+Replace `TOOLKIT_COMMIT_SHA` with the full reviewed commit SHA. For offline
+editing, copy that commit's schema into the consumer's `schemas/` directory
+and use `$schema=./schemas/sofa.schema.json` instead. Keep the copied schema in
+step with the toolkit pin.
+
+The [Go decoder](../internal/config/config.go) remains authoritative at runtime.
+Some requirements depend on the complete configuration or the original YAML
+and cannot be represented by this standard JSON Schema:
+
+- Check IDs must be unique, and each timeout must fit `limits.attempt_seconds`.
+- `max_total_bytes` must be at least `max_file_bytes`; recipe paths must be
+  allowed and their count must fit `limits.max_files`.
+- YAML must contain exactly one document, no unknown or duplicate fields,
+  no anchors or aliases, and at most 64 KiB.
+- Runtime string limits count UTF-8 bytes; JSON Schema lengths count Unicode
+  characters, so non-ASCII values can reach a runtime limit sooner.
+
+Run `go test ./internal/config` from the toolkit root to compile the schema,
+validate the consumer example and invalid-policy cases, and verify these
+runtime-only boundaries. Schema diagnostics assist editing; they do not grant
+admission or replace trusted runtime checks.

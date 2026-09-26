@@ -65,7 +65,10 @@ func snapshot(r *os.Root, paths []string) (map[string]BaseFile, error) {
 		if total > 10<<20 {
 			return nil, errors.New("snapshot exceeds total limit")
 		}
-		files[name] = BaseFile{Mode: RegularMode, Content: data}
+		files[name] = BaseFile{
+			Mode:    RegularMode,
+			Content: data,
+		}
 	}
 	return files, nil
 }
@@ -103,7 +106,10 @@ func Changes(before, after map[string]BaseFile) ([]File, error) {
 		if (existed && old.Mode != RegularMode) || (exists && next.Mode != RegularMode) {
 			return nil, errors.New("unsupported snapshot file mode")
 		}
-		f := File{Path: name, Mode: RegularMode}
+		f := File{
+			Path: name,
+			Mode: RegularMode,
+		}
 		switch {
 		case !existed:
 			f.Operation, f.Content = "add", append([]byte(nil), next.Content...)
@@ -153,9 +159,13 @@ func Apply(directory string, b Bundle, e Expected, p Policy) error {
 			return BaseFile{}, false, err
 		}
 		if info.IsDir() {
-			return BaseFile{Mode: "040000"}, true, nil
+			return BaseFile{
+				Mode: "040000",
+			}, true, nil
 		}
-		return BaseFile{Mode: "unsupported"}, true, nil
+		return BaseFile{
+			Mode: "unsupported",
+		}, true, nil
 	}
 	if err := VerifyBase(b, lookup); err != nil {
 		return err

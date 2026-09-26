@@ -22,12 +22,46 @@ func workerFixture(t *testing.T) (Input, string) {
 	if err := os.WriteFile(path, []byte("package fixture\n\nfunc Greet() string {return \"old\"}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	c := config.Config{Version: 1, Repository: "owner/repo", RepositoryID: "R_1", ProjectID: "P_1", OwnerID: "U_1", ReadyStatus: "Ready", AllowedPaths: []string{"fixture/"}, Profile: config.Profile{Agent: "copilot", SecretEnv: "GITHUB_TOKEN"}, Limits: config.Limits{AttemptSeconds: 60, RepairAttempts: 2, InfraRetries: 2, MaxAgentTurns: 2, MaxFiles: 5, MaxFileBytes: 4096, MaxTotalBytes: 8192}, Checks: []config.Check{{ID: "go-test", Argv: []string{"go", "test", "./..."}, TimeoutSeconds: 30}}}
+	c := config.Config{
+		Version:      1,
+		Repository:   "owner/repo",
+		RepositoryID: "R_1",
+		ProjectID:    "P_1",
+		OwnerID:      "U_1",
+		ReadyStatus:  "Ready",
+		AllowedPaths: []string{"fixture/"},
+		Profile: config.Profile{
+			Agent:     "copilot",
+			SecretEnv: "GITHUB_TOKEN",
+		},
+		Limits: config.Limits{
+			AttemptSeconds: 60,
+			RepairAttempts: 2,
+			InfraRetries:   2,
+			MaxAgentTurns:  2,
+			MaxFiles:       5,
+			MaxFileBytes:   4096,
+			MaxTotalBytes:  8192,
+		},
+		Checks: []config.Check{{
+			ID:             "go-test",
+			Argv:           []string{"go", "test", "./..."},
+			TimeoutSeconds: 30,
+		}},
+	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	spec, _ := json.Marshal(map[string]string{"title": "Change fixture", "body": "Make Greet return hello"})
-	return Input{Config: c, CanonicalSpec: spec, Directory: root, AttemptID: strings.Repeat("f", 64), Generation: 1, BaseSHA: strings.Repeat("a", 40), ModelToken: "model-token"}, path
+	return Input{
+		Config:        c,
+		CanonicalSpec: spec,
+		Directory:     root,
+		AttemptID:     strings.Repeat("f", 64),
+		Generation:    1,
+		BaseSHA:       strings.Repeat("a", 40),
+		ModelToken:    "model-token",
+	}, path
 }
 
 func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
@@ -49,7 +83,19 @@ func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
 		if err := os.WriteFile(path, []byte("package fixture\n\nfunc Greet() string {return \"hello\"}\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		return agent.Result{StopReason: "end_turn", PromptRequests: 1, Updates: 5, PermissionRequests: 2, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolReads: 1, ToolEdits: 1, ToolExecutes: 1, ToolOthers: 1, ToolFailedUpdates: 1}, nil
+		return agent.Result{
+			StopReason:               "end_turn",
+			PromptRequests:           1,
+			Updates:                  5,
+			PermissionRequests:       2,
+			PermissionDenials:        1,
+			PermissionExecuteDenials: 1,
+			ToolReads:                1,
+			ToolEdits:                1,
+			ToolExecutes:             1,
+			ToolOthers:               1,
+			ToolFailedUpdates:        1,
+		}, nil
 	})
 	out, err := Execute(context.Background(), in)
 	if err != nil {
@@ -62,7 +108,10 @@ func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
 
 func TestRecipeBypassesAgentAndRequiresPreconditions(t *testing.T) {
 	in, path := workerFixture(t)
-	in.Config.Recipe = &config.Recipe{Kind: "gofmt", Paths: []string{"fixture/main.go"}}
+	in.Config.Recipe = &config.Recipe{
+		Kind:  "gofmt",
+		Paths: []string{"fixture/main.go"},
+	}
 	in.CanonicalSpec, _ = json.Marshal(map[string]string{"title": "Format Go", "body": "Format existing fixture.\n<!-- sofa:recipe=gofmt -->"})
 	calls := 0
 	in.Runner = RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) { calls++; return agent.Result{}, nil })
@@ -91,7 +140,9 @@ func TestRecipeBypassesAgentAndRequiresPreconditions(t *testing.T) {
 func TestRefusedAgentTurnCannotBecomeCandidate(t *testing.T) {
 	in, _ := workerFixture(t)
 	in.Runner = RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) {
-		return agent.Result{StopReason: "refusal"}, nil
+		return agent.Result{
+			StopReason: "refusal",
+		}, nil
 	})
 	if _, err := Execute(context.Background(), in); err == nil {
 		t.Fatal("refused turn accepted")
@@ -101,7 +152,15 @@ func TestRefusedAgentTurnCannotBecomeCandidate(t *testing.T) {
 func TestFailedAgentTurnRetainsPromptAccounting(t *testing.T) {
 	in, _ := workerFixture(t)
 	in.Runner = RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) {
-		return agent.Result{PromptRequests: 1, Updates: 2, PermissionRequests: 1, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolExecutes: 1, ToolFailedUpdates: 1}, agent.ErrQuota
+		return agent.Result{
+			PromptRequests:           1,
+			Updates:                  2,
+			PermissionRequests:       1,
+			PermissionDenials:        1,
+			PermissionExecuteDenials: 1,
+			ToolExecutes:             1,
+			ToolFailedUpdates:        1,
+		}, agent.ErrQuota
 	})
 	out, err := Execute(context.Background(), in)
 	if err != agent.ErrQuota || !out.UsedAgent || out.PromptRequests != 1 || out.Updates != 2 || out.PermissionRequests != 1 || out.PermissionDenials != 1 || out.PermissionExecuteDenials != 1 || out.ToolExecutes != 1 || out.ToolFailedUpdates != 1 || len(out.Bundle.Files) != 0 {

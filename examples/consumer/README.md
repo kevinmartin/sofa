@@ -9,7 +9,11 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    `.github/workflows/sofa.yml.example` to `.github/workflows/sofa.yml`.
 2. Publish a reviewed sofa toolkit commit. Replace all four forty-zero values
    in the caller with its **same full commit SHA**. The two reusable workflow
-   references and both `toolkit_sha` inputs must refer to that commit.
+   references (`reconcile.reusable.yml` and `work.reusable.yml`) and both
+   `toolkit_sha` inputs must refer to that commit. Update the schema association
+   at the top of `.sofa.yml` to use that commit too, following the
+   [configuration editor setup](../../docs/configuration.md); its example
+   relative path only works inside this toolkit checkout.
 3. The example already names the designated `kevinmartin/sofa-disposable`
    repository and Kevin's immutable ID. Replace only `project_id` in
    `.sofa.yml` with the disposable Project's immutable node ID. Keep the

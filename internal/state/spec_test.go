@@ -17,7 +17,9 @@ func TestSaveSpecPreservesLedgerAndIsImmutable(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %s %v", out, err)
 	}
-	g := GitStore{Directory: dir}
+	g := GitStore{
+		Directory: dir,
+	}
 	if err := g.CompareAndSwap(ctx, "", Empty()); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +88,9 @@ func TestSaveSpecInitializesLedgerOnEmptyStore(t *testing.T) {
 	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %s %v", out, err)
 	}
-	g := GitStore{Directory: dir}
+	g := GitStore{
+		Directory: dir,
+	}
 	content := []byte(`{"title":"Fixture","body":"Start with a specification"}`)
 	h := sha256.Sum256(content)
 	if err := g.SaveSpec(ctx, "I_first", hex.EncodeToString(h[:]), content); err != nil {

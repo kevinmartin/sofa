@@ -18,7 +18,15 @@ import (
 )
 
 func TestRetainedCandidateAvailabilityFailsClosed(t *testing.T) {
-	checkpoint := state.Checkpoint{Version: state.Version, Phase: state.Validating, ArtifactID: "sofa-verified-candidate-42-2", Producer: state.Owner{RunID: "42", RunAttempt: 2}}
+	checkpoint := state.Checkpoint{
+		Version:    state.Version,
+		Phase:      state.Validating,
+		ArtifactID: "sofa-verified-candidate-42-2",
+		Producer: state.Owner{
+			RunID:      "42",
+			RunAttempt: 2,
+		},
+	}
 	artifact := map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": false, "workflow_run": map[string]any{"id": 42}}
 	cases := []struct {
 		name      string
@@ -27,12 +35,48 @@ func TestRetainedCandidateAvailabilityFailsClosed(t *testing.T) {
 		want      bool
 		wantError bool
 	}{
-		{"present", 200, map[string]any{"total_count": 1, "artifacts": []any{artifact}}, true, false},
-		{"missing", 200, map[string]any{"total_count": 0, "artifacts": []any{}}, false, false},
-		{"expired", 200, map[string]any{"total_count": 1, "artifacts": []any{map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": true, "workflow_run": map[string]any{"id": 42}}}}, false, false},
-		{"ambiguous", 200, map[string]any{"total_count": 2, "artifacts": []any{artifact, artifact}}, false, true},
-		{"wrong-run", 200, map[string]any{"total_count": 1, "artifacts": []any{map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": false, "workflow_run": map[string]any{"id": 43}}}}, false, true},
-		{"forbidden", 403, map[string]any{}, false, true},
+		{
+			name:      "present",
+			code:      200,
+			body:      map[string]any{"total_count": 1, "artifacts": []any{artifact}},
+			want:      true,
+			wantError: false,
+		},
+		{
+			name:      "missing",
+			code:      200,
+			body:      map[string]any{"total_count": 0, "artifacts": []any{}},
+			want:      false,
+			wantError: false,
+		},
+		{
+			name:      "expired",
+			code:      200,
+			body:      map[string]any{"total_count": 1, "artifacts": []any{map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": true, "workflow_run": map[string]any{"id": 42}}}},
+			want:      false,
+			wantError: false,
+		},
+		{
+			name:      "ambiguous",
+			code:      200,
+			body:      map[string]any{"total_count": 2, "artifacts": []any{artifact, artifact}},
+			want:      false,
+			wantError: true,
+		},
+		{
+			name:      "wrong-run",
+			code:      200,
+			body:      map[string]any{"total_count": 1, "artifacts": []any{map[string]any{"id": 17, "name": checkpoint.ArtifactID, "expired": false, "workflow_run": map[string]any{"id": 43}}}},
+			want:      false,
+			wantError: true,
+		},
+		{
+			name:      "forbidden",
+			code:      403,
+			body:      map[string]any{},
+			want:      false,
+			wantError: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +121,11 @@ type stateGitFixture struct {
 }
 
 func newStateGitFixture() *stateGitFixture {
-	return &stateGitFixture{blobs: map[string][]byte{}, trees: map[string]map[string]string{}, commits: map[string]struct{ tree, parent string }{}}
+	return &stateGitFixture{
+		blobs:   map[string][]byte{},
+		trees:   map[string]map[string]string{},
+		commits: map[string]struct{ tree, parent string }{},
+	}
 }
 
 func (f *stateGitFixture) next() string {
@@ -165,7 +213,10 @@ func (f *stateGitFixture) trip(r *http.Request) (*http.Response, error) {
 			parent = input.Parents[0]
 		}
 		sha := f.next()
-		f.commits[sha] = struct{ tree, parent string }{input.Tree, parent}
+		f.commits[sha] = struct{ tree, parent string }{
+			tree:   input.Tree,
+			parent: parent,
+		}
 		return jsonResponse(201, map[string]any{"sha": sha}), nil
 	case r.Method == http.MethodPost && p == "/git/refs":
 		if f.ref != "" {
@@ -197,7 +248,10 @@ func TestStateStoreRetainsSpecAndRejectsStaleRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := StateStore{Client: client, Repository: "owner/fixture"}
+	store := StateStore{
+		Client:     client,
+		Repository: "owner/fixture",
+	}
 	snap, err := store.Load(ctx)
 	if err != nil || snap.Revision != "" || len(snap.State.Attempts) != 0 {
 		t.Fatalf("empty state: %#v %v", snap, err)
@@ -247,7 +301,10 @@ func TestStateStoreMapsAmbiguousRefUpdateByWrittenRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := StateStore{Client: client, Repository: "owner/fixture"}
+	store := StateStore{
+		Client:     client,
+		Repository: "owner/fixture",
+	}
 	spec := []byte(`{"title":"fixture","body":"work"}`)
 	h := sha256.Sum256(spec)
 	if err := store.SaveSpec(ctx, "issue-1", hex.EncodeToString(h[:]), spec); err != nil {
@@ -261,7 +318,9 @@ func TestStateStoreMapsAmbiguousRefUpdateByWrittenRevision(t *testing.T) {
 	if err := store.mapConflict(ctx, "", first.Revision, lostResponse); err != nil {
 		t.Fatalf("applied update was misreported as a conflict: %v", err)
 	}
-	invalid := &APIError{Status: 422}
+	invalid := &APIError{
+		Status: 422,
+	}
 	if err := store.mapConflict(ctx, first.Revision, strings.Repeat("a", 40), invalid); err != invalid {
 		t.Fatalf("unchanged ref hid validation error: %v", err)
 	}
@@ -289,19 +348,43 @@ func TestLostRefResponseDoesNotChargeBudgetTwice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := StateStore{Client: client, Repository: "owner/fixture"}
-	engine := state.Engine{Store: store}
-	admission := state.Admission{Repository: "owner/fixture", Issue: 1, SpecDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), BaseSHA: strings.Repeat("c", 40), ProjectID: "P_1", ProjectItemID: "I_1", StatusOptionID: "ready", StatusUpdatedAt: time.Now().UTC()}
-	attempt, _, err := engine.Admit(ctx, admission, state.Limits{ModelCalls: 2, InfrastructureRetries: 1, RuntimeSeconds: 100})
+	store := StateStore{
+		Client:     client,
+		Repository: "owner/fixture",
+	}
+	engine := state.Engine{
+		Store: store,
+	}
+	admission := state.Admission{
+		Repository:      "owner/fixture",
+		Issue:           1,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       "P_1",
+		ProjectItemID:   "I_1",
+		StatusOptionID:  "ready",
+		StatusUpdatedAt: time.Now().UTC(),
+	}
+	attempt, _, err := engine.Admit(ctx, admission, state.Limits{
+		ModelCalls:            2,
+		InfrastructureRetries: 1,
+		RuntimeSeconds:        100,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fence, err := engine.Claim(ctx, attempt.ID, state.Owner{RunID: "42", RunAttempt: 1})
+	fence, err := engine.Claim(ctx, attempt.ID, state.Owner{
+		RunID:      "42",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	loseResponse = true
-	if err := engine.Charge(ctx, fence, state.Counters{ModelCalls: 1}); err != nil {
+	if err := engine.Charge(ctx, fence, state.Counters{
+		ModelCalls: 1,
+	}); err != nil {
 		t.Fatalf("applied charge returned an error: %v", err)
 	}
 	snapshot, err := store.Load(ctx)

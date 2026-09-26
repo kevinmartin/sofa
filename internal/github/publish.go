@@ -307,7 +307,9 @@ func (c *Client) verifyBase(ctx context.Context, b integrity.Bundle) error {
 		if !ok {
 			return integrity.BaseFile{}, false, nil
 		}
-		file := integrity.BaseFile{Mode: e.Mode}
+		file := integrity.BaseFile{
+			Mode: e.Mode,
+		}
 		if e.Mode != integrity.RegularMode {
 			return file, true, nil
 		}
@@ -417,5 +419,10 @@ func verifyDraft(pr prJSON, repo, branch, sha string) (DraftPR, error) {
 	if pr.Number <= 0 || !strings.EqualFold(pr.HTMLURL, expectedURL) || pr.State != "open" || !pr.Draft || pr.Head.Ref != branch || pr.Head.SHA != sha || !strings.EqualFold(pr.Head.Repo.FullName, repo) {
 		return DraftPR{}, errors.New("published PR is missing, changed, closed, or no longer draft")
 	}
-	return DraftPR{Number: pr.Number, URL: pr.HTMLURL, Branch: branch, CommitSHA: sha}, nil
+	return DraftPR{
+		Number:    pr.Number,
+		URL:       pr.HTMLURL,
+		Branch:    branch,
+		CommitSHA: sha,
+	}, nil
 }

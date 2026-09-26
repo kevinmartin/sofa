@@ -160,12 +160,31 @@ func Execute(ctx context.Context, in Input) (Result, error) {
 		out.NoChange = true
 		return out, nil
 	}
-	b := integrity.Bundle{Version: integrity.Version, Repository: in.Config.Repository, AttemptID: in.AttemptID, Generation: in.Generation, BaseSHA: in.BaseSHA, Files: files}
+	b := integrity.Bundle{
+		Version:    integrity.Version,
+		Repository: in.Config.Repository,
+		AttemptID:  in.AttemptID,
+		Generation: in.Generation,
+		BaseSHA:    in.BaseSHA,
+		Files:      files,
+	}
 	if err := integrity.Seal(&b); err != nil {
 		return out, fmt.Errorf("%w: candidate seal", ErrValidation)
 	}
-	e := integrity.Expected{Repository: b.Repository, AttemptID: b.AttemptID, Generation: b.Generation, BaseSHA: b.BaseSHA, CandidateDigest: b.CandidateDigest}
-	p := integrity.Policy{AllowedPaths: in.Config.AllowedPaths, MaxFiles: in.Config.Limits.MaxFiles, MaxFileBytes: in.Config.Limits.MaxFileBytes, MaxTotalBytes: in.Config.Limits.MaxTotalBytes, ForbiddenValues: [][]byte{[]byte(in.ModelToken)}}
+	e := integrity.Expected{
+		Repository:      b.Repository,
+		AttemptID:       b.AttemptID,
+		Generation:      b.Generation,
+		BaseSHA:         b.BaseSHA,
+		CandidateDigest: b.CandidateDigest,
+	}
+	p := integrity.Policy{
+		AllowedPaths:    in.Config.AllowedPaths,
+		MaxFiles:        in.Config.Limits.MaxFiles,
+		MaxFileBytes:    in.Config.Limits.MaxFileBytes,
+		MaxTotalBytes:   in.Config.Limits.MaxTotalBytes,
+		ForbiddenValues: [][]byte{[]byte(in.ModelToken)},
+	}
 	if err := integrity.Validate(b, e, p); err != nil {
 		return out, fmt.Errorf("%w: candidate integrity", ErrValidation)
 	}
@@ -250,12 +269,36 @@ func runRecipe(ctx context.Context, in Input, before map[string]integrity.BaseFi
 		if string(formatted) == string(base.Content) {
 			continue
 		}
-		b := integrity.Bundle{Version: integrity.Version, Repository: in.Config.Repository, AttemptID: in.AttemptID, Generation: in.Generation, BaseSHA: in.BaseSHA, Files: []integrity.File{{Path: name, Operation: "update", Mode: integrity.RegularMode, BeforeSHA256: integrity.Hash(base.Content), Content: formatted}}}
+		b := integrity.Bundle{
+			Version:    integrity.Version,
+			Repository: in.Config.Repository,
+			AttemptID:  in.AttemptID,
+			Generation: in.Generation,
+			BaseSHA:    in.BaseSHA,
+			Files: []integrity.File{{
+				Path:         name,
+				Operation:    "update",
+				Mode:         integrity.RegularMode,
+				BeforeSHA256: integrity.Hash(base.Content),
+				Content:      formatted,
+			}},
+		}
 		if err := integrity.Seal(&b); err != nil {
 			return err
 		}
-		e := integrity.Expected{Repository: b.Repository, AttemptID: b.AttemptID, Generation: b.Generation, BaseSHA: b.BaseSHA, CandidateDigest: b.CandidateDigest}
-		p := integrity.Policy{AllowedPaths: in.Config.AllowedPaths, MaxFiles: in.Config.Limits.MaxFiles, MaxFileBytes: in.Config.Limits.MaxFileBytes, MaxTotalBytes: in.Config.Limits.MaxTotalBytes}
+		e := integrity.Expected{
+			Repository:      b.Repository,
+			AttemptID:       b.AttemptID,
+			Generation:      b.Generation,
+			BaseSHA:         b.BaseSHA,
+			CandidateDigest: b.CandidateDigest,
+		}
+		p := integrity.Policy{
+			AllowedPaths:  in.Config.AllowedPaths,
+			MaxFiles:      in.Config.Limits.MaxFiles,
+			MaxFileBytes:  in.Config.Limits.MaxFileBytes,
+			MaxTotalBytes: in.Config.Limits.MaxTotalBytes,
+		}
 		if err := integrity.Apply(in.Directory, b, e, p); err != nil {
 			return err
 		}

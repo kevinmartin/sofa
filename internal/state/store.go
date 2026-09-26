@@ -29,10 +29,15 @@ func (m *MemoryStore) Load(ctx context.Context) (Snapshot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.data == nil {
-		return Snapshot{State: Empty()}, nil
+		return Snapshot{
+			State: Empty(),
+		}, nil
 	}
 	s, err := Decode(m.data)
-	return Snapshot{strconv.FormatUint(m.revision, 10), s}, err
+	return Snapshot{
+		Revision: strconv.FormatUint(m.revision, 10),
+		State:    s,
+	}, err
 }
 
 func (m *MemoryStore) CompareAndSwap(ctx context.Context, expected string, state State) error {
@@ -69,7 +74,9 @@ func (g GitStore) Load(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == 1 {
-			return Snapshot{State: Empty()}, nil
+			return Snapshot{
+				State: Empty(),
+			}, nil
 		}
 		return Snapshot{}, fmt.Errorf("read state reference: %w", err)
 	}
@@ -82,7 +89,10 @@ func (g GitStore) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("read state blob: %w", err)
 	}
 	s, err := Decode(data)
-	return Snapshot{revision, s}, err
+	return Snapshot{
+		Revision: revision,
+		State:    s,
+	}, err
 }
 
 func (g GitStore) CompareAndSwap(ctx context.Context, expected string, state State) error {

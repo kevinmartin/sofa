@@ -14,13 +14,38 @@ import (
 )
 
 var testNow = time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-var testOwner = Owner{"42", 1}
+var testOwner = Owner{
+	RunID:      "42",
+	RunAttempt: 1,
+}
 
 func admission() Admission {
-	return Admission{Repository: "owner/consumer", Issue: 7, SpecDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), BaseSHA: strings.Repeat("c", 40), ProjectID: "project-1", ProjectItemID: "item-1", StatusOptionID: "ready-option", StatusUpdatedAt: testNow}
+	return Admission{
+		Repository:      "owner/consumer",
+		Issue:           7,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       "project-1",
+		ProjectItemID:   "item-1",
+		StatusOptionID:  "ready-option",
+		StatusUpdatedAt: testNow,
+	}
 }
-func limits() Limits { return Limits{2, 2, 2, 2700} }
-func engine() Engine { return Engine{Store: &MemoryStore{}, Now: func() time.Time { return testNow }} }
+func limits() Limits {
+	return Limits{
+		ModelCalls:            2,
+		Repairs:               2,
+		InfrastructureRetries: 2,
+		RuntimeSeconds:        2700,
+	}
+}
+func engine() Engine {
+	return Engine{
+		Store: &MemoryStore{},
+		Now:   func() time.Time { return testNow },
+	}
+}
 func admitted(t *testing.T, e Engine) Attempt {
 	t.Helper()
 	a, created, err := e.Admit(context.Background(), admission(), limits())
@@ -37,7 +62,14 @@ func claimed(t *testing.T, e Engine, id string) Fence {
 	}
 	return f
 }
-func proof(owner Owner) RunProof { return RunProof{owner, "completed", "cancelled", testNow} }
+func proof(owner Owner) RunProof {
+	return RunProof{
+		Owner:      owner,
+		Status:     "completed",
+		Conclusion: "cancelled",
+		ObservedAt: testNow,
+	}
+}
 func snapshot(t *testing.T, e Engine, id string) Attempt {
 	t.Helper()
 	s, err := e.Store.Load(context.Background())
@@ -52,7 +84,10 @@ func TestAdmissionCrashAndDedup(t *testing.T) {
 	a := admitted(t, e)
 	// Crash after commit and before dispatch: reconstruct the engine from the
 	// same durable store. Pending intent is sufficient to redeliver, not re-admit.
-	restarted := Engine{Store: e.Store, Now: e.Now}
+	restarted := Engine{
+		Store: e.Store,
+		Now:   e.Now,
+	}
 	if got := snapshot(t, restarted, a.ID); got.Dispatch != "pending" || got.Phase != Pending {
 		t.Fatalf("lost dispatch intent: %+v", got)
 	}
@@ -93,7 +128,10 @@ func TestConcurrentClaimsAndStaleCAS(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := e.Claim(context.Background(), a.ID, Owner{"run", i + 1})
+			_, err := e.Claim(context.Background(), a.ID, Owner{
+				RunID:      "run",
+				RunAttempt: i + 1,
+			})
 			if err == nil {
 				won.Add(1)
 			} else if !errors.Is(err, ErrClaimed) {
@@ -134,15 +172,41 @@ func TestRecoveryRequiresTerminalOwnerAndFencesOldRun(t *testing.T) {
 	e := engine()
 	a := admitted(t, e)
 	old := claimed(t, e, a.ID)
-	if err := e.Charge(context.Background(), old, Counters{ModelCalls: 1, RuntimeSeconds: 40}); err != nil {
+	if err := e.Charge(context.Background(), old, Counters{
+		ModelCalls:     1,
+		RuntimeSeconds: 40,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []RunProof{{testOwner, "in_progress", "", testNow}, {testOwner, "unknown", "", testNow}, {testOwner, "completed", "", testNow}, {testOwner, "completed", "cancelled", testNow.Add(-time.Hour)}} {
+	for _, p := range []RunProof{{
+		Owner:      testOwner,
+		Status:     "in_progress",
+		Conclusion: "",
+		ObservedAt: testNow,
+	}, {
+		Owner:      testOwner,
+		Status:     "unknown",
+		Conclusion: "",
+		ObservedAt: testNow,
+	}, {
+		Owner:      testOwner,
+		Status:     "completed",
+		Conclusion: "",
+		ObservedAt: testNow,
+	}, {
+		Owner:      testOwner,
+		Status:     "completed",
+		Conclusion: "cancelled",
+		ObservedAt: testNow.Add(-time.Hour),
+	}} {
 		if err := e.Recover(context.Background(), a.ID, p); !errors.Is(err, ErrActive) {
 			t.Fatalf("unproven run reclaimed: %v", err)
 		}
 	}
-	wrong := proof(Owner{"42", 2})
+	wrong := proof(Owner{
+		RunID:      "42",
+		RunAttempt: 2,
+	})
 	if err := e.Recover(context.Background(), a.ID, wrong); !errors.Is(err, ErrStale) {
 		t.Fatalf("wrong run attempt: %v", err)
 	}
@@ -152,20 +216,29 @@ func TestRecoveryRequiresTerminalOwnerAndFencesOldRun(t *testing.T) {
 	if err := e.AssertOwner(context.Background(), old); !errors.Is(err, ErrStale) {
 		t.Fatal("stale owner accepted")
 	}
-	fresh, err := e.Claim(context.Background(), a.ID, Owner{"42", 2})
+	fresh, err := e.Claim(context.Background(), a.ID, Owner{
+		RunID:      "42",
+		RunAttempt: 2,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fresh.Generation <= old.Generation {
 		t.Fatal("generation not fenced")
 	}
-	if err := e.Charge(context.Background(), old, Counters{ModelCalls: 1}); !errors.Is(err, ErrStale) {
+	if err := e.Charge(context.Background(), old, Counters{
+		ModelCalls: 1,
+	}); !errors.Is(err, ErrStale) {
 		t.Fatalf("old owner charged: %v", err)
 	}
-	if err := e.Charge(context.Background(), fresh, Counters{ModelCalls: 1}); err != nil {
+	if err := e.Charge(context.Background(), fresh, Counters{
+		ModelCalls: 1,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Charge(context.Background(), fresh, Counters{ModelCalls: 1}); !errors.Is(err, ErrLimit) {
+	if err := e.Charge(context.Background(), fresh, Counters{
+		ModelCalls: 1,
+	}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("model limit reset: %v", err)
 	}
 	got := snapshot(t, e, a.ID)
@@ -175,7 +248,10 @@ func TestRecoveryRequiresTerminalOwnerAndFencesOldRun(t *testing.T) {
 	if err := e.Recover(context.Background(), a.ID, proof(fresh.Owner)); err != nil {
 		t.Fatal(err)
 	}
-	fresh, err = e.Claim(context.Background(), a.ID, Owner{"42", 3})
+	fresh, err = e.Claim(context.Background(), a.ID, Owner{
+		RunID:      "42",
+		RunAttempt: 3,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +264,17 @@ func TestCheckpointRecoveryExpiryAndProvenance(t *testing.T) {
 	e := engine()
 	a := admitted(t, e)
 	f := claimed(t, e, a.ID)
-	cp := Checkpoint{Version, Executing, "artifact-1", strings.Repeat("d", 64), strings.Repeat("e", 40), f.Owner, f.Generation, testNow, testNow.Add(time.Hour)}
+	cp := Checkpoint{
+		Version:      Version,
+		Phase:        Executing,
+		ArtifactID:   "artifact-1",
+		Digest:       strings.Repeat("d", 64),
+		CandidateSHA: strings.Repeat("e", 40),
+		Producer:     f.Owner,
+		Generation:   f.Generation,
+		AcceptedAt:   testNow,
+		ExpiresAt:    testNow.Add(time.Hour),
+	}
 	bad := cp
 	bad.Generation++
 	if err := e.SaveCheckpoint(context.Background(), f, bad); !errors.Is(err, ErrInvalid) {
@@ -200,7 +286,10 @@ func TestCheckpointRecoveryExpiryAndProvenance(t *testing.T) {
 	if err := e.Recover(context.Background(), a.ID, proof(f.Owner)); err != nil {
 		t.Fatal(err)
 	}
-	f, err := e.Claim(context.Background(), a.ID, Owner{"42", 2})
+	f, err := e.Claim(context.Background(), a.ID, Owner{
+		RunID:      "42",
+		RunAttempt: 2,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +306,10 @@ func TestCheckpointRecoveryExpiryAndProvenance(t *testing.T) {
 	if snapshot(t, e, a.ID).Checkpoint != nil {
 		t.Fatal("expired artifact remained usable")
 	}
-	if _, err := e.Claim(context.Background(), a.ID, Owner{"42", 3}); err != nil {
+	if _, err := e.Claim(context.Background(), a.ID, Owner{
+		RunID:      "42",
+		RunAttempt: 3,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot(t, e, a.ID).Phase != Executing {
@@ -230,13 +322,26 @@ func TestDiscardUnavailableCheckpointPreservesBudgetAndPublicationGuard(t *testi
 	e := engine()
 	a := admitted(t, e)
 	f := claimed(t, e, a.ID)
-	if err := e.Charge(ctx, f, Counters{ModelCalls: 1, RuntimeSeconds: 40}); err != nil {
+	if err := e.Charge(ctx, f, Counters{
+		ModelCalls:     1,
+		RuntimeSeconds: 40,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Advance(ctx, f, Validating); err != nil {
 		t.Fatal(err)
 	}
-	cp := Checkpoint{Version, Validating, "sofa-verified-candidate-42-1", strings.Repeat("d", 64), strings.Repeat("e", 40), f.Owner, f.Generation, testNow, testNow.Add(time.Hour)}
+	cp := Checkpoint{
+		Version:      Version,
+		Phase:        Validating,
+		ArtifactID:   "sofa-verified-candidate-42-1",
+		Digest:       strings.Repeat("d", 64),
+		CandidateSHA: strings.Repeat("e", 40),
+		Producer:     f.Owner,
+		Generation:   f.Generation,
+		AcceptedAt:   testNow,
+		ExpiresAt:    testNow.Add(time.Hour),
+	}
 	if err := e.SaveCheckpoint(ctx, f, cp); err != nil {
 		t.Fatal(err)
 	}
@@ -261,14 +366,21 @@ func TestDiscardUnavailableCheckpointPreservesBudgetAndPublicationGuard(t *testi
 	if err := e.DiscardUnavailableCheckpoint(ctx, a.ID, cp); !errors.Is(err, ErrConflict) {
 		t.Fatalf("repeated discard accepted: %v", err)
 	}
-	newFence, err := e.Claim(ctx, a.ID, Owner{"43", 1})
+	newFence, err := e.Claim(ctx, a.ID, Owner{
+		RunID:      "43",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Charge(ctx, newFence, Counters{ModelCalls: 1}); err != nil {
+	if err := e.Charge(ctx, newFence, Counters{
+		ModelCalls: 1,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Charge(ctx, newFence, Counters{ModelCalls: 1}); !errors.Is(err, ErrLimit) {
+	if err := e.Charge(ctx, newFence, Counters{
+		ModelCalls: 1,
+	}); !errors.Is(err, ErrLimit) {
 		t.Fatalf("fresh execution reset model budget: %v", err)
 	}
 
@@ -282,7 +394,11 @@ func TestDiscardUnavailableCheckpointPreservesBudgetAndPublicationGuard(t *testi
 	if err := e2.SaveCheckpoint(ctx, f2, cp); err != nil {
 		t.Fatal(err)
 	}
-	if err := e2.BeginPublication(ctx, f2, Publication{Branch: "sofa/issue-7", ExpectedHead: a2.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}); err != nil {
+	if err := e2.BeginPublication(ctx, f2, Publication{
+		Branch:          "sofa/issue-7",
+		ExpectedHead:    a2.Admission.BaseSHA,
+		CandidateDigest: strings.Repeat("d", 64),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e2.Recover(ctx, a2.ID, proof(f2.Owner)); err != nil {
@@ -297,7 +413,11 @@ func TestPublicationCrashAcknowledgementIsIdempotent(t *testing.T) {
 	e := engine()
 	a := admitted(t, e)
 	f := claimed(t, e, a.ID)
-	intent := Publication{Branch: "sofa/issue-7", ExpectedHead: a.Admission.BaseSHA, CandidateDigest: strings.Repeat("e", 64)}
+	intent := Publication{
+		Branch:          "sofa/issue-7",
+		ExpectedHead:    a.Admission.BaseSHA,
+		CandidateDigest: strings.Repeat("e", 64),
+	}
 	if err := e.BeginPublication(context.Background(), f, intent); !errors.Is(err, ErrInvalid) {
 		t.Fatal("publication before validation")
 	}
@@ -311,7 +431,10 @@ func TestPublicationCrashAcknowledgementIsIdempotent(t *testing.T) {
 	if err := e.Recover(context.Background(), a.ID, proof(f.Owner)); err != nil {
 		t.Fatal(err)
 	}
-	f, err := e.Claim(context.Background(), a.ID, Owner{"42", 2})
+	f, err := e.Claim(context.Background(), a.ID, Owner{
+		RunID:      "42",
+		RunAttempt: 2,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +462,10 @@ func TestPublicationCrashAcknowledgementIsIdempotent(t *testing.T) {
 	if err := e.MarkPublished(context.Background(), f, other); !errors.Is(err, ErrConflict) {
 		t.Fatalf("second PR accepted: %v", err)
 	}
-	if _, err := e.Claim(context.Background(), a.ID, Owner{"42", 3}); !errors.Is(err, ErrClaimed) {
+	if _, err := e.Claim(context.Background(), a.ID, Owner{
+		RunID:      "42",
+		RunAttempt: 3,
+	}); !errors.Is(err, ErrClaimed) {
 		t.Fatalf("completed work claimed: %v", err)
 	}
 	if err := e.AssertOwner(context.Background(), f); !errors.Is(err, ErrClaimed) {
@@ -378,7 +504,18 @@ func TestFailureClassificationAndObservations(t *testing.T) {
 	}
 	e := engine()
 	a := admitted(t, e)
-	o := Observation{Version, "event-1", a.ID, "execution", "success", a.Admission.BaseSHA, "artifact:123", 0, 10, testNow}
+	o := Observation{
+		Version:         Version,
+		ID:              "event-1",
+		AttemptID:       a.ID,
+		Stage:           "execution",
+		Outcome:         "success",
+		Revision:        a.Admission.BaseSHA,
+		EvidenceRef:     "artifact:123",
+		ModelCalls:      0,
+		DurationSeconds: 10,
+		RecordedAt:      testNow,
+	}
 	if err := e.Observe(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
@@ -417,8 +554,13 @@ func TestGitStoreOrphanCASAndNoHooks(t *testing.T) {
 			t.Setenv("GIT_CONFIG_COUNT", "1")
 			t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
 			t.Setenv("GIT_CONFIG_VALUE_0", filepath.Join(gitDir, "hooks"))
-			s := GitStore{dir}
-			e := Engine{Store: s, Now: func() time.Time { return testNow }}
+			s := GitStore{
+				Directory: dir,
+			}
+			e := Engine{
+				Store: s,
+				Now:   func() time.Time { return testNow },
+			}
 			a := admitted(t, e)
 			first, err := s.Load(context.Background())
 			if err != nil {
@@ -464,7 +606,12 @@ func TestGitStoreConcurrentClaims(t *testing.T) {
 	if b, err := exec.Command("git", "init", "-q", "--bare", dir).CombinedOutput(); err != nil {
 		t.Fatalf("init: %s %v", b, err)
 	}
-	e := Engine{Store: GitStore{dir}, Now: func() time.Time { return testNow }}
+	e := Engine{
+		Store: GitStore{
+			Directory: dir,
+		},
+		Now: func() time.Time { return testNow },
+	}
 	a := admitted(t, e)
 	var winners atomic.Int32
 	var wg sync.WaitGroup
@@ -472,7 +619,10 @@ func TestGitStoreConcurrentClaims(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := e.Claim(context.Background(), a.ID, Owner{"claiming-run", i})
+			_, err := e.Claim(context.Background(), a.ID, Owner{
+				RunID:      "claiming-run",
+				RunAttempt: i,
+			})
 			if err == nil {
 				winners.Add(1)
 			} else if !errors.Is(err, ErrClaimed) {

@@ -12,7 +12,7 @@ import (
 // implicit success() to job conditions that do not contain a status function,
 // so publish must opt out of that implicit check after verify succeeds.
 func TestRecoveredCandidateCanReachPublisher(t *testing.T) {
-	data, err := os.ReadFile("../../.github/workflows/work.yml")
+	data, err := os.ReadFile("../../.github/workflows/work.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestRecoveredCandidateCanReachPublisher(t *testing.T) {
 }
 
 func TestFailedVerificationReachesFailureFinalizer(t *testing.T) {
-	data, err := os.ReadFile("../../.github/workflows/work.yml")
+	data, err := os.ReadFile("../../.github/workflows/work.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,5 +59,50 @@ func TestFailedVerificationReachesFailureFinalizer(t *testing.T) {
 	}
 	if !strings.Contains(finalizer.If, "always()") || !strings.Contains(finalizer.If, "needs.verify.result == 'failure'") {
 		t.Fatal("failed verification cannot reach failure finalizer")
+	}
+}
+
+// A renamed entry point must remain callable from the copyable consumer
+// template. Resolve every local toolkit reference instead of duplicating a
+// filename list that could drift with another rename.
+func TestConsumerReusableWorkflowReferences(t *testing.T) {
+	data, err := os.ReadFile("../../examples/consumer/.github/workflows/sofa.yml.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var caller struct {
+		Jobs map[string]struct {
+			Uses string `yaml:"uses"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &caller); err != nil {
+		t.Fatal(err)
+	}
+	if len(caller.Jobs) == 0 {
+		t.Fatal("consumer workflow has no jobs")
+	}
+	for id, job := range caller.Jobs {
+		const prefix = "kevinmartin/sofa/"
+		if !strings.HasPrefix(job.Uses, prefix) {
+			t.Fatalf("consumer job %s does not call a sofa reusable workflow", id)
+		}
+		path, _, ok := strings.Cut(strings.TrimPrefix(job.Uses, prefix), "@")
+		if !ok || !strings.HasSuffix(path, ".reusable.yml") {
+			t.Fatalf("consumer job %s has no pinned reusable entry point", id)
+		}
+		data, err := os.ReadFile("../../" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workflow struct {
+			Name string         `yaml:"name"`
+			On   map[string]any `yaml:"on"`
+		}
+		if err := yaml.Unmarshal(data, &workflow); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := workflow.On["workflow_call"]; !ok || workflow.Name == "" {
+			t.Fatalf("%s is not a named reusable workflow", path)
+		}
 	}
 }

@@ -20,7 +20,23 @@ func fixture(t *testing.T) (config.Config, Snapshot) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	s := Snapshot{Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_fixture", Number: 1, Title: "Fix greeting", Body: "Return hello for the fixture input.", Open: true, ProjectID: c.ProjectID, ProjectPrivate: true, ProjectItemID: "PVTI_1", CurrentStatus: "Ready", StatusOptionID: "ready-option", StatusUpdatedAt: now.Add(time.Second), BaseSHA: strings.Repeat("a", 40), Complete: true}
+	s := Snapshot{
+		Repository:      c.Repository,
+		RepositoryID:    c.RepositoryID,
+		IssueID:         "I_fixture",
+		Number:          1,
+		Title:           "Fix greeting",
+		Body:            "Return hello for the fixture input.",
+		Open:            true,
+		ProjectID:       c.ProjectID,
+		ProjectPrivate:  true,
+		ProjectItemID:   "PVTI_1",
+		CurrentStatus:   "Ready",
+		StatusOptionID:  "ready-option",
+		StatusUpdatedAt: now.Add(time.Second),
+		BaseSHA:         strings.Repeat("a", 40),
+		Complete:        true,
+	}
 	return c, s
 }
 

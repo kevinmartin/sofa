@@ -14,7 +14,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func configureProcessGroup(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+func configureProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+}
 func killProcessGroup(cmd *exec.Cmd) {
 	if cmd.Process != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -120,7 +124,9 @@ func (c *client) ReadTextFile(ctx context.Context, p acp.ReadTextFileRequest) (a
 	if p.Limit != nil && uint64(start)+uint64(*p.Limit) < uint64(end) {
 		end = start + int(*p.Limit)
 	}
-	return acp.ReadTextFileResponse{Content: strings.Join(lines[start:end], "\n")}, nil
+	return acp.ReadTextFileResponse{
+		Content: strings.Join(lines[start:end], "\n"),
+	}, nil
 }
 func (c *client) WriteTextFile(ctx context.Context, p acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
 	if ctx.Err() != nil || !c.validSession(p.SessionId) || len(p.Content) > 1<<20 {

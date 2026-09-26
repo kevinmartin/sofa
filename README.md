@@ -14,7 +14,8 @@ checks that candidate, then a trusted job revalidates authority and opens or
 finds one draft PR. The run does not merge, mark ready, or deploy code.
 
 Start with the [milestone plan](docs/milestones/01-delivery-slice.md),
-[disposable consumer setup](examples/consumer/README.md), and
+[disposable consumer setup](examples/consumer/README.md),
+[configuration schema and editor setup](docs/configuration.md), and
 [current evidence](docs/milestones/evidence/01-delivery-slice.md). The broader
 architecture and future milestones are in [PLAN.md](PLAN.md) and
 [the milestone index](docs/milestones/README.md).

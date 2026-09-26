@@ -60,8 +60,11 @@ func TestPreflightHelper(t *testing.T) {
 func helperConfig(t *testing.T, mode string) config {
 	t.Helper()
 	return config{
-		command: os.Args[0], args: []string{"-test.run=TestPreflightHelper"},
-		workspace: t.TempDir(), token: "test-secret-" + mode, timeout: 3 * time.Second,
+		command:   os.Args[0],
+		args:      []string{"-test.run=TestPreflightHelper"},
+		workspace: t.TempDir(),
+		token:     "test-secret-" + mode,
+		timeout:   3 * time.Second,
 	}
 }
 
@@ -122,7 +125,9 @@ func TestPreflightWaitIsBoundedWhenDescendantHoldsOutputPipes(t *testing.T) {
 }
 
 func TestStderrCategoryAcrossWrites(t *testing.T) {
-	s := &stderrSummary{classes: make(map[string]bool)}
+	s := &stderrSummary{
+		classes: make(map[string]bool),
+	}
 	_, _ = s.Write([]byte("ERR_DLO"))
 	_, _ = s.Write([]byte("PEN_FAILED"))
 	n, classes := s.snapshot()

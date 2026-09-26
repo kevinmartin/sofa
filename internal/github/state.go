@@ -43,7 +43,9 @@ func (s StateStore) Load(ctx context.Context) (state.Snapshot, error) {
 	}
 	ref, err := s.Client.ref(ctx, s.Repository, "sofa-state")
 	if isNotFound(err) {
-		return state.Snapshot{State: state.Empty()}, nil
+		return state.Snapshot{
+			State: state.Empty(),
+		}, nil
 	}
 	if err != nil {
 		return state.Snapshot{}, err
@@ -60,7 +62,10 @@ func (s StateStore) Load(ctx context.Context) (state.Snapshot, error) {
 	if err != nil {
 		return state.Snapshot{}, err
 	}
-	return state.Snapshot{Revision: ref, State: ledger}, nil
+	return state.Snapshot{
+		Revision: ref,
+		State:    ledger,
+	}, nil
 }
 
 func (s StateStore) blobFromTree(ctx context.Context, treeSHA, path string, maxSize int) ([]byte, error) {
@@ -264,7 +269,12 @@ func (c *Client) RunProof(ctx context.Context, repo string, owner state.Owner) (
 	if run.ID != id || run.RunAttempt != owner.RunAttempt {
 		return state.RunProof{}, errors.New("run attempt identity mismatch")
 	}
-	return state.RunProof{Owner: owner, Status: run.Status, Conclusion: run.Conclusion, ObservedAt: time.Now().UTC()}, nil
+	return state.RunProof{
+		Owner:      owner,
+		Status:     run.Status,
+		Conclusion: run.Conclusion,
+		ObservedAt: time.Now().UTC(),
+	}, nil
 }
 
 // RetainedCandidateAvailable checks the exact artifact name in the producer

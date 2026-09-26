@@ -11,11 +11,32 @@ import (
 
 func fixture(t *testing.T) (Bundle, Expected, Policy) {
 	t.Helper()
-	b := Bundle{Version: Version, Repository: "owner/disposable", AttemptID: "work-1", Generation: 2, BaseSHA: strings.Repeat("a", 40), Files: []File{{Path: "src/main.go", Operation: "update", Mode: RegularMode, BeforeSHA256: Hash([]byte("old")), Content: []byte("new")}}}
+	b := Bundle{
+		Version:    Version,
+		Repository: "owner/disposable",
+		AttemptID:  "work-1",
+		Generation: 2,
+		BaseSHA:    strings.Repeat("a", 40),
+		Files: []File{{
+			Path:         "src/main.go",
+			Operation:    "update",
+			Mode:         RegularMode,
+			BeforeSHA256: Hash([]byte("old")),
+			Content:      []byte("new"),
+		}},
+	}
 	if err := Seal(&b); err != nil {
 		t.Fatal(err)
 	}
-	return b, Expected{Repository: b.Repository, AttemptID: b.AttemptID, Generation: b.Generation, BaseSHA: b.BaseSHA, CandidateDigest: b.CandidateDigest}, Policy{AllowedPaths: []string{"src/"}}
+	return b, Expected{
+			Repository:      b.Repository,
+			AttemptID:       b.AttemptID,
+			Generation:      b.Generation,
+			BaseSHA:         b.BaseSHA,
+			CandidateDigest: b.CandidateDigest,
+		}, Policy{
+			AllowedPaths: []string{"src/"},
+		}
 }
 
 func TestValidateBindsIdentityAndContents(t *testing.T) {
@@ -178,25 +199,38 @@ func TestVerifyBaseRejectsStaleAndNonRegularTreeEntries(t *testing.T) {
 	b, _, _ := fixture(t)
 	lookup := func(name string) (BaseFile, bool, error) {
 		if name == "src" {
-			return BaseFile{Mode: "040000"}, true, nil
+			return BaseFile{
+				Mode: "040000",
+			}, true, nil
 		}
-		return BaseFile{Mode: RegularMode, Content: []byte("old")}, true, nil
+		return BaseFile{
+			Mode:    RegularMode,
+			Content: []byte("old"),
+		}, true, nil
 	}
 	if err := VerifyBase(b, lookup); err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []string{"120000", "160000", "100755"} {
 		if err := VerifyBase(b, func(name string) (BaseFile, bool, error) {
-			return BaseFile{Mode: mode, Content: []byte("old")}, true, nil
+			return BaseFile{
+				Mode:    mode,
+				Content: []byte("old"),
+			}, true, nil
 		}); err == nil {
 			t.Fatal("unsupported base mode accepted")
 		}
 	}
 	if err := VerifyBase(b, func(name string) (BaseFile, bool, error) {
 		if name == "src" {
-			return BaseFile{Mode: "040000"}, true, nil
+			return BaseFile{
+				Mode: "040000",
+			}, true, nil
 		}
-		return BaseFile{Mode: RegularMode, Content: []byte("human change")}, true, nil
+		return BaseFile{
+			Mode:    RegularMode,
+			Content: []byte("human change"),
+		}, true, nil
 	}); err == nil {
 		t.Fatal("human update overwritten")
 	}
@@ -209,7 +243,12 @@ func TestVerifyBaseRejectsStaleAndNonRegularTreeEntries(t *testing.T) {
 
 func TestEvidenceRequiresCurrentCompleteTrustedResults(t *testing.T) {
 	b, _, _ := fixture(t)
-	good := CheckEvidence{Version: Version, Name: "go-test", CandidateDigest: b.CandidateDigest, Passed: true}
+	good := CheckEvidence{
+		Version:         Version,
+		Name:            "go-test",
+		CandidateDigest: b.CandidateDigest,
+		Passed:          true,
+	}
 	if err := ValidateEvidence(b, []CheckEvidence{good}, []string{"go-test"}); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +283,13 @@ func TestApplyChecksAllPreimagesBeforeMutationAndRefusesReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, e, p := fixture(t)
-	b.Files = append(b.Files, File{Path: "src/other.go", Operation: "update", Mode: RegularMode, BeforeSHA256: Hash([]byte("absent")), Content: []byte("change")})
+	b.Files = append(b.Files, File{
+		Path:         "src/other.go",
+		Operation:    "update",
+		Mode:         RegularMode,
+		BeforeSHA256: Hash([]byte("absent")),
+		Content:      []byte("change"),
+	})
 	Seal(&b)
 	e.CandidateDigest = b.CandidateDigest
 	if err := Apply(dir, b, e, p); err == nil {
@@ -313,7 +358,13 @@ func TestChangesAddUpdateDeleteAndApplyWithoutHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := map[string]BaseFile{"src/main.go": {Mode: RegularMode, Content: []byte("updated")}, "src/deep/new.go": {Mode: RegularMode, Content: []byte("added")}}
+	after := map[string]BaseFile{"src/main.go": {
+		Mode:    RegularMode,
+		Content: []byte("updated"),
+	}, "src/deep/new.go": {
+		Mode:    RegularMode,
+		Content: []byte("added"),
+	}}
 	files, err := Changes(before, after)
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +392,11 @@ func TestChangesAddUpdateDeleteAndApplyWithoutHooks(t *testing.T) {
 
 func TestDigestCanonicalOrderAndExactEmptyFile(t *testing.T) {
 	b, e, p := fixture(t)
-	b.Files = append(b.Files, File{Path: "src/empty.go", Operation: "add", Mode: RegularMode})
+	b.Files = append(b.Files, File{
+		Path:      "src/empty.go",
+		Operation: "add",
+		Mode:      RegularMode,
+	})
 	Seal(&b)
 	e.CandidateDigest = b.CandidateDigest
 	if err := Validate(b, e, p); err != nil {

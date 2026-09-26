@@ -1,15 +1,26 @@
 package fixture
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestGreeting(t *testing.T) {
 	tests := []struct {
 		name string
 		want string
 	}{
-		{"Ada", "Hello, Ada"},
-		{"  Ada  ", "Hello, Ada"},
-		{" ", "Hello, friend"},
+		{
+			name: "Ada",
+			want: "Hello, Ada",
+		},
+		{
+			name: "  Ada  ",
+			want: "Hello, Ada",
+		},
+		{
+			name: " ",
+			want: "Hello, friend",
+		},
 	}
 	for _, test := range tests {
 		if got := Greeting(test.name); got != test.want {

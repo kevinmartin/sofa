@@ -1,4 +1,8 @@
-name: sofa work
+# Consumer entry point after reconcile.reusable.yml emits dispatch=true. Pin
+# both reusable workflows and toolkit_sha to the same reviewed toolkit commit.
+# Jobs form separate trust boundaries: the worker proposes data, verification
+# runs consumer checks without secrets, and only the publisher can create a PR.
+name: Sofa / Reusable candidate execution and publication
 
 on:
   workflow_call:
@@ -27,6 +31,8 @@ on:
 # fetches only the prior run/attempt identified by the admitted manifest.
 jobs:
   execute:
+    name: Produce bounded candidate in isolated worker
+    # Retained candidates bypass execution and therefore consume no new prompt.
     if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.reconcile_candidate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -86,6 +92,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/sofa-cli"
           go build -trimpath -o "$RUNNER_TEMP/sofa-cli/sofa" ./cmd/sofa
+      # Verify the exact package before mounting it read-only in the worker.
+      # The package entrypoint is used because the standalone binary failed the
+      # hosted container's zero-prompt ACP initialization probe.
       - name: Fetch pinned Copilot ACP package
         shell: bash
         run: |
@@ -96,6 +105,10 @@ jobs:
           echo '53284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112  '"$RUNNER_TEMP/github-copilot-linux-x64.tgz" | sha256sum --check --status
           tar -xzf "$RUNNER_TEMP/github-copilot-linux-x64.tgz" -C "$RUNNER_TEMP/copilot-package"
           test -f "$RUNNER_TEMP/copilot-package/package/index.js"
+      # Only the model token enters this container. The consumer checkout and
+      # candidate directory are writable; toolkit, harness, and manifest are not.
+      # Harness-native tools can edit the checkout, so candidate path/size policy
+      # is enforced again by the separate verifier and publisher.
       - name: Run isolated candidate worker
         shell: bash
         env:
@@ -139,6 +152,9 @@ jobs:
           retention-days: 1
 
   finalize-failure:
+    name: Record sanitized execution or verification failure
+    # Wait for both stages, including an intentional execution skip on recovery.
+    # Only bounded failure categories enter the ledger, never raw model output.
     needs: [execute, verify]
     if: always() && (needs.execute.result == 'failure' || needs.verify.result == 'failure')
     runs-on: ubuntu-24.04
@@ -165,6 +181,9 @@ jobs:
         with:
           name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: failure
+      # A runner/download/setup failure may precede command-level diagnostics.
+      # Preserve a verification diagnosis first, then an execution diagnosis;
+      # otherwise record a fenced infrastructure failure for bounded recovery.
       - name: Build bounded infrastructure fallback
         shell: bash
         run: |
@@ -221,6 +240,9 @@ jobs:
             --failure failure/failure.json
 
   verify:
+    name: Verify exact candidate with secretless consumer checks
+    # Recovery fetches only the producer recorded in the admitted manifest and
+    # rechecks the retained bytes under the current fence, without another model.
     needs: execute
     if: always() && (needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))
     runs-on: ubuntu-24.04
@@ -290,6 +312,9 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: go build -trimpath -o ../sofa ./cmd/sofa
+      # The trusted verifier checks the admitted base and candidate scope before
+      # executing configured checks. It gives the check subprocess a secretless
+      # environment and binds passing evidence to the exact candidate digest.
       - name: Verify candidate and run configured checks without secrets
         shell: bash
         run: |
@@ -323,6 +348,9 @@ jobs:
           retention-days: 1
 
   publish:
+    name: Revalidate authority and publish one draft pull request
+    # This job reads candidate data but never executes candidate code. It alone
+    # receives the publisher credential for fenced ledger, branch, and PR writes.
     needs: verify
     # A recovered candidate skips execute. Explicit always() prevents GitHub's
     # implicit success() from treating that intentional skip as a failed chain.
@@ -384,6 +412,8 @@ jobs:
         run: |
           test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
           test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
+      # Revalidate issue content, Project Ready revision, and ledger ownership
+      # immediately before publication; reconcile an existing intent/PR on retry.
       - name: Revalidate live authority and publish one draft PR
         shell: bash
         env:

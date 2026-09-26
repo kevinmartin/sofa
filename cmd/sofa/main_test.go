@@ -40,9 +40,35 @@ func testManifest(t *testing.T) (config.Config, Manifest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := admission.Grant{Version: 1, Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_123", IssueNumber: 7, ProjectID: c.ProjectID, OwnerID: c.OwnerID, SpecDigest: specDigest, ConfigDigest: configDigest, BaseSHA: strings.Repeat("a", 40), ProjectItemID: "PVTI_123", StatusOptionID: "ready-option", StatusUpdatedAt: time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)}
+	g := admission.Grant{
+		Version:         1,
+		Repository:      c.Repository,
+		RepositoryID:    c.RepositoryID,
+		IssueID:         "I_123",
+		IssueNumber:     7,
+		ProjectID:       c.ProjectID,
+		OwnerID:         c.OwnerID,
+		SpecDigest:      specDigest,
+		ConfigDigest:    configDigest,
+		BaseSHA:         strings.Repeat("a", 40),
+		ProjectItemID:   "PVTI_123",
+		StatusOptionID:  "ready-option",
+		StatusUpdatedAt: time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC),
+	}
 	a := ledgerAdmission(g)
-	m := Manifest{Version: 1, Grant: g, Fence: state.Fence{AttemptID: state.AttemptID(a), Generation: 1, Owner: state.Owner{RunID: "1234", RunAttempt: 1}}, CanonicalSpec: spec}
+	m := Manifest{
+		Version: 1,
+		Grant:   g,
+		Fence: state.Fence{
+			AttemptID:  state.AttemptID(a),
+			Generation: 1,
+			Owner: state.Owner{
+				RunID:      "1234",
+				RunAttempt: 1,
+			},
+		},
+		CanonicalSpec: spec,
+	}
 	return c, m
 }
 
@@ -81,9 +107,17 @@ func TestLedgerAdmissionNormalizesRepositoryCasing(t *testing.T) {
 func TestRecoveryRequiresPersistedCandidateIdentity(t *testing.T) {
 	_, m := testManifest(t)
 	m.Fence.Generation = 3
-	m.Recovery = &state.Publication{CandidateDigest: strings.Repeat("b", 64)}
-	m.RecoverySource = &state.Owner{RunID: "100", RunAttempt: 1}
-	prior := integrity.Bundle{Generation: 2, CandidateDigest: m.Recovery.CandidateDigest}
+	m.Recovery = &state.Publication{
+		CandidateDigest: strings.Repeat("b", 64),
+	}
+	m.RecoverySource = &state.Owner{
+		RunID:      "100",
+		RunAttempt: 1,
+	}
+	prior := integrity.Bundle{
+		Generation:      2,
+		CandidateDigest: m.Recovery.CandidateDigest,
+	}
 	if got := bundleExpected(m, prior).Generation; got != 2 {
 		t.Fatalf("prior verified generation was lost: %d", got)
 	}
@@ -92,7 +126,10 @@ func TestRecoveryRequiresPersistedCandidateIdentity(t *testing.T) {
 		t.Fatalf("unrelated bundle reused prior generation: %d", got)
 	}
 	m.Recovery = nil
-	m.RecoveryCheckpoint = &state.Checkpoint{Generation: 2, CandidateSHA: strings.Repeat("d", 64)}
+	m.RecoveryCheckpoint = &state.Checkpoint{
+		Generation:   2,
+		CandidateSHA: strings.Repeat("d", 64),
+	}
 	prior.CandidateDigest = m.RecoveryCheckpoint.CandidateSHA
 	if got := bundleExpected(m, prior).Generation; got != 2 {
 		t.Fatalf("checkpoint candidate generation was lost: %d", got)
@@ -124,15 +161,43 @@ func TestFailureClassificationKeepsDeterministicErrorsOutOfRetry(t *testing.T) {
 
 func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
 	_, m := testManifest(t)
-	base := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "candidate-no-change", UsedAgent: true, PromptRequests: 1, Updates: 5, PermissionRequests: 2, PermissionDenials: 1, PermissionExecuteDenials: 1, ToolReads: 1, ToolEdits: 1, ToolExecutes: 1, ToolOthers: 1, ToolFailedUpdates: 1}
+	base := ExecutionFailure{
+		Version:                  2,
+		AttemptID:                m.Fence.AttemptID,
+		Generation:               m.Fence.Generation,
+		Kind:                     "validation",
+		Reason:                   "candidate-no-change",
+		UsedAgent:                true,
+		PromptRequests:           1,
+		Updates:                  5,
+		PermissionRequests:       2,
+		PermissionDenials:        1,
+		PermissionExecuteDenials: 1,
+		ToolReads:                1,
+		ToolEdits:                1,
+		ToolExecutes:             1,
+		ToolOthers:               1,
+		ToolFailedUpdates:        1,
+	}
 	if err := validateExecutionFailure(base, m); err != nil {
 		t.Fatal(err)
 	}
-	verification := ExecutionFailure{Version: 2, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "validation", Reason: "configured-check"}
+	verification := ExecutionFailure{
+		Version:    2,
+		AttemptID:  m.Fence.AttemptID,
+		Generation: m.Fence.Generation,
+		Kind:       "validation",
+		Reason:     "configured-check",
+	}
 	if err := validateExecutionFailure(verification, m); err != nil {
 		t.Fatalf("configured check failure was not finalizable: %v", err)
 	}
-	legacy := ExecutionFailure{Version: 1, AttemptID: m.Fence.AttemptID, Generation: m.Fence.Generation, Kind: "infrastructure"}
+	legacy := ExecutionFailure{
+		Version:    1,
+		AttemptID:  m.Fence.AttemptID,
+		Generation: m.Fence.Generation,
+		Kind:       "infrastructure",
+	}
 	if err := validateExecutionFailure(legacy, m); err != nil {
 		t.Fatal("workflow fallback rejected:", err)
 	}
@@ -184,14 +249,26 @@ func TestExecutionFailureVersionAndTelemetryValidation(t *testing.T) {
 
 func TestFailureObservationsRemainDistinctAcrossRecoveredGenerations(t *testing.T) {
 	_, m := testManifest(t)
-	e := state.Engine{Store: &state.MemoryStore{}}
-	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{ModelCalls: 2, InfrastructureRetries: 2, RuntimeSeconds: 1200}); err != nil {
+	e := state.Engine{
+		Store: &state.MemoryStore{},
+	}
+	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{
+		ModelCalls:            2,
+		InfrastructureRetries: 2,
+		RuntimeSeconds:        1200,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range []struct {
 		generation int64
 		outcome    string
-	}{{1, "infrastructure"}, {2, "quota"}} {
+	}{{
+		generation: 1,
+		outcome:    "infrastructure",
+	}, {
+		generation: 2,
+		outcome:    "quota",
+	}} {
 		scope := fmt.Sprintf("g%d", item.generation)
 		if err := observeOnce(context.Background(), e, m.Fence.AttemptID, "failure-finalizer", item.outcome, m.Grant.BaseSHA, "", scope); err != nil {
 			t.Fatal(err)
@@ -243,11 +320,21 @@ func (s *synchronizedReadStore) Load(ctx context.Context) (state.Snapshot, error
 func TestConcurrentEquivalentObservationsAreIdempotent(t *testing.T) {
 	_, m := testManifest(t)
 	store := &state.MemoryStore{}
-	e := state.Engine{Store: store}
-	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{ModelCalls: 2, InfrastructureRetries: 2, RuntimeSeconds: 1200}); err != nil {
+	e := state.Engine{
+		Store: store,
+	}
+	if _, _, err := e.Admit(context.Background(), ledgerAdmission(m.Grant), state.Limits{
+		ModelCalls:            2,
+		InfrastructureRetries: 2,
+		RuntimeSeconds:        1200,
+	}); err != nil {
 		t.Fatal(err)
 	}
-	e.Store = &synchronizedReadStore{Store: store, remaining: 2, release: make(chan struct{})}
+	e.Store = &synchronizedReadStore{
+		Store:     store,
+		remaining: 2,
+		release:   make(chan struct{}),
+	}
 	results := make(chan error, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
@@ -306,7 +393,20 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	replacement := []byte("package fixture\n\nimport \"strings\"\n\nfunc Greeting(name string) string {\n name = strings.TrimSpace(name)\n if name == \"\" { name = \"friend\" }; return \"Hello, \" + name\n}\n")
-	b := integrity.Bundle{Version: integrity.Version, Repository: m.Grant.Repository, AttemptID: m.Fence.AttemptID, Generation: uint64(m.Fence.Generation), BaseSHA: base, Files: []integrity.File{{Path: "fixture/greeting.go", Operation: "update", Mode: integrity.RegularMode, BeforeSHA256: integrity.Hash(original), Content: replacement}}}
+	b := integrity.Bundle{
+		Version:    integrity.Version,
+		Repository: m.Grant.Repository,
+		AttemptID:  m.Fence.AttemptID,
+		Generation: uint64(m.Fence.Generation),
+		BaseSHA:    base,
+		Files: []integrity.File{{
+			Path:         "fixture/greeting.go",
+			Operation:    "update",
+			Mode:         integrity.RegularMode,
+			BeforeSHA256: integrity.Hash(original),
+			Content:      replacement,
+		}},
+	}
 	if err := integrity.Seal(&b); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +418,7 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 	if err := writeJSON(bundlePath, b); err != nil {
 		t.Fatal(err)
 	}
-	if err := verify(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--bundle", bundlePath, "--out", evidencePath}); err != nil {
+	if err := run(context.Background(), []string{"verify", "--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--bundle", bundlePath, "--out", evidencePath}); err != nil {
 		t.Fatal(err)
 	}
 	var checks []integrity.CheckEvidence
@@ -334,7 +434,11 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 	// A configured check can exit successfully after changing the candidate.
 	// That must not create evidence for the original bundle digest.
 	git("restore", "--", "fixture/greeting.go")
-	c.Checks = []config.Check{{ID: "mutating-check", Argv: []string{"sh", "-c", "printf '\n// changed by check\n' >> fixture/greeting.go"}, TimeoutSeconds: 30}}
+	c.Checks = []config.Check{{
+		ID:             "mutating-check",
+		Argv:           []string{"sh", "-c", "printf '\n// changed by check\n' >> fixture/greeting.go"},
+		TimeoutSeconds: 30,
+	}}
 	configBytes, err := yaml.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +466,7 @@ func TestVerifyAppliesOnlyCandidateAndRunsFixtureCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	mutatedEvidencePath := filepath.Join(transport, "mutated-checks.json")
-	if err := verify(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--bundle", bundlePath, "--out", mutatedEvidencePath}); !errors.Is(err, errExecutionValidation) {
+	if err := run(context.Background(), []string{"verify", "--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--bundle", bundlePath, "--out", mutatedEvidencePath}); !errors.Is(err, errExecutionValidation) {
 		t.Fatalf("mutating check was accepted: %v", err)
 	}
 	var failure ExecutionFailure
@@ -423,7 +527,7 @@ func TestExecuteExactRecipeUsesNoModelCredential(t *testing.T) {
 	if err := writeJSON(manifestPath, m); err != nil {
 		t.Fatal(err)
 	}
-	if err := execute(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); err != nil {
+	if err := run(context.Background(), []string{"execute", "--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); err != nil {
 		t.Fatal(err)
 	}
 	var result struct {
@@ -459,7 +563,7 @@ func TestExecuteExactRecipeUsesNoModelCredential(t *testing.T) {
 	if err := writeJSON(manifestPath, m); err != nil {
 		t.Fatal(err)
 	}
-	if err := execute(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); !errors.Is(err, errExecutionValidation) {
+	if err := run(context.Background(), []string{"execute", "--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); !errors.Is(err, errExecutionValidation) {
 		t.Fatalf("expected bounded no-change failure: %v", err)
 	}
 	var failure ExecutionFailure
@@ -472,7 +576,7 @@ func TestExecuteExactRecipeUsesNoModelCredential(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "fixture", "untracked.go"), []byte("package fixture\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := execute(context.Background(), []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); !errors.Is(err, errExecutionValidation) {
+	if err := run(context.Background(), []string{"execute", "--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", root, "--out", bundlePath}); !errors.Is(err, errExecutionValidation) {
 		t.Fatalf("expected dirty-base failure: %v", err)
 	}
 	if err := readJSON(filepath.Join(transport, "execution-failure.json"), 4096, &failure); err != nil || failure.Reason != "base-checkout" || failure.UsedAgent || failure.PromptRequests != 0 {

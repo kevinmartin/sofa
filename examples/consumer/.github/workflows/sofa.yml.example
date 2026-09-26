@@ -12,31 +12,35 @@ on:
 
 permissions: {}
 
+# Serialize the same issue; admission still checks the persisted attempt fence.
 concurrency:
   group: sofa-${{ github.repository }}-${{ inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
   reconcile:
+    name: Admit or recover approved issue
     if: github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     permissions:
       contents: write
       actions: read
-    uses: kevinmartin/sofa/.github/workflows/reconcile.yml@0000000000000000000000000000000000000000
+    uses: kevinmartin/sofa/.github/workflows/reconcile.reusable.yml@0000000000000000000000000000000000000000
     with:
       issue_number: ${{ fromJSON(inputs.issue_number) }}
       toolkit_sha: 0000000000000000000000000000000000000000
     secrets:
       SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
 
+  # Idle/completed admission stops here without consuming model inference.
   work:
+    name: Execute, verify, and publish draft candidate
     needs: reconcile
     if: needs.reconcile.outputs.dispatch == 'true'
     permissions:
       contents: write
       copilot-requests: write
       actions: read
-    uses: kevinmartin/sofa/.github/workflows/work.yml@0000000000000000000000000000000000000000
+    uses: kevinmartin/sofa/.github/workflows/work.reusable.yml@0000000000000000000000000000000000000000
     with:
       toolkit_sha: 0000000000000000000000000000000000000000
       reconcile_publication: ${{ needs.reconcile.outputs.reconcile_publication == 'true' }}

@@ -20,7 +20,11 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func jsonResponse(status int, value any) *http.Response {
 	b, _ := json.Marshal(value)
-	return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(b)), Header: make(http.Header)}
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(bytes.NewReader(b)),
+		Header:     make(http.Header),
+	}
 }
 
 type publishFixture struct {
@@ -129,9 +133,48 @@ func TestVerifyDraftAcceptsRepositoryCasingButNotChangedURL(t *testing.T) {
 func inputFixture(f *publishFixture) PublishInput {
 	content := []byte("package fixture\n")
 	f.content = content
-	b := integrity.Bundle{Version: 1, Repository: testRepo, AttemptID: strings.Repeat("f", 64), Generation: 1, BaseSHA: testBase, Files: []integrity.File{{Path: "fixture/a.go", Operation: "update", Mode: integrity.RegularMode, BeforeSHA256: integrity.Hash([]byte("old")), Content: content}}}
+	b := integrity.Bundle{
+		Version:    1,
+		Repository: testRepo,
+		AttemptID:  strings.Repeat("f", 64),
+		Generation: 1,
+		BaseSHA:    testBase,
+		Files: []integrity.File{{
+			Path:         "fixture/a.go",
+			Operation:    "update",
+			Mode:         integrity.RegularMode,
+			BeforeSHA256: integrity.Hash([]byte("old")),
+			Content:      content,
+		}},
+	}
 	_ = integrity.Seal(&b)
-	return PublishInput{Bundle: b, Expected: integrity.Expected{Repository: testRepo, AttemptID: b.AttemptID, Generation: 1, BaseSHA: testBase, CandidateDigest: b.CandidateDigest}, Policy: integrity.Policy{AllowedPaths: []string{"fixture/"}, MaxFiles: 2, MaxFileBytes: 2048, MaxTotalBytes: 4096}, Checks: []integrity.CheckEvidence{{Version: 1, Name: "go-test", CandidateDigest: b.CandidateDigest, Passed: true}}, RequiredChecks: []string{"go-test"}, BaseBranch: "main", Title: "Fixture", Body: "Validated fixture", Guard: func(context.Context) error { f.guards++; return nil }}
+	return PublishInput{
+		Bundle: b,
+		Expected: integrity.Expected{
+			Repository:      testRepo,
+			AttemptID:       b.AttemptID,
+			Generation:      1,
+			BaseSHA:         testBase,
+			CandidateDigest: b.CandidateDigest,
+		},
+		Policy: integrity.Policy{
+			AllowedPaths:  []string{"fixture/"},
+			MaxFiles:      2,
+			MaxFileBytes:  2048,
+			MaxTotalBytes: 4096,
+		},
+		Checks: []integrity.CheckEvidence{{
+			Version:         1,
+			Name:            "go-test",
+			CandidateDigest: b.CandidateDigest,
+			Passed:          true,
+		}},
+		RequiredChecks: []string{"go-test"},
+		BaseBranch:     "main",
+		Title:          "Fixture",
+		Body:           "Validated fixture",
+		Guard:          func(context.Context) error { f.guards++; return nil },
+	}
 }
 
 func TestPublishDraftIdempotenceAndRogueTree(t *testing.T) {
@@ -223,7 +266,9 @@ func TestPublishDraftBlocksMissingEvidence(t *testing.T) {
 }
 
 func TestPublishDraftStopsWhenHumanChangesCandidateBranch(t *testing.T) {
-	f := &publishFixture{changeOnCreate: true}
+	f := &publishFixture{
+		changeOnCreate: true,
+	}
 	in := inputFixture(f)
 	c, err := New("fixture-token", roundTripFunc(f.trip))
 	if err != nil {
