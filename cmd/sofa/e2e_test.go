@@ -441,6 +441,85 @@ func TestHostedArtifactPublication(t *testing.T) {
 	}
 }
 
+// TestHostedArtifactPublicationConflict runs from the hosted, secretless
+// candidate publish job. The fake API starts with a human-owned branch at a
+// fixed head. Two deliveries must preserve it without attempting any write.
+func TestHostedArtifactPublicationConflict(t *testing.T) {
+	resultPath := os.Getenv("SOFA_E2E_CONFLICT_RESULT")
+	if resultPath == "" {
+		t.Skip("hosted conflict artifact path is not configured")
+	}
+	c, err := readConfig(os.Getenv("SOFA_E2E_CONFIG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := forbidPrivilegedEnv(c.Profile.SecretEnv, true); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(os.Getenv("SOFA_E2E_MANIFEST"), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := readBundle(os.Getenv("SOFA_E2E_BUNDLE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checks []integrity.CheckEvidence
+	if err := readJSON(os.Getenv("SOFA_E2E_EVIDENCE"), 1<<20, &checks); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Files) != 1 || b.Files[0].Path != "fixture/greeting.go" || b.Files[0].Operation != "update" {
+		t.Fatal("hosted conflict fixture requires one approved greeting update")
+	}
+	expected := bundleExpected(m, b)
+	if err := integrity.Validate(b, expected, bundlePolicy(c)); err != nil {
+		t.Fatal(err)
+	}
+	requiredChecks := make([]string, 0, len(c.Checks))
+	for _, check := range c.Checks {
+		requiredChecks = append(requiredChecks, check.ID)
+	}
+	if err := integrity.ValidateEvidence(b, checks, requiredChecks); err != nil {
+		t.Fatal(err)
+	}
+	baseRoot := os.Getenv("SOFA_E2E_BASE_ROOT")
+	if got := e2eGit(t, baseRoot, "rev-parse", "HEAD"); got != b.BaseSHA || got != m.Grant.BaseSHA {
+		t.Fatal("hosted conflict checkout is not the admitted base")
+	}
+	fixture := &e2ePublisher{repo: c.Repository, baseSHA: b.BaseSHA, original: e2eRead(t, filepath.Join(baseRoot, "fixture/greeting.go")), candidate: b.Files[0].Content, branch: "sofa/" + b.AttemptID[:24], branchExists: true}
+	client, err := github.New("inert-publisher-token", fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := github.PublishInput{Bundle: b, Expected: expected, Policy: bundlePolicy(c), Checks: checks, RequiredChecks: requiredChecks, BaseBranch: "main", Title: "Fixture", Body: "Simulated hosted branch conflict", Guard: func(context.Context) error { return nil }}
+	for i := 0; i < 2; i++ {
+		if _, err := client.PublishDraft(context.Background(), input); err == nil {
+			t.Fatal("unexpected existing branch was accepted")
+		}
+		if !fixture.branchExists || fixture.writes != 0 || fixture.prPosts != 0 {
+			t.Fatalf("unexpected branch changed on delivery %d: writes=%d PR posts=%d", i, fixture.writes, fixture.prPosts)
+		}
+	}
+	const existingHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := writeJSON(resultPath, struct {
+		SchemaVersion    int    `json:"schema_version"`
+		Simulation       string `json:"simulation"`
+		CandidateDigest  string `json:"candidate_digest"`
+		BaseSHA          string `json:"base_sha"`
+		AttemptID        string `json:"attempt_id"`
+		Generation       uint64 `json:"generation"`
+		Branch           string `json:"branch"`
+		ExistingHead     string `json:"existing_head"`
+		HeadAfterReplay  string `json:"head_after_replay"`
+		DeliveryAttempts int    `json:"delivery_attempts"`
+		FakeGitWrites    int    `json:"fake_git_writes"`
+		PRPosts          int    `json:"pr_posts"`
+		ProviderRequests int    `json:"provider_requests"`
+	}{1, "fake-github-transport", b.CandidateDigest, b.BaseSHA, b.AttemptID, b.Generation, fixture.branch, existingHead, existingHead, 2, fixture.writes, fixture.prPosts, fixture.providerRequests}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDeliveryBoundaryMatrix follows one admitted fixture through the real
 // worker, secretless verifier and GitHub publisher boundaries. Only the ACP
 // peer and GitHub transport are fake; the latter records every external write.

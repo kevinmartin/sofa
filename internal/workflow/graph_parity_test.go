@@ -94,7 +94,8 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 		!strings.Contains(string(workData), "${{ secrets.SOFA_PUBLISH_TOKEN }}") ||
 		strings.Contains(string(fakeData), "${{ secrets.") ||
 		!strings.Contains(string(workData), "./sofa publish") ||
-		!strings.Contains(string(fakeData), "TestHostedArtifactPublication") ||
+		!strings.Contains(string(fakeData), "go test -count=1 -run '^TestHostedArtifactPublication$'") ||
+		!strings.Contains(string(fakeData), "go test -count=1 -run '^TestHostedArtifactPublicationConflict$'") ||
 		!strings.Contains(string(fakeData), "--network none") {
 		return fmt.Errorf("an intentional production/fake trust or source difference changed")
 	}
@@ -141,7 +142,8 @@ func TestHostedGraphParityAndBoundaries(t *testing.T) {
 	for _, test := range []struct{ name, old, next string }{
 		{"recovery edge", "needs: verify", "needs: execute"},
 		{"verified payload", "            evidence/checks.json", "            evidence/other.json"},
-		{"secretless simulation", "TestHostedArtifactPublication", "TestRealPublication"},
+		{"secretless simulation", "go test -count=1 -run '^TestHostedArtifactPublication$'", "go test -count=1 -run '^TestRealPublication$'"},
+		{"secretless conflict", "go test -count=1 -run '^TestHostedArtifactPublicationConflict$'", "go test -count=1 -run '^TestRealConflict$'"},
 		{"unexpected fake skip", "needs.verify.result == 'success'", "needs.verify.result == 'success' && false"},
 		{"unexpected denial skip", "inputs.denial_kind == 'completed-redelivery') && !inputs.reconcile_candidate", "inputs.denial_kind == 'completed-redelivery') && !inputs.reconcile_candidate && false"},
 	} {
