@@ -28,12 +28,25 @@ type contractJob struct {
 	With        map[string]string `yaml:"with"`
 	Permissions map[string]string `yaml:"permissions"`
 	Steps       []struct {
+		Name string            `yaml:"name"`
+		Run  string            `yaml:"run"`
 		Uses string            `yaml:"uses"`
 		With map[string]string `yaml:"with"`
 	} `yaml:"steps"`
 }
 
 var toolkitRef = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+const (
+	// Independently verified against the Copilot release metadata and the
+	// AMD64 OCI manifest; see the milestone 01.1 evidence report.
+	copilotArchiveSHA256 = "53284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112"
+	nodeAMD64SHA256      = "b977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3"
+)
+
+var archiveChecksumLine = regexp.MustCompile(`(?m)^[ \t]*echo '([0-9a-f]{64})  '"\$RUNNER_TEMP/github-copilot-linux-x64\.tgz" \| sha256sum --check --status[ \t]*$`)
+var dockerAMD64Line = regexp.MustCompile(`(?m)^[ \t]*docker run --rm --platform linux/amd64[ \t]+\\[ \t]*$`)
+var nodeImagePin = regexp.MustCompile(`(?m)^[ \t]*node:24-bookworm@sha256:([0-9a-f]{64})[ \t]+\\[ \t]*$`)
 
 func parseContractWorkflow(data []byte) (contractWorkflow, error) {
 	var workflow contractWorkflow
@@ -86,8 +99,32 @@ func checkDeliveryContracts(callerData, reconcileData, workData []byte) error {
 	if execute.Permissions["copilot-requests"] != "write" || verify.Permissions["copilot-requests"] != "" || publish.Permissions["copilot-requests"] != "" || verify.Permissions["contents"] != "read" || publish.Permissions["contents"] != "read" {
 		return fmt.Errorf("execution, verification, or publication permission boundary changed")
 	}
-	if !strings.Contains(string(workData), "--platform linux/amd64") || !strings.Contains(string(workData), "github-copilot-1.0.86-linux-x64.tgz") || !strings.Contains(string(workData), "node:24-bookworm@sha256:") {
+	if !strings.Contains(string(workData), "github-copilot-1.0.86-linux-x64.tgz") {
 		return fmt.Errorf("worker package or image architecture pin changed")
+	}
+	var fetchRun, workerRun string
+	for _, step := range execute.Steps {
+		switch step.Name {
+		case "Fetch pinned Copilot ACP package":
+			if fetchRun != "" {
+				return fmt.Errorf("duplicate Copilot package fetch step")
+			}
+			fetchRun = step.Run
+		case "Run isolated candidate worker":
+			if workerRun != "" {
+				return fmt.Errorf("duplicate isolated worker step")
+			}
+			workerRun = step.Run
+		}
+	}
+	checksums := archiveChecksumLine.FindAllStringSubmatch(fetchRun, -1)
+	if len(checksums) != 1 || checksums[0][1] != copilotArchiveSHA256 || strings.Count(fetchRun, "sha256sum --check --status") != 1 {
+		return fmt.Errorf("Copilot archive checksum pin changed")
+	}
+	dockerLines := dockerAMD64Line.FindAllStringIndex(workerRun, -1)
+	images := nodeImagePin.FindAllStringSubmatchIndex(workerRun, -1)
+	if len(dockerLines) != 1 || len(images) != 1 || images[0][0] <= dockerLines[0][1] || workerRun[images[0][2]:images[0][3]] != nodeAMD64SHA256 {
+		return fmt.Errorf("worker AMD64 image digest pin changed")
 	}
 	for _, handoff := range []struct {
 		producer, consumer contractJob
@@ -134,6 +171,10 @@ func TestDeliveryWorkflowContracts(t *testing.T) {
 		{"numeric conversion", "caller", "fromJSON(inputs.issue_number)", "inputs.issue_number"},
 		{"toolkit SHA", "caller", "toolkit_sha: 0000000000000000000000000000000000000000", "toolkit_sha: 1111111111111111111111111111111111111111"},
 		{"image architecture", "work", "--platform linux/amd64", "--platform linux/arm64"},
+		{"commented image architecture", "work", "docker run --rm --platform linux/amd64", "# docker run --rm --platform linux/amd64\n          docker run --rm --platform linux/arm64"},
+		{"Copilot archive digest", "work", copilotArchiveSHA256, "13284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112"},
+		{"worker image digest", "work", nodeAMD64SHA256, "a977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3"},
+		{"commented worker image", "work", "node:24-bookworm@sha256:" + nodeAMD64SHA256, "# node:24-bookworm@sha256:" + nodeAMD64SHA256 + "\n            node:24-bookworm"},
 		{"permission boundary", "work", "      contents: read\n      actions: read # Only used by download-artifact", "      contents: write\n      actions: read # Only used by download-artifact"},
 		{"artifact handoff", "work", "name: sofa-evidence-${{ github.run_id }}-${{ github.run_attempt }}", "name: sofa-other-${{ github.run_id }}-${{ github.run_attempt }}"},
 		{"recovery condition", "work", "if: always() && needs.verify.result == 'success'", "if: needs.verify.result == 'success'"},
