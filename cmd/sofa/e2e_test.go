@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -256,13 +257,23 @@ func TestCancelledTurnCannotPublishOrResetBudget(t *testing.T) {
 	defer cancel()
 	workerRoot := e2eClone(t, root)
 	started := make(chan struct{})
+	var startedOnce sync.Once
 	done := make(chan struct {
 		result worker.Result
 		err    error
 	}, 1)
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				startedOnce.Do(func() { close(started) })
+				done <- struct {
+					result worker.Result
+					err    error
+				}{err: fmt.Errorf("cancelled worker panicked: %v", recovered)}
+			}
+		}()
 		result, err := worker.Execute(turnCtx, worker.Input{Config: c, CanonicalSpec: m.CanonicalSpec, Directory: workerRoot, AttemptID: attempt.ID, Generation: uint64(old.Generation), BaseSHA: baseSHA, ModelToken: "sofa-fake-acp-inert-token", Runner: worker.RunnerFunc(func(ctx context.Context, _ agent.Config, _ string) (agent.Result, error) {
-			close(started)
+			startedOnce.Do(func() { close(started) })
 			<-ctx.Done()
 			return agent.Result{PromptRequests: 1}, ctx.Err()
 		})})

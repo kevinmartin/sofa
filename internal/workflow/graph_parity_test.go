@@ -157,10 +157,18 @@ func TestHostedGraphParityAndBoundaries(t *testing.T) {
 			}
 		})
 	}
-	if err := checkHostedGraphParity(reconcile, []byte(strings.Replace(string(work), "needs.verify.result == 'success'", "needs.verify.result == 'success' && false", 1)), fake); err == nil {
-		t.Fatal("production publication condition accepted an unexpected skip")
-	}
-	if err := checkHostedGraphParity(reconcile, []byte(strings.Replace(string(work), "needs: [execute, verify]", "needs: execute", 1)), fake); err == nil {
-		t.Fatal("production finalizer lost verification dependency")
+	for _, test := range []struct{ name, old, next string }{
+		{"production publication skip", "needs.verify.result == 'success'", "needs.verify.result == 'success' && false"},
+		{"production finalizer dependency", "needs: [execute, verify]", "needs: execute"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := strings.Replace(string(work), test.old, test.next, 1)
+			if mutated == string(work) {
+				t.Fatal("mutation did not alter production workflow")
+			}
+			if err := checkHostedGraphParity(reconcile, []byte(mutated), fake); err == nil {
+				t.Fatal("drifted production graph passed parity check")
+			}
+		})
 	}
 }

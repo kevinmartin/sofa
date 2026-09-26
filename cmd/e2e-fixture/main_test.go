@@ -27,8 +27,16 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 	if err := readJSON(filepath.Join(first, "identity.json"), &before); err != nil {
 		t.Fatal(err)
 	}
-	if before.CandidateSHA != candidate || before.PRBaseSHA != prBase || before.DisposableBaseSHA != base || before.FakeAgent != "fake-acp" || original.Grant.BaseSHA != base {
-		t.Fatalf("fixture identities changed: %+v %+v", before, original.Grant)
+	for _, field := range []struct{ name, got, want string }{
+		{"candidate SHA", before.CandidateSHA, candidate},
+		{"PR base SHA", before.PRBaseSHA, prBase},
+		{"disposable base SHA", before.DisposableBaseSHA, base},
+		{"fake agent", before.FakeAgent, "fake-acp"},
+		{"grant base SHA", original.Grant.BaseSHA, base},
+	} {
+		if field.got != field.want {
+			t.Errorf("%s: got %q, want %q", field.name, field.got, field.want)
+		}
 	}
 	f, err := os.Open(filepath.Join(first, "config.yml"))
 	if err != nil {
@@ -58,8 +66,30 @@ func TestPrepareAndRecoverRetainExactCandidateIdentity(t *testing.T) {
 	if err := readJSON(filepath.Join(second, "identity.json"), &after); err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Fence.AttemptID != original.Fence.AttemptID || recovered.Fence.Generation != 2 || recovered.RecoveryCheckpoint == nil || recovered.RecoveryCheckpoint.CandidateSHA != bundle.CandidateDigest || recovered.RecoverySource == nil || recovered.RecoverySource.RunID != "101" || after.CandidateSHA != candidate || after.PRBaseSHA != prBase || after.Generation != 2 {
-		t.Fatalf("recovery lost attempt, producer, or PR identity: %+v %+v", recovered, after)
+	if recovered.Fence.AttemptID != original.Fence.AttemptID {
+		t.Errorf("recovery attempt ID: got %q, want %q", recovered.Fence.AttemptID, original.Fence.AttemptID)
+	}
+	if recovered.Fence.Generation != 2 {
+		t.Errorf("recovery fence generation: got %d, want 2", recovered.Fence.Generation)
+	}
+	if recovered.RecoveryCheckpoint == nil {
+		t.Error("recovery checkpoint is missing")
+	} else if recovered.RecoveryCheckpoint.CandidateSHA != bundle.CandidateDigest {
+		t.Errorf("recovery checkpoint candidate SHA: got %q, want %q", recovered.RecoveryCheckpoint.CandidateSHA, bundle.CandidateDigest)
+	}
+	if recovered.RecoverySource == nil {
+		t.Error("recovery source is missing")
+	} else if recovered.RecoverySource.RunID != "101" {
+		t.Errorf("recovery source run ID: got %q, want 101", recovered.RecoverySource.RunID)
+	}
+	if after.CandidateSHA != candidate {
+		t.Errorf("recovered candidate SHA: got %q, want %q", after.CandidateSHA, candidate)
+	}
+	if after.PRBaseSHA != prBase {
+		t.Errorf("recovered PR base SHA: got %q, want %q", after.PRBaseSHA, prBase)
+	}
+	if after.Generation != 2 {
+		t.Errorf("recovered identity generation: got %d, want 2", after.Generation)
 	}
 	executionPath, evidencePath, publicationPath, networkPath, reportPath := filepath.Join(root, "execution.json"), filepath.Join(root, "evidence.json"), filepath.Join(root, "publication.json"), filepath.Join(root, "network.json"), filepath.Join(root, "report.json")
 	for _, artifact := range []struct {
