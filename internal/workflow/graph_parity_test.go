@@ -10,7 +10,7 @@ import (
 )
 
 // The hosted fake workflow is a secretless surrogate. Keep its shared scheduler
-// and artifact edges aligned with work.yml, while pinning the differences that
+// and artifact edges aligned with work.reusable.yml, while pinning the differences that
 // prevent this test from being mistaken for a run of the production workflow.
 func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 	reconcile, err := parseContractWorkflow(reconcileData)
@@ -133,8 +133,8 @@ func TestHostedGraphParityAndBoundaries(t *testing.T) {
 		}
 		return data
 	}
-	reconcile := read("../../.github/workflows/reconcile.yml")
-	work := read("../../.github/workflows/work.yml")
+	reconcile := read("../../.github/workflows/reconcile.reusable.yml")
+	work := read("../../.github/workflows/work.reusable.yml")
 	fake := read("../../.github/workflows/e2e-fake.yml")
 	if err := checkHostedGraphParity(reconcile, work, fake); err != nil {
 		t.Fatal(err)

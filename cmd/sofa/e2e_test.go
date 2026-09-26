@@ -208,7 +208,7 @@ func TestFailedVerificationCannotPublish(t *testing.T) {
 	if err := writeJSON(bundlePath, result.Bundle); err != nil {
 		t.Fatal(err)
 	}
-	if err := verify(ctx, []string{"--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", e2eClone(t, root), "--bundle", bundlePath, "--out", evidencePath}); err == nil {
+	if err := run(ctx, []string{"verify", "--config", filepath.Join(root, ".sofa.yml"), "--manifest", manifestPath, "--workspace", e2eClone(t, root), "--bundle", bundlePath, "--out", evidencePath}); err == nil {
 		t.Fatal("failing independent check passed verification")
 	}
 	if _, err := os.Stat(evidencePath); !os.IsNotExist(err) {
@@ -572,7 +572,7 @@ func TestDeliveryBoundaryMatrix(t *testing.T) {
 	if err := writeJSON(bundlePath, result.Bundle); err != nil {
 		t.Fatal(err)
 	}
-	if err := verify(ctx, []string{"--config", filepath.Join(verifyRoot, ".sofa.yml"), "--manifest", manifestPath, "--workspace", verifyRoot, "--bundle", bundlePath, "--out", evidencePath}); err != nil {
+	if err := run(ctx, []string{"verify", "--config", filepath.Join(verifyRoot, ".sofa.yml"), "--manifest", manifestPath, "--workspace", verifyRoot, "--bundle", bundlePath, "--out", evidencePath}); err != nil {
 		t.Fatalf("secretless verification: %v", err)
 	}
 	var checks []integrity.CheckEvidence

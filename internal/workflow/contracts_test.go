@@ -82,9 +82,9 @@ func checkDeliveryContracts(callerData, reconcileData, workData []byte) error {
 		return fmt.Errorf("caller issue number must convert to the numeric reusable input")
 	}
 	refs := []string{
-		strings.TrimPrefix(caller.Jobs["reconcile"].Uses, "kevinmartin/sofa/.github/workflows/reconcile.yml@"),
+		strings.TrimPrefix(caller.Jobs["reconcile"].Uses, "kevinmartin/sofa/.github/workflows/reconcile.reusable.yml@"),
 		caller.Jobs["reconcile"].With["toolkit_sha"],
-		strings.TrimPrefix(caller.Jobs["work"].Uses, "kevinmartin/sofa/.github/workflows/work.yml@"),
+		strings.TrimPrefix(caller.Jobs["work"].Uses, "kevinmartin/sofa/.github/workflows/work.reusable.yml@"),
 		caller.Jobs["work"].With["toolkit_sha"],
 	}
 	for _, ref := range refs {
@@ -152,11 +152,11 @@ func TestDeliveryWorkflowContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconcile, err := os.ReadFile("../../.github/workflows/reconcile.yml")
+	reconcile, err := os.ReadFile("../../.github/workflows/reconcile.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	work, err := os.ReadFile("../../.github/workflows/work.yml")
+	work, err := os.ReadFile("../../.github/workflows/work.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
