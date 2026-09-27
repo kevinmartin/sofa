@@ -53,18 +53,24 @@ type identity struct {
 func writeJSON(path string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
-		return errors.New("cannot encode fixture artifact")
+		return fmt.Errorf("encode fixture artifact %s: %w", filepath.Base(path), err)
 	}
-	return os.WriteFile(path, append(data, '\n'), 0600)
+	if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+		return fmt.Errorf("write fixture artifact %s: %w", filepath.Base(path), err)
+	}
+	return nil
 }
 
 func readJSON(path string, value any) error {
 	data, err := os.ReadFile(path)
-	if err != nil || len(data) > 1<<20 {
-		return errors.New("fixture artifact unavailable or oversized")
+	if err != nil {
+		return fmt.Errorf("read fixture artifact %s: %w", filepath.Base(path), err)
+	}
+	if len(data) > 1<<20 {
+		return fmt.Errorf("fixture artifact %s oversized", filepath.Base(path))
 	}
 	if err := json.Unmarshal(data, value); err != nil {
-		return errors.New("invalid fixture artifact")
+		return fmt.Errorf("decode fixture artifact %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

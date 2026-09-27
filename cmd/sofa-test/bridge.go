@@ -86,23 +86,23 @@ func newGateBridgeCommand() *cobra.Command {
 
 func runGateBridge() error {
 	data, err := os.ReadFile(os.Getenv("GITHUB_EVENT_PATH"))
-	if err == nil {
-		b := bridge{
-			client: &http.Client{
-				Timeout: 15 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			},
-			apiURL:    "https://api.github.com",
-			readToken: os.Getenv("SOFA_GATE_READ_TOKEN"),
-			appID:     os.Getenv("SOFA_GATE_APP_ID"),
-			keyPEM:    os.Getenv("SOFA_GATE_APP_PRIVATE_KEY"),
-			now:       time.Now,
-		}
-		err = b.run(context.Background(), data)
+	if err != nil {
+		return fmt.Errorf("read workflow event: %w", err)
 	}
-	return err
+	b := bridge{
+		client: &http.Client{
+			Timeout: 15 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		apiURL:    "https://api.github.com",
+		readToken: os.Getenv("SOFA_GATE_READ_TOKEN"),
+		appID:     os.Getenv("SOFA_GATE_APP_ID"),
+		keyPEM:    os.Getenv("SOFA_GATE_APP_PRIVATE_KEY"),
+		now:       time.Now,
+	}
+	return b.run(context.Background(), data)
 }
 
 func (b bridge) run(ctx context.Context, raw []byte) error {

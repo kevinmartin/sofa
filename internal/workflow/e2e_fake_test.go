@@ -106,7 +106,9 @@ func checkFakeWorkflowContract(data []byte) error {
 			return fmt.Errorf("controlled publication failure or recovery guard missing %q", required)
 		}
 	}
-	if artifactName(denial, "actions/upload-artifact", "sofa-e2e-denial-") == "" || !strings.Contains(content, "bin/sofa-test deny") || !strings.Contains(content, "--execute-result \"$SOFA_E2E_EXECUTE_RESULT\"") || !strings.Contains(content, "--verify-result \"$SOFA_E2E_VERIFY_RESULT\"") || !strings.Contains(content, "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"") {
+	denialRun, denialStepFound := jobRunStep(denial, "Assert scheduler skips and denied fixture")
+	denialInvocation, denialCommandFound := commandInvocation(denialRun, "bin/sofa-test deny")
+	if artifactName(denial, "actions/upload-artifact", "sofa-e2e-denial-") == "" || !denialStepFound || !denialCommandFound || !strings.Contains(denialInvocation, "--execute-result \"$SOFA_E2E_EXECUTE_RESULT\"") || !strings.Contains(denialInvocation, "--verify-result \"$SOFA_E2E_VERIFY_RESULT\"") || !strings.Contains(denialInvocation, "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"") {
 		return fmt.Errorf("fake denial report or scheduler assertions are missing")
 	}
 	return nil
@@ -120,6 +122,16 @@ func TestFakeHostedWorkflowContract(t *testing.T) {
 	if err := checkFakeWorkflowContract(data); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("denial command outside assertion step", func(t *testing.T) {
+		mutated := strings.Replace(string(data), "bin/sofa-test deny --config", "bin/sofa-test report --config", 1)
+		if mutated == string(data) {
+			t.Fatal("mutation did not alter denial step")
+		}
+		mutated += "\n# bin/sofa-test deny\n"
+		if err := checkFakeWorkflowContract([]byte(mutated)); err == nil {
+			t.Fatal("denial command outside assertion step passed contract")
+		}
+	})
 	for _, test := range []struct{ name, old, next string }{
 		{"network isolation", "--network none", "--network bridge"},
 		{"credential boundary", "permissions: {}", "permissions: {}\n# ${{ secrets.SOFA_PUBLISH_TOKEN }}"},

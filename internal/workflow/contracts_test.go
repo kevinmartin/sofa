@@ -65,6 +65,51 @@ func artifactName(job contractJob, action string, name string) string {
 	return ""
 }
 
+func jobRunStep(job contractJob, name string) (string, bool) {
+	var run string
+	found := false
+	for _, step := range job.Steps {
+		if step.Name == name {
+			if found {
+				return "", false
+			}
+			run, found = step.Run, true
+		}
+	}
+	return run, found
+}
+
+func commandInvocation(run, command string) (string, bool) {
+	lines := strings.Split(run, "\n")
+	var invocation string
+	found := false
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line != command && !strings.HasPrefix(line, command+" ") {
+			continue
+		}
+		if found {
+			return "", false
+		}
+		found = true
+		var parts []string
+		for {
+			continued := strings.HasSuffix(line, "\\")
+			parts = append(parts, strings.TrimSpace(strings.TrimSuffix(line, "\\")))
+			if !continued {
+				break
+			}
+			i++
+			if i >= len(lines) {
+				return "", false
+			}
+			line = strings.TrimSpace(lines[i])
+		}
+		invocation = strings.Join(parts, " ")
+	}
+	return invocation, found
+}
+
 func checkDeliveryContracts(callerData, reconcileData, workData []byte) error {
 	caller, err := parseContractWorkflow(callerData)
 	if err != nil {

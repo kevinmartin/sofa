@@ -84,9 +84,11 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 	}
 
 	// These are intentional differences, not equivalent production coverage.
+	prepareRun, prepareStepFound := jobRunStep(fake.Jobs["execute"], "Prepare synthetic admitted attempt")
+	_, prepareCommandFound := commandInvocation(prepareRun, "bin/sofa-test prepare")
 	if !jobUploadsPath(reconcile.Jobs["admit"], "transport/manifest.json") ||
 		!jobUploadsPath(fake.Jobs["execute"], "transport/manifest.json") ||
-		!strings.Contains(string(fakeData), "bin/sofa-test prepare") ||
+		!prepareStepFound || !prepareCommandFound ||
 		!strings.Contains(work.Jobs["execute"].If, "github.event.repository.default_branch") ||
 		!strings.Contains(fake.Jobs["execute"].If, "refs/heads/sofa-e2e/") ||
 		work.Jobs["execute"].Permissions["copilot-requests"] != "write" ||
@@ -139,6 +141,16 @@ func TestHostedGraphParityAndBoundaries(t *testing.T) {
 	if err := checkHostedGraphParity(reconcile, work, fake); err != nil {
 		t.Fatal(err)
 	}
+	t.Run("prepare command outside execute step", func(t *testing.T) {
+		mutated := strings.Replace(string(fake), "bin/sofa-test prepare --config", "bin/sofa-test recover --config", 1)
+		if mutated == string(fake) {
+			t.Fatal("mutation did not alter prepare step")
+		}
+		mutated += "\n# bin/sofa-test prepare\n"
+		if err := checkHostedGraphParity(reconcile, work, []byte(mutated)); err == nil {
+			t.Fatal("prepare command outside execute step passed parity check")
+		}
+	})
 	for _, test := range []struct{ name, old, next string }{
 		{"recovery edge", "needs: verify", "needs: execute"},
 		{"verified payload", "            evidence/checks.json", "            evidence/other.json"},
