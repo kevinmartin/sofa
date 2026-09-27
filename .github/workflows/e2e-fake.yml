@@ -105,8 +105,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p candidate
-          SOFA_E2E_HOST_ONLY_TOKEN="sofa-e2e-host-$(openssl rand -hex 32)"
-          export SOFA_E2E_HOST_ONLY_TOKEN
+          export SOFA_E2E_HOST_ONLY_TOKEN="sofa-e2e-host-$(openssl rand -hex 32)"
           host_file_sentinel="sofa-e2e-host-file-$(openssl rand -hex 32)"
           host_file="$(mktemp "$RUNNER_TEMP/sofa-e2e-host-only.XXXXXX")"
           chmod 600 "$host_file"

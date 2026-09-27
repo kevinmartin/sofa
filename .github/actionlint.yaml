@@ -4,3 +4,12 @@ paths:
   .github/workflows/work.reusable.yml:
     ignore:
       - 'unknown permission scope "copilot-requests"'
+  # The hosted observer pins this exact command; changing it needs a coordinated
+  # consumer update. SC2155 is style-only and the shell remains behaviorally safe.
+  .github/workflows/e2e-fake.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2155:'
+  # SC2129 only asks for a single redirect around these three output lines.
+  .github/workflows/reconcile.reusable.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2129:'

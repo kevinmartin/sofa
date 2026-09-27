@@ -99,17 +99,13 @@ jobs:
         shell: bash
         run: |
           if [[ -f transport/manifest.json ]] && [[ "$(jq -r '.dispatch' transport/status.json)" == true ]]; then
-            {
-              echo 'dispatch=true'
-              echo "reconcile_publication=$(jq -r '.reconcile_publication // false' transport/status.json)"
-              echo "reconcile_candidate=$(jq -r '.reconcile_candidate // false' transport/status.json)"
-            } >> "$GITHUB_OUTPUT"
+            echo 'dispatch=true' >> "$GITHUB_OUTPUT"
+            echo "reconcile_publication=$(jq -r '.reconcile_publication // false' transport/status.json)" >> "$GITHUB_OUTPUT"
+            echo "reconcile_candidate=$(jq -r '.reconcile_candidate // false' transport/status.json)" >> "$GITHUB_OUTPUT"
           else
-            {
-              echo 'dispatch=false'
-              echo 'reconcile_publication=false'
-              echo 'reconcile_candidate=false'
-            } >> "$GITHUB_OUTPUT"
+            echo 'dispatch=false' >> "$GITHUB_OUTPUT"
+            echo 'reconcile_publication=false' >> "$GITHUB_OUTPUT"
+            echo 'reconcile_candidate=false' >> "$GITHUB_OUTPUT"
           fi
       # Bind transport to this run and attempt so concurrent/retried runs cannot
       # accidentally consume each other's manifest. Artifacts are not authority:
