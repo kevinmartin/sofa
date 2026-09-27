@@ -15,7 +15,7 @@ import (
 
 func buildPeer(t *testing.T, mode string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake-acp")
+	path := filepath.Join(t.TempDir(), "sofa-test")
 	command := exec.Command("go", "build", "-ldflags=-X main.mode="+mode, "-o", path, ".")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build fake peer: %v: %s", err, output)

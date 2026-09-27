@@ -1,4 +1,4 @@
-// fake-acp is a deterministic, test-only ACP peer. It has no provider client.
+// The ACP peer is deterministic and test-only. It has no provider client.
 // Hosted canaries build it from an exact sofa candidate commit and run it only
 // inside the networkless disposable worker with an inert token.
 package main
@@ -91,9 +91,9 @@ func (p *peer) Prompt(ctx context.Context, request acp.PromptRequest) (acp.Promp
 	}
 }
 
-func main() {
-	if len(os.Args) != 3 || os.Args[1] != "--acp" || os.Args[2] != "--stdio" || os.Getenv("GITHUB_TOKEN") != "sofa-fake-acp-inert-token" {
-		os.Exit(2)
+func runFakeACP() error {
+	if os.Getenv("GITHUB_TOKEN") != "sofa-fake-acp-inert-token" {
+		return errors.New("fake ACP requires inert test token")
 	}
 	p := &peer{ready: make(chan struct{})}
 	conn, err := stdio.NewAgentConnection(p, acp.ConnectionOptions{
@@ -102,12 +102,10 @@ func main() {
 		MaxQueuedWrites: 32, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
-		os.Exit(2)
+		return err
 	}
 	p.connection = conn
 	close(p.ready)
 	defer conn.Close()
-	if err := conn.Wait(context.Background()); err != nil {
-		os.Exit(1)
-	}
+	return conn.Wait(context.Background())
 }

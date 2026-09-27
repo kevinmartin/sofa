@@ -1,4 +1,4 @@
-// sofa-gate-bridge only runs from sofa's trusted default-branch workflow_run.
+// The gate bridge only runs from sofa's trusted default-branch workflow_run.
 // Candidate code and workflow artifacts are never loaded in this process.
 package main
 
@@ -18,10 +18,11 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -29,10 +30,8 @@ const (
 	disposableRepository = "kevinmartin/sofa-disposable"
 	disposableWorkflow   = "sofa-gate.yml"
 	disposableRef        = "main"
-	fastWorkflowName     = "sofa PR fast"
+	fastWorkflowName     = "Sofa / PR deterministic checks"
 )
-
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type event struct {
 	Action     string `json:"action"`
@@ -74,7 +73,18 @@ type bridge struct {
 	now       func() time.Time
 }
 
-func main() {
+func newGateBridgeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "gate-bridge",
+		Short: "Dispatch an exact PR pair from a trusted workflow event",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return runGateBridge()
+		},
+	}
+}
+
+func runGateBridge() error {
 	data, err := os.ReadFile(os.Getenv("GITHUB_EVENT_PATH"))
 	if err == nil {
 		b := bridge{
@@ -92,10 +102,7 @@ func main() {
 		}
 		err = b.run(context.Background(), data)
 	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "gate bridge:", err)
-		os.Exit(1)
-	}
+	return err
 }
 
 func (b bridge) run(ctx context.Context, raw []byte) error {

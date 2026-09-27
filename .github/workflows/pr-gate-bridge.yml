@@ -1,11 +1,11 @@
-name: sofa PR gate bridge
+# This privileged default-branch workflow reads PR metadata and dispatches
+# the trusted disposable coordinator after deterministic PR checks complete.
+# It never checks out a PR commit, downloads PR artifacts, or executes PR code.
+name: Sofa / PR hosted gate dispatch
 
-# This privileged workflow exists only on sofa's default branch. It reads
-# GitHub PR metadata and dispatches the trusted disposable coordinator. It
-# never checks out a PR commit, downloads PR artifacts, or executes PR code.
 on:
   workflow_run:
-    workflows: [sofa PR fast]
+    workflows: [Sofa / PR deterministic checks]
     types: [completed]
 
 permissions:
@@ -39,4 +39,4 @@ jobs:
           SOFA_GATE_READ_TOKEN: ${{ github.token }}
           SOFA_GATE_APP_ID: ${{ secrets.SOFA_GATE_APP_ID }}
           SOFA_GATE_APP_PRIVATE_KEY: ${{ secrets.SOFA_GATE_APP_PRIVATE_KEY }}
-        run: go run ./cmd/sofa-gate-bridge
+        run: go run ./cmd/sofa-test gate-bridge

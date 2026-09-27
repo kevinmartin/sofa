@@ -1,4 +1,6 @@
-name: sofa PR fast
+# Run deterministic tests and vetting on the PR merge candidate without
+# credentials. Completion triggers the trusted default-branch gate bridge.
+name: Sofa / PR deterministic checks
 
 on:
   pull_request:

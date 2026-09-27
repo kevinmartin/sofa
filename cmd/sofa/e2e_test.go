@@ -669,8 +669,8 @@ func TestDeliveryBoundaryMatrix(t *testing.T) {
 
 func e2eFakeACP(t *testing.T, mode string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake-acp")
-	build := exec.Command("go", "build", "-ldflags=-X main.mode="+mode, "-o", path, "../../cmd/fake-acp")
+	path := filepath.Join(t.TempDir(), "sofa-test")
+	build := exec.Command("go", "build", "-ldflags=-X main.mode="+mode, "-o", path, "../../cmd/sofa-test")
 	build.Env = append(os.Environ(), "GOCACHE="+filepath.Join(t.TempDir(), "go-cache"))
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fake ACP peer: %v: %s", err, output)

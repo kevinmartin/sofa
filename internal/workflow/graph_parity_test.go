@@ -86,7 +86,7 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 	// These are intentional differences, not equivalent production coverage.
 	if !jobUploadsPath(reconcile.Jobs["admit"], "transport/manifest.json") ||
 		!jobUploadsPath(fake.Jobs["execute"], "transport/manifest.json") ||
-		!strings.Contains(string(fakeData), "bin/e2e-fixture prepare") ||
+		!strings.Contains(string(fakeData), "bin/sofa-test prepare") ||
 		!strings.Contains(work.Jobs["execute"].If, "github.event.repository.default_branch") ||
 		!strings.Contains(fake.Jobs["execute"].If, "refs/heads/sofa-e2e/") ||
 		work.Jobs["execute"].Permissions["copilot-requests"] != "write" ||

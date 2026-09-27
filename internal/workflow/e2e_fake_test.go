@@ -54,7 +54,7 @@ func checkFakeWorkflowContract(data []byte) error {
 			return fmt.Errorf("fake worker receives a host-only credential")
 		}
 	}
-	if !strings.Contains(content, "--network none") || !strings.Contains(content, "SOFA_MODEL_TOKEN=sofa-fake-acp-inert-token") || !strings.Contains(content, "SOFA_COPILOT_PATH=/toolkit/fake-acp") || !strings.Contains(content, "--platform linux/amd64") {
+	if !strings.Contains(content, "--network none") || !strings.Contains(content, "SOFA_MODEL_TOKEN=sofa-fake-acp-inert-token") || !strings.Contains(content, "SOFA_COPILOT_PATH=/toolkit/sofa-test") || !strings.Contains(content, "--platform linux/amd64") {
 		return fmt.Errorf("fake worker isolation or identity changed")
 	}
 	for _, required := range []string{
@@ -106,7 +106,7 @@ func checkFakeWorkflowContract(data []byte) error {
 			return fmt.Errorf("controlled publication failure or recovery guard missing %q", required)
 		}
 	}
-	if artifactName(denial, "actions/upload-artifact", "sofa-e2e-denial-") == "" || !strings.Contains(content, "bin/e2e-fixture deny") || !strings.Contains(content, "--execute-result \"$SOFA_E2E_EXECUTE_RESULT\"") || !strings.Contains(content, "--verify-result \"$SOFA_E2E_VERIFY_RESULT\"") || !strings.Contains(content, "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"") {
+	if artifactName(denial, "actions/upload-artifact", "sofa-e2e-denial-") == "" || !strings.Contains(content, "bin/sofa-test deny") || !strings.Contains(content, "--execute-result \"$SOFA_E2E_EXECUTE_RESULT\"") || !strings.Contains(content, "--verify-result \"$SOFA_E2E_VERIFY_RESULT\"") || !strings.Contains(content, "--publish-result \"$SOFA_E2E_PUBLISH_RESULT\"") {
 		return fmt.Errorf("fake denial report or scheduler assertions are missing")
 	}
 	return nil

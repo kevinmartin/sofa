@@ -10,10 +10,45 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
+
+func TestBridgeListensForFastWorkflowName(t *testing.T) {
+	read := func(name string, out any) {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join("../../.github/workflows", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(data, out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var fast struct {
+		Name string `yaml:"name"`
+	}
+	var bridgeWorkflow struct {
+		On struct {
+			WorkflowRun struct {
+				Workflows []string `yaml:"workflows"`
+			} `yaml:"workflow_run"`
+		} `yaml:"on"`
+	}
+	read("pr-fast.yml", &fast)
+	read("pr-gate-bridge.yml", &bridgeWorkflow)
+	if fast.Name != fastWorkflowName {
+		t.Fatalf("bridge event name %q differs from fast workflow %q", fastWorkflowName, fast.Name)
+	}
+	if len(bridgeWorkflow.On.WorkflowRun.Workflows) != 1 || bridgeWorkflow.On.WorkflowRun.Workflows[0] != fastWorkflowName {
+		t.Fatalf("workflow_run listens for %q, want %q", bridgeWorkflow.On.WorkflowRun.Workflows, fastWorkflowName)
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
