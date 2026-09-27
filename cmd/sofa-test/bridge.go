@@ -78,13 +78,13 @@ func newGateBridgeCommand() *cobra.Command {
 		Use:   "gate-bridge",
 		Short: "Dispatch an exact PR pair from a trusted workflow event",
 		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			return runGateBridge()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runGateBridge(cmd.Context())
 		},
 	}
 }
 
-func runGateBridge() error {
+func runGateBridge(ctx context.Context) error {
 	data, err := os.ReadFile(os.Getenv("GITHUB_EVENT_PATH"))
 	if err != nil {
 		return fmt.Errorf("read workflow event: %w", err)
@@ -102,7 +102,7 @@ func runGateBridge() error {
 		keyPEM:    os.Getenv("SOFA_GATE_APP_PRIVATE_KEY"),
 		now:       time.Now,
 	}
-	return b.run(context.Background(), data)
+	return b.run(ctx, data)
 }
 
 func (b bridge) run(ctx context.Context, raw []byte) error {
