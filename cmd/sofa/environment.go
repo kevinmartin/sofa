@@ -16,7 +16,7 @@ func clientFromEnv(name string) (*github.Client, error) {
 func ownerFromEnv() (state.Owner, error) {
 	attempt, err := strconv.Atoi(os.Getenv("GITHUB_RUN_ATTEMPT"))
 	if err != nil || attempt < 1 || os.Getenv("GITHUB_RUN_ID") == "" {
-		return state.Owner{}, errors.New("Actions run identity unavailable")
+		return state.Owner{}, errors.New("actions run identity unavailable")
 	}
 	return state.Owner{
 		RunID:      os.Getenv("GITHUB_RUN_ID"),
