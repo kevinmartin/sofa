@@ -58,8 +58,7 @@ func checkFakeWorkflowContract(data []byte) error {
 		return fmt.Errorf("fake worker isolation or identity changed")
 	}
 	for _, required := range []string{
-		"SOFA_E2E_HOST_ONLY_TOKEN=\"sofa-e2e-host-$(openssl rand -hex 32)\"",
-		"export SOFA_E2E_HOST_ONLY_TOKEN",
+		"export SOFA_E2E_HOST_ONLY_TOKEN=\"sofa-e2e-host-$(openssl rand -hex 32)\"",
 		"host_file_sentinel=\"sofa-e2e-host-file-$(openssl rand -hex 32)\"",
 		"host_file=\"$(mktemp \"$RUNNER_TEMP/sofa-e2e-host-only.XXXXXX\")\"",
 		"echo \"::add-mask::$SOFA_E2E_HOST_ONLY_TOKEN\"",
