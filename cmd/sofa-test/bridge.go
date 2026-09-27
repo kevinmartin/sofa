@@ -228,7 +228,7 @@ func (b bridge) disposableAppToken(ctx context.Context) (string, error) {
 
 func (b bridge) appJWT() (string, error) {
 	if b.appID == "" || b.keyPEM == "" {
-		return "", errors.New("App credential unavailable")
+		return "", errors.New("app credential unavailable")
 	}
 	if _, err := strconv.ParseInt(b.appID, 10, 64); err != nil {
 		return "", errors.New("invalid App ID")

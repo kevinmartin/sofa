@@ -137,12 +137,12 @@ func (c *Client) projectStatus(ctx context.Context, id, projectID string) (proje
 			return pageInfo{}, err
 		}
 		if data.Node == nil {
-			return pageInfo{}, errors.New("Project items unavailable")
+			return pageInfo{}, errors.New("project items unavailable")
 		}
 		for _, n := range data.Node.ProjectItems.Nodes {
 			if n.Project.ID == projectID && !n.IsArchived {
 				if n.Project.Public == nil {
-					return pageInfo{}, errors.New("Project visibility unavailable")
+					return pageInfo{}, errors.New("project visibility unavailable")
 				}
 				matches++
 				if n.FieldValueByName != nil {

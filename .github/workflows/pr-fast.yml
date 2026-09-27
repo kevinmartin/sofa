@@ -25,7 +25,43 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Check Go formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf 'Go files need gofmt:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Check Go module files
+        run: go mod tidy -diff
+      - name: Install pinned workflow and Go linters
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sofa-linters"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$RUNNER_TEMP/actionlint.tar.gz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            "$RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP/sofa-linters" actionlint
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$RUNNER_TEMP/staticcheck.tar.gz" \
+            https://github.com/dominikh/go-tools/releases/download/2026.2.1/staticcheck_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            91186205a78db3f2d40efb3c102749aef66f85c2204793de7488d163b655aa7c \
+            "$RUNNER_TEMP/staticcheck.tar.gz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/staticcheck.tar.gz" -C "$RUNNER_TEMP/sofa-linters" staticcheck/staticcheck
+          printf '%s\n' "$RUNNER_TEMP/sofa-linters" "$RUNNER_TEMP/sofa-linters/staticcheck" >> "$GITHUB_PATH"
+      - name: Lint GitHub workflows and embedded shell
+        run: |
+          command -v shellcheck
+          actionlint
       - name: Run deterministic regression suite
         run: go test -count=1 ./...
       - name: Vet Go packages
         run: go vet ./...
+      - name: Analyze Go packages with Staticcheck
+        run: staticcheck ./...
