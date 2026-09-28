@@ -155,7 +155,7 @@ func Render(s Spec) (map[string][]byte, error) {
 		return nil, err
 	}
 	files := map[string][]byte{
-		callerPath:                caller,
+		callerPath:               caller,
 		".github/dependabot.yml": dependabot,
 	}
 	if err := validateRendered(s, files); err != nil {
