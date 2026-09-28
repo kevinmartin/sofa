@@ -116,6 +116,11 @@ func (c Client) Reconcile(ctx context.Context, spec Spec, apply bool) (Result, e
 	if err != nil {
 		return result, err
 	}
+	if apply {
+		if err := ValidateActionlint(ctx, desired); err != nil {
+			return result, err
+		}
+	}
 	var repository struct {
 		FullName      string `json:"full_name"`
 		DefaultBranch string `json:"default_branch"`

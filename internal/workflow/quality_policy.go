@@ -21,7 +21,7 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
 	}
 	approvedReusable := map[string]bool{
-		"5e94d8e0776fdcc65022bbe5d7e0f76cfa7ef0ddb4d48636c3ec4b51defe76f5": true,
+		"3d9e4c3d5771481f2cf4a65aabd9893ecb6d1e55a7c53e2f2803cbd3465b8751": true,
 	}
 	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || !approvedReusable[fmt.Sprintf("%x", sha256.Sum256(reusable))] {
 		return errors.New("candidate quality gate digest lacks prior trusted approval")
@@ -39,7 +39,7 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		Permissions map[string]string `yaml:"permissions"`
 		RunsOn      string            `yaml:"runs-on"`
 		If          string            `yaml:"if"`
-		Needs       string            `yaml:"needs"`
+		Needs       any               `yaml:"needs"`
 		Steps       []step            `yaml:"steps"`
 	}
 	type document struct {
@@ -83,48 +83,54 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 	if err != nil {
 		return err
 	}
-	if r.On["workflow_call"] == nil || len(r.On) != 1 || len(r.Jobs) != 1 {
+	if r.On["workflow_call"] == nil || len(r.On) != 1 || len(r.Jobs) != 6 {
 		return errors.New("quality workflow-call contract changed")
 	}
-	checks := r.Jobs["checks"]
-	if checks.RunsOn != "ubuntu-24.04" || checks.If != "" || len(checks.Permissions) != 1 || checks.Permissions["contents"] != "read" {
-		return errors.New("quality job runner or permissions changed")
-	}
-	steps := make(map[string]step, len(checks.Steps))
 	pinnedAction := regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$`)
-	for _, s := range checks.Steps {
-		if s.Name == "" || steps[s.Name].Name != "" {
-			return errors.New("quality steps are missing names or duplicated")
+	steps := make(map[string]step)
+	for id, job := range r.Jobs {
+		if job.RunsOn != "ubuntu-24.04" || (id != "result" && (len(job.Permissions) != 1 || job.Permissions["contents"] != "read")) ||
+			(id == "result" && len(job.Permissions) != 0) {
+			return fmt.Errorf("quality job %q runner or permissions changed", id)
 		}
-		steps[s.Name] = s
-		if s.Uses != "" && !pinnedAction.MatchString(s.Uses) {
-			return fmt.Errorf("quality action %q is not pinned", s.Name)
+		for _, s := range job.Steps {
+			key := id + "/" + s.Name
+			if s.Name == "" || steps[key].Name != "" {
+				return errors.New("quality steps are missing names or duplicated")
+			}
+			steps[key] = s
+			if s.Uses != "" && !pinnedAction.MatchString(s.Uses) {
+				return fmt.Errorf("quality action %q is not pinned", s.Name)
+			}
 		}
 	}
-	if !strings.Contains(steps["Check out candidate without credentials"].Run+string(reusable), "persist-credentials: false") ||
-		steps["Check out candidate without credentials"].Uses == "" {
+	if strings.Count(string(reusable), "persist-credentials: false") != 5 ||
+		steps["select/Check out candidate without credentials"].Uses == "" {
 		return errors.New("quality checkout credentials changed")
 	}
 	for name, command := range map[string]string{
-		"Select and validate quality profiles": "if not selected:",
-		"Check Go formatting and module files": "go mod tidy -diff",
-		"Lint workflows and embedded shell":    "actionlint",
-		"Run Go tests, vet, and Staticcheck":   "go test -count=1 ./...",
-		"Install locked Node dependencies":     "npm) npm ci --ignore-scripts ;;",
-		"Check TypeScript and React":           "for script in format:check lint typecheck test; do",
+		"autodetect/Detect quality profiles":                "if not selected:",
+		"select/Select and validate quality profiles":       "if len(parts) != len(selected) or any(p not in {'go', 'typescript', 'react'} for p in parts):",
+		"go/Check Go formatting and module files":           "go mod tidy -diff",
+		"github-actions/Lint workflows and embedded shell":  "actionlint",
+		"go/Run Go tests, vet, and Staticcheck":             "go test -count=1 ./...",
+		"typescript-react/Install locked Node dependencies": "npm) npm ci --ignore-scripts ;;",
+		"typescript-react/Check TypeScript and React":       "for script in format:check lint typecheck test; do",
+		"result/Require every selected quality job":         "[[ \"$SOFA_SELECT_RESULT\" == success && \"$SOFA_ACTIONS_RESULT\" == success ]]",
 	} {
 		if !commandLine(steps[name].Run, command) {
 			return fmt.Errorf("quality validator %q is missing", name)
 		}
 	}
 	for _, command := range []string{"go vet ./...", "staticcheck ./..."} {
-		if !commandLine(steps["Run Go tests, vet, and Staticcheck"].Run, command) {
+		if !commandLine(steps["go/Run Go tests, vet, and Staticcheck"].Run, command) {
 			return fmt.Errorf("quality validator %q is missing", command)
 		}
 	}
-	if steps["Run Go tests, vet, and Staticcheck"].If != "env.SOFA_GO == 'true'" ||
-		steps["Check TypeScript and React"].If != "env.SOFA_NODE == 'true'" ||
-		steps["Select and validate quality profiles"].If != "" {
+	if r.Jobs["autodetect"].If != "inputs.profiles == '' || inputs.profiles == 'auto'" ||
+		r.Jobs["select"].If != "always()" || r.Jobs["go"].If != "needs.select.outputs.go == 'true'" ||
+		r.Jobs["typescript-react"].If != "needs.select.outputs.node == 'true'" ||
+		r.Jobs["github-actions"].If != "" || r.Jobs["result"].If != "always()" {
 		return errors.New("quality profile execution can be skipped")
 	}
 	return nil

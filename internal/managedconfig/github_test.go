@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,7 +26,18 @@ func consumerSpec(t *testing.T) Spec {
 	return spec
 }
 
+func stubActionlint(t *testing.T) {
+	t.Helper()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "actionlint")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestReconcileReusesExistingConfigPR(t *testing.T) {
+	stubActionlint(t)
 	spec := consumerSpec(t)
 	desired, err := Render(spec)
 	if err != nil {
@@ -66,6 +79,7 @@ func TestReconcileReusesExistingConfigPR(t *testing.T) {
 }
 
 func TestReconcilePlansAndOpensOneScopedPR(t *testing.T) {
+	stubActionlint(t)
 	var writes []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -118,6 +132,7 @@ func TestReconcilePlansAndOpensOneScopedPR(t *testing.T) {
 }
 
 func TestReconcileRefusesUnmanagedFile(t *testing.T) {
+	stubActionlint(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Error("unmanaged file led to a write")
@@ -133,5 +148,13 @@ func TestReconcileRefusesUnmanagedFile(t *testing.T) {
 	client := Client{HTTP: server.Client(), APIURL: server.URL, Token: "scoped-token"}
 	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil {
 		t.Fatal("unmanaged repository file was accepted")
+	}
+}
+
+func TestReconcileApplyRequiresActionlintBeforeGitHub(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	client := Client{HTTP: http.DefaultClient, APIURL: "http://127.0.0.1:1", Token: "scoped-token"}
+	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "actionlint") {
+		t.Fatalf("apply did not fail before GitHub without actionlint: %v", err)
 	}
 }

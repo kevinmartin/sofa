@@ -4,6 +4,7 @@ package managedconfig
 
 import (
 	"bytes"
+	"embed"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"text/template"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -20,6 +22,9 @@ import (
 const Marker = "# Managed by sofa config; edit the source manifest in kevinmartin/sofa.\n"
 
 var repoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+//go:embed templates/*.tmpl
+var templates embed.FS
 
 type Spec struct {
 	Version    int      `yaml:"version"`
@@ -107,39 +112,53 @@ func Render(s Spec) (map[string][]byte, error) {
 	if err := s.Validate(); err != nil {
 		return nil, err
 	}
-	var caller strings.Builder
-	caller.WriteString(Marker)
-	if s.Mode == "self" {
-		caller.WriteString("# This workflow name is consumed by the trusted hosted-gate bridge.\n")
-		caller.WriteString("name: Sofa / PR deterministic checks\n")
+	view := struct {
+		Self                    bool
+		QualityWorkflow         string
+		QualityResultExpression string
+		Profiles                string
+		Ecosystems              []string
+		Day, Time, Timezone     string
+		Limit                   int
+	}{
+		Self: s.Mode == "self", Profiles: strings.Join(s.Profiles, ","),
+		Ecosystems: s.Dependabot.Ecosystems, Day: s.Dependabot.Day,
+		Time: s.Dependabot.Time, Timezone: s.Dependabot.Timezone, Limit: s.Dependabot.Limit,
+		QualityResultExpression: "${{ needs.quality.result }}",
+	}
+	if view.Self {
+		view.QualityWorkflow = "./.github/workflows/quality.reusable.yml"
 	} else {
-		caller.WriteString("name: Sofa / PR quality\n")
+		view.QualityWorkflow = "kevinmartin/sofa/.github/workflows/quality.reusable.yml@v1"
 	}
-	caller.WriteString("\non:\n  pull_request:\n    types: [opened, reopened, synchronize, ready_for_review, edited]\n\npermissions:\n  contents: read\n\njobs:\n")
-	if s.Mode == "self" {
-		caller.WriteString("  quality:\n    permissions:\n      contents: read\n    uses: ./.github/workflows/quality.reusable.yml\n")
-	} else {
-		caller.WriteString("  quality:\n    permissions:\n      contents: read\n    uses: kevinmartin/sofa/.github/workflows/quality.reusable.yml@v1\n")
-	}
-	caller.WriteString("    with:\n      profiles: " + strings.Join(s.Profiles, ",") + "\n")
-	if s.Mode == "self" {
-		caller.WriteString("  # Temporary compatibility check for the existing branch-protection rule.\n")
-		caller.WriteString("  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
-	}
-	var dependabot strings.Builder
-	dependabot.WriteString(Marker + "version: 2\nupdates:\n")
-	for index, ecosystem := range s.Dependabot.Ecosystems {
-		fmt.Fprintf(&dependabot, "  - package-ecosystem: %s\n    directory: /\n    schedule:\n      interval: weekly\n      day: %s\n      time: %q\n      timezone: %s\n    open-pull-requests-limit: %d\n    groups:\n      routine:\n        applies-to: version-updates\n        patterns:\n          - \"*\"\n", ecosystem, s.Dependabot.Day, s.Dependabot.Time, s.Dependabot.Timezone, s.Dependabot.Limit)
-		dependabot.WriteString("        update-types:\n          - minor\n          - patch\n")
-		if index != len(s.Dependabot.Ecosystems)-1 {
-			dependabot.WriteString("\n")
+	render := func(name string) ([]byte, error) {
+		parsed, err := template.New(filepath.Base(name)).Option("missingkey=error").ParseFS(templates, name)
+		if err != nil {
+			return nil, fmt.Errorf("parse managed template %s: %w", name, err)
 		}
+		var output bytes.Buffer
+		if err := parsed.Execute(&output, view); err != nil {
+			return nil, fmt.Errorf("render managed template %s: %w", name, err)
+		}
+		return output.Bytes(), nil
+	}
+	caller, err := render("templates/caller.yml.tmpl")
+	if err != nil {
+		return nil, err
+	}
+	dependabot, err := render("templates/dependabot.yml.tmpl")
+	if err != nil {
+		return nil, err
 	}
 	callerPath := ".github/workflows/sofa-quality.yml"
 	if s.Mode == "self" {
 		callerPath = ".github/workflows/pr-fast.yml"
 	}
-	return map[string][]byte{callerPath: []byte(caller.String()), ".github/dependabot.yml": []byte(dependabot.String())}, nil
+	files := map[string][]byte{callerPath: caller, ".github/dependabot.yml": dependabot}
+	if err := validateRendered(s, files); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // Difference refuses to take ownership of a hand-maintained file. A file

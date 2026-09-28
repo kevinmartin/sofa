@@ -2,7 +2,9 @@ package managedconfig
 
 import (
 	"bytes"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +27,44 @@ func TestSofaOwnConfigurationIsRendered(t *testing.T) {
 		if action, err := Difference(got, want); err != nil || action != "current" {
 			t.Fatalf("current %s: %s %v", path, action, err)
 		}
+	}
+}
+
+func TestRenderedYAMLRejectsDuplicateKeysAndMissingComments(t *testing.T) {
+	var doc map[string]any
+	if err := decodeRendered([]byte(Marker+"version: 2\nversion: 3\n"), &doc); err == nil {
+		t.Fatal("duplicate rendered YAML key accepted")
+	}
+	if err := decodeRendered([]byte("version: 2\n"), &doc); err == nil {
+		t.Fatal("unmarked generated configuration accepted")
+	}
+}
+
+func TestActionlintRenderedCallers(t *testing.T) {
+	if _, err := exec.LookPath("actionlint"); err != nil {
+		t.Skip("actionlint executable unavailable; hosted Actions job runs this test")
+	}
+	spec, err := Load("../../managed-repos", "kevinmartin/sofa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"self", "consumer"} {
+		t.Run(mode, func(t *testing.T) {
+			candidate := spec
+			if mode == "consumer" {
+				candidate.Mode = "consumer"
+				candidate.Repository = "kevinmartin/example"
+				candidate.Profiles = []string{"typescript", "react"}
+				candidate.Dependabot.Ecosystems = []string{"npm", "github-actions"}
+			}
+			files, err := Render(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateActionlint(context.Background(), files); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

@@ -64,14 +64,19 @@ func TestQualityProfileSelection(t *testing.T) {
 	if err := yaml.Unmarshal(data, &workflow); err != nil {
 		t.Fatal(err)
 	}
-	var selectScript string
-	for _, step := range workflow.Jobs["checks"].Steps {
+	var selectScript, detectScript string
+	for _, step := range workflow.Jobs["select"].Steps {
 		if step.Name == "Select and validate quality profiles" {
 			selectScript = step.Run
 		}
 	}
-	if selectScript == "" {
-		t.Fatal("profile selector missing")
+	for _, step := range workflow.Jobs["autodetect"].Steps {
+		if step.Name == "Detect quality profiles" {
+			detectScript = step.Run
+		}
+	}
+	if selectScript == "" || detectScript == "" {
+		t.Fatal("profile detection or selector missing")
 	}
 	for _, scenario := range []struct {
 		name, profiles string
@@ -79,12 +84,12 @@ func TestQualityProfileSelection(t *testing.T) {
 		wantSuccess    bool
 		wantEnv        string
 	}{
-		{"Go required", "go", map[string]string{"go.mod": "module example.com/a\n"}, true, "SOFA_GO=true"},
+		{"Go required", "go", map[string]string{"go.mod": "module example.com/a\n"}, true, "go=true"},
 		{"missing Go manifest", "go", nil, false, ""},
 		{"React detected", "auto", map[string]string{
 			"package.json":      `{"dependencies":{"react":"18.0.0"},"scripts":{"format:check":"true","lint":"true","typecheck":"true","test":"true","build":"true"}}`,
 			"package-lock.json": "{}", "tsconfig.json": "{}",
-		}, true, "SOFA_REACT=true"},
+		}, true, "react=true"},
 		{"React without build", "react", map[string]string{
 			"package.json":      `{"dependencies":{"react":"18.0.0"},"scripts":{"format:check":"true","lint":"true","typecheck":"true","test":"true"}}`,
 			"package-lock.json": "{}", "tsconfig.json": "{}",
@@ -102,18 +107,41 @@ func TestQualityProfileSelection(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			envFile := filepath.Join(dir, "github-env")
+			outputFile := filepath.Join(dir, "github-output")
+			detected, detectionResult := "", "skipped"
+			if scenario.profiles == "auto" {
+				cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", detectScript)
+				cmd.Dir = dir
+				cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+outputFile)
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					if scenario.wantSuccess {
+						t.Fatalf("detection failed: %s: %v", output, err)
+					}
+					return
+				}
+				detectionResult = "success"
+				data, err := os.ReadFile(outputFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				detected = strings.TrimPrefix(strings.TrimSpace(string(data)), "profiles=")
+			}
+			if err := os.WriteFile(outputFile, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
 			cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", selectScript)
 			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "SOFA_PROFILES="+scenario.profiles, "GITHUB_ENV="+envFile)
+			cmd.Env = append(os.Environ(), "SOFA_PROFILES="+scenario.profiles, "DETECTED_PROFILES="+detected,
+				"AUTODETECT_RESULT="+detectionResult, "GITHUB_OUTPUT="+outputFile)
 			output, err := cmd.CombinedOutput()
 			if (err == nil) != scenario.wantSuccess {
 				t.Fatalf("selector outcome err=%v output=%s", err, output)
 			}
 			if scenario.wantSuccess {
-				env, err := os.ReadFile(envFile)
-				if err != nil || !strings.Contains(string(env), scenario.wantEnv) {
-					t.Fatalf("selection env=%s err=%v", env, err)
+				selected, err := os.ReadFile(outputFile)
+				if err != nil || !strings.Contains(string(selected), scenario.wantEnv) {
+					t.Fatalf("selection output=%s err=%v", selected, err)
 				}
 			}
 		})

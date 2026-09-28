@@ -1,0 +1,21 @@
+# Managed by sofa config; edit the source manifest in kevinmartin/sofa.
+version: 2
+updates:
+{{- range .Ecosystems }}
+  - package-ecosystem: {{ . }}
+    directory: /
+    schedule:
+      interval: weekly
+      day: {{ $.Day }}
+      time: "{{ $.Time }}"
+      timezone: {{ $.Timezone }}
+    open-pull-requests-limit: {{ $.Limit }}
+    groups:
+      routine:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+{{ end -}}

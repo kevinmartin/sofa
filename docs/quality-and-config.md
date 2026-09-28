@@ -13,17 +13,23 @@ policy PR that adds the proposed digest to the bridge allowlist **before** the
 gate-changing PR can pass. This prevents a PR from satisfying the structural
 test with inert command text while bypassing the actual checks.
 The current `deterministic` required check is a temporary compatibility job:
-it fails unless the reusable quality job succeeds. This lets the first PR merge
+it fails unless the reusable workflow succeeds. This lets the first PR merge
 under the existing rule after Kevin approves it.
 The bridge publishes `sofa / quality-policy` from the sofa-scoped App on the
 current PR head. Require this status from App `5077388` before retiring the
 old `deterministic` check; a scheduled disposable fallback cannot clear a
-failed policy status. First observe the reusable job's actual check-run name
+failed policy status. First observe the reusable aggregate `quality / result` check-run name
 on a pilot PR and add it as a required Actions check as well. Keep
 `sofa / hosted-e2e` required throughout the migration.
 
-The `profiles` workflow-call input accepts `auto` (the default) or a
-comma-separated list of `go`, `typescript`, and `react`. Auto detects `go.mod`,
+The `profiles` workflow-call input accepts an empty value (the default),
+`auto`, or a comma-separated list of `go`, `typescript`, and `react`. The
+`autodetect` job runs only for empty/`auto` input; `select` validates the
+result or the explicit profiles. Go and TypeScript/React checks then run in
+parallel when selected. GitHub Actions lint runs independently for every
+caller. The always-running `quality / result` job requires every selected
+job and Actions lint to succeed, including when a job is skipped unexpectedly.
+Auto detects `go.mod`,
 `package.json` plus `tsconfig.json`, and React in package dependencies. It fails
 when no profile applies. Explicit profiles fail if their manifests are absent.
 TypeScript requires exactly one npm, pnpm, or Yarn lockfile; pinned
@@ -61,7 +67,12 @@ go run ./cmd/sofa config --repo OWNER/REPO reconcile
 ```
 
 `check` proves that sofa dogfoods its own rendered configuration. `render`
-prints desired path/content pairs for review. `reconcile` is read-only by
+prints desired path/content pairs for review. The caller and Dependabot files
+come from embedded templates; the renderer parses both YAML documents and
+checks their required structure against the manifest. `render` and `check`
+require `actionlint` on `PATH` and lint the generated caller. `reconcile
+--apply` repeats that lint before any GitHub request. Sofa's Actions job lints
+both self and consumer template variants on every PR. `reconcile` is read-only by
 default and reports remote drift. To open or update one PR on the dedicated
 `sofa/config` branch, set `SOFA_CONFIG_TOKEN` to a short-lived GitHub App
 installation token restricted to the enrolled repository and run
