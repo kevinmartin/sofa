@@ -21,7 +21,7 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
 	}
 	approvedReusable := map[string]bool{
-		"3d9e4c3d5771481f2cf4a65aabd9893ecb6d1e55a7c53e2f2803cbd3465b8751": true,
+		"8c96131d44cbcc400945edff57113fd0ac9dd449a6c4db6c2b06c2ac4155ead5": true,
 	}
 	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || !approvedReusable[fmt.Sprintf("%x", sha256.Sum256(reusable))] {
 		return errors.New("candidate quality gate digest lacks prior trusted approval")
@@ -128,8 +128,8 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		}
 	}
 	if r.Jobs["autodetect"].If != "inputs.profiles == '' || inputs.profiles == 'auto'" ||
-		r.Jobs["select"].If != "always()" || r.Jobs["go"].If != "needs.select.outputs.go == 'true'" ||
-		r.Jobs["typescript-react"].If != "needs.select.outputs.node == 'true'" ||
+		r.Jobs["select"].If != "always()" || r.Jobs["go"].If != "always() && needs.select.result == 'success' && needs.select.outputs.go == 'true'" ||
+		r.Jobs["typescript-react"].If != "always() && needs.select.result == 'success' && needs.select.outputs.node == 'true'" ||
 		r.Jobs["github-actions"].If != "" || r.Jobs["result"].If != "always()" {
 		return errors.New("quality profile execution can be skipped")
 	}
