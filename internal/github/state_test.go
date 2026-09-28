@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -190,9 +191,7 @@ func (f *stateGitFixture) trip(r *http.Request) (*http.Response, error) {
 		}
 		files := map[string]string{}
 		if input.BaseTree != "" {
-			for path, sha := range f.trees[input.BaseTree] {
-				files[path] = sha
-			}
+			maps.Copy(files, f.trees[input.BaseTree])
 		}
 		for _, entry := range input.Tree {
 			files[entry.Path] = entry.SHA

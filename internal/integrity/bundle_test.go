@@ -158,7 +158,7 @@ func TestDecodeRejectsAmbiguousAndOversizedJSON(t *testing.T) {
 	if _, err := Decode(bytes.NewReader(data), MaxEncodedBytes); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range [][]byte{append(data, []byte("{}")...), []byte(`{"version":1,"version":2}`), []byte(`{"files":[{"mode":"100644","mode":"120000"}]}`), []byte(`{"unexpected":true}`), []byte(`{"files":[{"content":"%%%"}]}`), []byte(`{"files":`), []byte(`null`)} {
+	for _, bad := range [][]byte{append(data, []byte("{}")...), []byte(`{"version":1,"version":2}`), []byte(`{"files":[{"mode":"100644","mode":"120000"}]}`), []byte(`{"unexpected":true}`), []byte(`{"Version":1}`), []byte("{\"repository\":\"\xff\"}"), []byte(`{"files":[{"content":"%%%"}]}`), []byte(`{"files":`), []byte(`null`)} {
 		decoded, err := Decode(bytes.NewReader(bad), MaxEncodedBytes)
 		// null is structurally valid JSON but the zero-value schema is invalid.
 		if string(bad) == "null" {
@@ -171,6 +171,23 @@ func TestDecodeRejectsAmbiguousAndOversizedJSON(t *testing.T) {
 	}
 	if _, err := Decode(bytes.NewReader(data), int64(len(data)-1)); err == nil {
 		t.Fatal("accepted oversized artifact")
+	}
+}
+
+func TestLegacyCandidateEncodingAndDigest(t *testing.T) {
+	b, _, _ := fixture(t)
+	const wantDigest = "dc3f1dad612a163ee2a2c88166e04e1c770834b54ed8cd349d8210272e9b25c2"
+	const wantJSON = `{"version":1,"repository":"owner/disposable","attempt_id":"work-1","generation":2,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","candidate_digest":"","files":[{"path":"src/main.go","operation":"update","mode":"100644","before_sha256":"cba06b5736faf67e54b07b561eae94395e774c517a7d910a54369e1263ccfbd4","content":"bmV3"}]}`
+	if b.CandidateDigest != wantDigest {
+		t.Fatalf("candidate digest changed: %s", b.CandidateDigest)
+	}
+	b.CandidateDigest = ""
+	encoded, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != wantJSON {
+		t.Fatalf("candidate encoding changed: %s", encoded)
 	}
 }
 

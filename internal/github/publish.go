@@ -399,7 +399,7 @@ type prJSON struct {
 
 func (c *Client) findPR(ctx context.Context, repo, branch, base string) (prJSON, bool, error) {
 	var empty prJSON
-	owner := strings.Split(repo, "/")[0]
+	owner, _, _ := strings.Cut(repo, "/")
 	query := "?state=all&head=" + url.QueryEscape(owner+":"+branch) + "&base=" + url.QueryEscape(base) + "&per_page=100"
 	var prs []prJSON
 	if err := c.Request(ctx, http.MethodGet, "/repos/"+repo+"/pulls"+query, nil, &prs); err != nil {

@@ -418,12 +418,12 @@ func TestConcurrentEquivalentObservationsAreIdempotent(t *testing.T) {
 		release:   make(chan struct{}),
 	}
 	results := make(chan error, 2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
 			results <- observeOnce(context.Background(), e, m.Fence.AttemptID, "admission", "accepted", m.Grant.BaseSHA, "", "")
 		}()
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := <-results; err != nil {
 			t.Fatalf("equivalent observation conflicted: %v", err)
 		}

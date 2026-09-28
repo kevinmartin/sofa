@@ -82,7 +82,7 @@ func (c *Client) Issue(ctx context.Context, policy config.Config, number int) (a
 func paginate(ctx context.Context, fetch func(any) (pageInfo, error)) error {
 	var cursor any
 	seen := map[string]bool{}
-	for page := 0; page < 20; page++ {
+	for range 20 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

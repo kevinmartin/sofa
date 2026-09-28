@@ -18,7 +18,7 @@ import (
 func TestCheckTimeoutStopsDescendant(t *testing.T) {
 	workspace := t.TempDir()
 	checkHome := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 	err := runCheckProcess(ctx, workspace, checkHome, []string{
@@ -34,7 +34,7 @@ func TestSuccessfulCheckStopsBackgroundDescendant(t *testing.T) {
 	workspace := t.TempDir()
 	checkHome := t.TempDir()
 	started := time.Now()
-	err := runCheckProcess(context.Background(), workspace, checkHome, []string{
+	err := runCheckProcess(t.Context(), workspace, checkHome, []string{
 		"sh", "-c", "sh -c 'sleep 1; echo leaked > \"$HOME/marker\"' & echo \"$!\" > \"$HOME/child-pid\"; exit 0",
 	})
 	if err != nil || time.Since(started) > 3*time.Second {

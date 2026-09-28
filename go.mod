@@ -1,6 +1,6 @@
 module github.com/kevinmartin/sofa
 
-go 1.24.0
+go 1.27.1
 
 require (
 	github.com/caelis-labs/acp-go-sdk v1.4.0

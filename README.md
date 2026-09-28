@@ -19,6 +19,8 @@ Start with the [milestone plan](docs/milestones/01-delivery-slice.md),
 [current evidence](docs/milestones/evidence/01-delivery-slice.md). The broader
 architecture and future milestones are in [PLAN.md](PLAN.md) and
 [the milestone index](docs/milestones/README.md).
+The [Go 1.27 upgrade review](docs/go-1.27-upgrade.md) records toolchain and
+testing decisions.
 
 This public repository holds **no Kevin-owned reusable workflow secret**.
 Callers pass their own Project read credential explicitly; the scoped

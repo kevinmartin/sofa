@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"io"
 	"path"
@@ -103,58 +104,10 @@ func Decode(r io.Reader, maxBytes int64) (Bundle, error) {
 	if err != nil || int64(len(data)) > maxBytes {
 		return b, errors.New("candidate artifact exceeds limit or cannot be read")
 	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	if err := uniqueJSON(d); err != nil {
-		return b, errors.New("malformed candidate artifact")
-	}
-	if _, err := d.Token(); err != io.EOF {
-		return b, errors.New("trailing candidate data")
-	}
-	d = json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&b); err != nil {
+	if err := jsonv2.Unmarshal(data, &b, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return Bundle{}, errors.New("malformed candidate artifact")
 	}
 	return b, nil
-}
-
-func uniqueJSON(d *json.Decoder) error {
-	t, err := d.Token()
-	if err != nil {
-		return err
-	}
-	v, ok := t.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch v {
-	case '{':
-		seen := map[string]bool{}
-		for d.More() {
-			key, err := d.Token()
-			if err != nil {
-				return err
-			}
-			k, ok := key.(string)
-			if !ok || seen[k] {
-				return errors.New("duplicate key")
-			}
-			seen[k] = true
-			if err := uniqueJSON(d); err != nil {
-				return err
-			}
-		}
-	case '[':
-		for d.More() {
-			if err := uniqueJSON(d); err != nil {
-				return err
-			}
-		}
-	default:
-		return errors.New("unexpected delimiter")
-	}
-	_, err = d.Token()
-	return err
 }
 
 func Validate(b Bundle, e Expected, p Policy) error {
@@ -272,7 +225,7 @@ func SafePath(name string) error {
 	if len(name) == 0 || len(name) > 240 || !safeChars.MatchString(name) || path.IsAbs(name) || path.Clean(name) != name || name == "." {
 		return errors.New("unsafe candidate path")
 	}
-	for _, component := range strings.Split(strings.ToLower(name), "/") {
+	for component := range strings.SplitSeq(strings.ToLower(name), "/") {
 		if component == ".." || strings.HasSuffix(component, ".") || strings.HasPrefix(component, ".git") || strings.HasPrefix(component, ".sofa") || strings.HasPrefix(component, ".env") {
 			return errors.New("protected or unsafe candidate path")
 		}
@@ -280,7 +233,7 @@ func SafePath(name string) error {
 		case "action.yml", "action.yaml", "agents.md", "claude.md", "copilot-instructions.md", ".claude", ".codex", ".copilot", "sofa.yml", "sofa.yaml", "sofa.json":
 			return errors.New("protected candidate path")
 		}
-		stem := strings.Split(component, ".")[0]
+		stem, _, _ := strings.Cut(component, ".")
 		if stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" || deviceName.MatchString(stem) {
 			return errors.New("reserved candidate path")
 		}
