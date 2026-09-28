@@ -43,6 +43,9 @@ func TestSofaQualityContract(t *testing.T) {
 	if CheckSofaQualityContract([]byte(changed), reusable) == nil {
 		t.Fatal("skipped required job passed")
 	}
+	if CheckSofaQualityContract(caller, append(append([]byte(nil), reusable...), []byte("\n# unapproved gate edit\n")...)) == nil {
+		t.Fatal("unapproved quality workflow revision passed trusted digest")
+	}
 }
 
 func TestQualityProfileSelection(t *testing.T) {
