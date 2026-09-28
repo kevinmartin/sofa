@@ -9,13 +9,19 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/managedconfig"
 	"github.com/spf13/cobra"
 )
 
 func newConfigCommand() *cobra.Command {
-	var repository, manifestDir string
-	cmd := &cobra.Command{Use: "config", Short: "Render and reconcile managed repository files", Args: cobra.NoArgs}
+	var repository string
+	var manifestDir string
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Render and reconcile managed repository files",
+		Args:  cobra.NoArgs,
+	}
 	cmd.PersistentFlags().StringVar(&repository, "repo", "", "Enrolled owner/repository")
 	cmd.PersistentFlags().StringVar(&manifestDir, "manifest-dir", "managed-repos", "Trusted manifest directory")
 	load := func() (managedconfig.Spec, error) {
@@ -25,7 +31,9 @@ func newConfigCommand() *cobra.Command {
 		return managedconfig.Load(manifestDir, repository)
 	}
 	cmd.AddCommand(&cobra.Command{
-		Use: "render", Short: "Print the desired managed files as JSON", Args: cobra.NoArgs,
+		Use:   "render",
+		Short: "Print the desired managed files as JSON",
+		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			spec, err := load()
 			if err != nil {
@@ -47,7 +55,9 @@ func newConfigCommand() *cobra.Command {
 	})
 	var root string
 	check := &cobra.Command{
-		Use: "check", Short: "Verify a local checkout matches its managed files", Args: cobra.NoArgs,
+		Use:   "check",
+		Short: "Verify a local checkout matches its managed files",
+		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			spec, err := load()
 			if err != nil {
@@ -79,13 +89,22 @@ func newConfigCommand() *cobra.Command {
 	cmd.AddCommand(check)
 	var apply bool
 	reconcile := &cobra.Command{
-		Use: "reconcile", Short: "Inspect remote drift or open/update its config PR", Args: cobra.NoArgs,
+		Use:   "reconcile",
+		Short: "Inspect remote drift or open/update its config PR",
+		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			spec, err := load()
 			if err != nil {
 				return err
 			}
-			client := managedconfig.Client{Token: os.Getenv("SOFA_CONFIG_TOKEN")}
+			api := github.NewAnonymous(nil)
+			if token := os.Getenv("SOFA_CONFIG_TOKEN"); token != "" {
+				api, err = github.New(token, nil)
+				if err != nil {
+					return err
+				}
+			}
+			client := managedconfig.Client{GitHub: api}
 			result, err := client.Reconcile(command.Context(), spec, apply)
 			if err != nil {
 				return err

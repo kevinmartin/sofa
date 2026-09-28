@@ -1,10 +1,6 @@
 # Managed by sofa config; edit the source manifest in kevinmartin/sofa.
-{{- if .Self }}
 # This workflow name is consumed by the trusted hosted-gate bridge.
 name: Sofa / PR deterministic checks
-{{- else }}
-name: Sofa / PR quality
-{{- end }}
 
 on:
   pull_request:
@@ -17,10 +13,9 @@ jobs:
   quality:
     permissions:
       contents: read
-    uses: {{ .QualityWorkflow }}
+    uses: ./.github/workflows/quality.reusable.yml
     with:
       profiles: {{ .Profiles }}
-{{- if .Self }}
   # Temporary compatibility check for the existing branch-protection rule.
   deterministic:
     needs: quality
@@ -33,4 +28,3 @@ jobs:
         env:
           SOFA_QUALITY_RESULT: {{ .QualityResultExpression }}
         run: test "$SOFA_QUALITY_RESULT" = success
-{{- end }}

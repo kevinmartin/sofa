@@ -104,7 +104,7 @@ func TestConsumerRenderingKeepsPolicyInSofa(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	caller := string(files[".github/workflows/sofa-quality.yml"])
+	caller := string(files[".github/workflows/sofa.quality.yml"])
 	if !strings.Contains(caller, "quality.reusable.yml@v1") || !strings.Contains(caller, "profiles: typescript,react") || strings.Contains(caller, "secrets:") {
 		t.Fatal("consumer caller does not use the shared secretless quality channel")
 	}

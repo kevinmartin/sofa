@@ -43,6 +43,27 @@ func TestSofaQualityContract(t *testing.T) {
 	if CheckSofaQualityContract([]byte(changed), reusable) == nil {
 		t.Fatal("skipped required job passed")
 	}
+	for _, test := range []struct {
+		name, before, after, want string
+		onCaller                  bool
+	}{
+		{"job continues after failure", "  deterministic:\n", "  deterministic:\n    continue-on-error: true\n", "quality job cannot continue", true},
+		{"step continues after failure", "      - name: Test Go packages\n", "      - name: Test Go packages\n        continue-on-error: true\n", "quality step cannot continue", false},
+		{"tests bypassed before command", "        run: go test -count=1 ./...", "        run: |\n          exit 0\n          go test -count=1 ./...", "go validators must be separate", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidateCaller, candidateReusable := caller, reusable
+			if test.onCaller {
+				candidateCaller = []byte(strings.Replace(string(caller), test.before, test.after, 1))
+			} else {
+				candidateReusable = []byte(strings.Replace(string(reusable), test.before, test.after, 1))
+			}
+			err := CheckSofaQualityContract(candidateCaller, candidateReusable)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
 	if CheckSofaQualityContract(caller, append(append([]byte(nil), reusable...), []byte("\n# unapproved gate edit\n")...)) == nil {
 		t.Fatal("unapproved quality workflow revision passed trusted digest")
 	}

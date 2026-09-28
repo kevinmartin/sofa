@@ -21,26 +21,25 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
 	}
 	approvedReusable := map[string]bool{
-		"8c96131d44cbcc400945edff57113fd0ac9dd449a6c4db6c2b06c2ac4155ead5": true,
-	}
-	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || !approvedReusable[fmt.Sprintf("%x", sha256.Sum256(reusable))] {
-		return errors.New("candidate quality gate digest lacks prior trusted approval")
+		"d22d25aec69761d12d0c1ea977798efa5ca74181b69263bffa8209e905cbd805": true,
 	}
 	type step struct {
-		Name string            `yaml:"name"`
-		Uses string            `yaml:"uses"`
-		If   string            `yaml:"if"`
-		Run  string            `yaml:"run"`
-		Env  map[string]string `yaml:"env"`
+		Name            string            `yaml:"name"`
+		Uses            string            `yaml:"uses"`
+		If              string            `yaml:"if"`
+		Run             string            `yaml:"run"`
+		Env             map[string]string `yaml:"env"`
+		ContinueOnError any               `yaml:"continue-on-error"`
 	}
 	type job struct {
-		Uses        string            `yaml:"uses"`
-		With        map[string]string `yaml:"with"`
-		Permissions map[string]string `yaml:"permissions"`
-		RunsOn      string            `yaml:"runs-on"`
-		If          string            `yaml:"if"`
-		Needs       any               `yaml:"needs"`
-		Steps       []step            `yaml:"steps"`
+		Uses            string            `yaml:"uses"`
+		With            map[string]string `yaml:"with"`
+		Permissions     map[string]string `yaml:"permissions"`
+		RunsOn          string            `yaml:"runs-on"`
+		If              string            `yaml:"if"`
+		Needs           any               `yaml:"needs"`
+		Steps           []step            `yaml:"steps"`
+		ContinueOnError any               `yaml:"continue-on-error"`
 	}
 	type document struct {
 		Name        string            `yaml:"name"`
@@ -58,6 +57,16 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		}
 		if len(d.Permissions) != 1 || d.Permissions["contents"] != "read" {
 			return d, errors.New("quality workflow permissions are not read-only")
+		}
+		for _, job := range d.Jobs {
+			if job.ContinueOnError != nil {
+				return d, errors.New("quality job cannot continue after an error")
+			}
+			for _, step := range job.Steps {
+				if step.ContinueOnError != nil {
+					return d, errors.New("quality step cannot continue after an error")
+				}
+			}
 		}
 		return d, nil
 	}
@@ -113,7 +122,6 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		"select/Select and validate quality profiles":       "if len(parts) != len(selected) or any(p not in {'go', 'typescript', 'react'} for p in parts):",
 		"go/Check Go formatting and module files":           "go mod tidy -diff",
 		"github-actions/Lint workflows and embedded shell":  "actionlint",
-		"go/Run Go tests, vet, and Staticcheck":             "go test -count=1 ./...",
 		"typescript-react/Install locked Node dependencies": "npm) npm ci --ignore-scripts ;;",
 		"typescript-react/Check TypeScript and React":       "for script in format:check lint typecheck test; do",
 		"result/Require every selected quality job":         "[[ \"$SOFA_SELECT_RESULT\" == success && \"$SOFA_ACTIONS_RESULT\" == success ]]",
@@ -122,16 +130,22 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 			return fmt.Errorf("quality validator %q is missing", name)
 		}
 	}
-	for _, command := range []string{"go vet ./...", "staticcheck ./..."} {
-		if !commandLine(steps["go/Run Go tests, vet, and Staticcheck"].Run, command) {
-			return fmt.Errorf("quality validator %q is missing", command)
-		}
+	goSteps := r.Jobs["go"].Steps
+	if len(goSteps) != 7 ||
+		steps["go/Vet Go packages"].Run != "go vet ./..." ||
+		steps["go/Run Staticcheck"].Run != "staticcheck ./..." ||
+		goSteps[len(goSteps)-1].Name != "Test Go packages" ||
+		goSteps[len(goSteps)-1].Run != "go test -count=1 ./..." {
+		return errors.New("go validators must be separate with tests last")
 	}
 	if r.Jobs["autodetect"].If != "inputs.profiles == '' || inputs.profiles == 'auto'" ||
 		r.Jobs["select"].If != "always()" || r.Jobs["go"].If != "always() && needs.select.result == 'success' && needs.select.outputs.go == 'true'" ||
 		r.Jobs["typescript-react"].If != "always() && needs.select.result == 'success' && needs.select.outputs.node == 'true'" ||
 		r.Jobs["github-actions"].If != "" || r.Jobs["result"].If != "always()" {
 		return errors.New("quality profile execution can be skipped")
+	}
+	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || !approvedReusable[fmt.Sprintf("%x", sha256.Sum256(reusable))] {
+		return errors.New("candidate quality gate digest lacks prior trusted approval")
 	}
 	return nil
 }
