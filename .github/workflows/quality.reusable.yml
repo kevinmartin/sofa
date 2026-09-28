@@ -128,7 +128,7 @@ jobs:
 
   go:
     needs: select
-    if: needs.select.outputs.go == 'true'
+    if: always() && needs.select.result == 'success' && needs.select.outputs.go == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -174,7 +174,7 @@ jobs:
 
   typescript-react:
     needs: select
-    if: needs.select.outputs.node == 'true'
+    if: always() && needs.select.result == 'success' && needs.select.outputs.node == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
