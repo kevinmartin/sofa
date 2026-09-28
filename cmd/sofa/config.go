@@ -35,6 +35,9 @@ func newConfigCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := managedconfig.ValidateActionlint(command.Context(), files); err != nil {
+				return err
+			}
 			readable := make(map[string]string, len(files))
 			for path, content := range files {
 				readable[path] = string(content)
@@ -52,6 +55,9 @@ func newConfigCommand() *cobra.Command {
 			}
 			files, err := managedconfig.Render(spec)
 			if err != nil {
+				return err
+			}
+			if err := managedconfig.ValidateActionlint(command.Context(), files); err != nil {
 				return err
 			}
 			paths := make([]string, 0, len(files))

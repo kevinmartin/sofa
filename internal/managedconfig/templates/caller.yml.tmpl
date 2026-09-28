@@ -1,0 +1,36 @@
+# Managed by sofa config; edit the source manifest in kevinmartin/sofa.
+{{- if .Self }}
+# This workflow name is consumed by the trusted hosted-gate bridge.
+name: Sofa / PR deterministic checks
+{{- else }}
+name: Sofa / PR quality
+{{- end }}
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    permissions:
+      contents: read
+    uses: {{ .QualityWorkflow }}
+    with:
+      profiles: {{ .Profiles }}
+{{- if .Self }}
+  # Temporary compatibility check for the existing branch-protection rule.
+  deterministic:
+    needs: quality
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require shared quality gate
+        env:
+          SOFA_QUALITY_RESULT: {{ .QualityResultExpression }}
+        run: test "$SOFA_QUALITY_RESULT" = success
+{{- end }}
