@@ -7,6 +7,11 @@ workflow. The trusted default-branch bridge still listens for the unchanged
 hosted E2E gate. The bridge reads the candidate quality workflows **as data**
 and rejects changes that remove the minimum validators or broaden permissions.
 It never executes the candidate with its App credential.
+The trusted bridge also compares both gate files with preapproved SHA-256
+digests. A proposed change to either gate needs a separate Kevin-reviewed
+policy PR that adds the proposed digest to the bridge allowlist **before** the
+gate-changing PR can pass. This prevents a PR from satisfying the structural
+test with inert command text while bypassing the actual checks.
 The current `deterministic` required check is a temporary compatibility job:
 it fails unless the reusable quality job succeeds. This lets the first PR merge
 under the existing rule after Kevin approves it.

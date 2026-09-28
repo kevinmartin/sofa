@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"regexp"
@@ -13,6 +14,18 @@ import (
 // files fetched from a PR as data. It guards the minimum independent PR gate;
 // a change to this policy itself still requires ordinary owner review.
 func CheckSofaQualityContract(caller, reusable []byte) error {
+	// These digests are part of trusted default-branch code, not read from a PR.
+	// To change a gate, first merge a Kevin-reviewed policy change that adds
+	// its proposed digest; only then can the workflow PR pass this status.
+	approvedCaller := map[string]bool{
+		"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
+	}
+	approvedReusable := map[string]bool{
+		"5e94d8e0776fdcc65022bbe5d7e0f76cfa7ef0ddb4d48636c3ec4b51defe76f5": true,
+	}
+	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || !approvedReusable[fmt.Sprintf("%x", sha256.Sum256(reusable))] {
+		return errors.New("candidate quality gate digest lacks prior trusted approval")
+	}
 	type step struct {
 		Name string            `yaml:"name"`
 		Uses string            `yaml:"uses"`
