@@ -21,7 +21,7 @@ func (f testRoundTrip) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
-func clientForServer(t *testing.T, server *httptest.Server) Client {
+func clientForServer(t *testing.T, server *httptest.Server) Reconciler {
 	t.Helper()
 	transport := testRoundTrip(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Scheme != "https" || request.URL.Host != "api.github.com" {
@@ -36,7 +36,7 @@ func clientForServer(t *testing.T, server *httptest.Server) Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Client{GitHub: api}
+	return Reconciler{GitHub: api}
 }
 
 func consumerSpec(t *testing.T) Spec {
@@ -177,13 +177,38 @@ func TestReconcileRefusesUnmanagedFile(t *testing.T) {
 	}
 }
 
+func TestReconcileRefusesMalformedExistingBranchRef(t *testing.T) {
+	stubActionlint(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Error("malformed existing ref led to a write")
+		}
+		switch {
+		case r.URL.Path == "/repos/kevinmartin/example":
+			fmt.Fprint(w, `{"full_name":"kevinmartin/example","default_branch":"main"}`)
+		case strings.HasPrefix(r.URL.Path, "/repos/kevinmartin/example/contents/"):
+			w.WriteHeader(http.StatusNotFound)
+		case r.URL.Path == "/repos/kevinmartin/example/git/ref/heads/sofa/config":
+			fmt.Fprint(w, `{"object":{"sha":""}}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := clientForServer(t, server)
+	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "config branch reference unavailable") {
+		t.Fatalf("malformed existing ref was accepted: %v", err)
+	}
+}
+
 func TestReconcileApplyRequiresActionlintBeforeGitHub(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	api, err := github.New("scoped-token", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := Client{GitHub: api}
+	client := Reconciler{GitHub: api}
 	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "actionlint") {
 		t.Fatalf("apply did not fail before GitHub without actionlint: %v", err)
 	}
