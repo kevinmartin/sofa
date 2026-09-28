@@ -1,3 +1,4 @@
+# Managed by sofa config; edit the source manifest in kevinmartin/sofa.
 version: 2
 updates:
   - package-ecosystem: gomod
