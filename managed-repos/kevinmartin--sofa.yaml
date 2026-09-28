@@ -1,0 +1,10 @@
+version: 1
+repository: kevinmartin/sofa
+mode: self
+profiles: [go]
+dependabot:
+  ecosystems: [gomod, github-actions]
+  day: monday
+  time: "09:00"
+  timezone: America/New_York
+  open_pull_requests_limit: 3

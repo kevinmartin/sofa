@@ -1,0 +1,72 @@
+# Shared quality and managed repository files
+
+`quality.reusable.yml` is sofa's secretless PR quality gate. Sofa calls it from
+`pr-fast.yml` by local path, so a PR exercises its proposed version of the
+workflow. The trusted default-branch bridge still listens for the unchanged
+`Sofa / PR deterministic checks` workflow name and dispatches the separate
+hosted E2E gate. The bridge reads the candidate quality workflows **as data**
+and rejects changes that remove the minimum validators or broaden permissions.
+It never executes the candidate with its App credential.
+The current `deterministic` required check is a temporary compatibility job:
+it fails unless the reusable quality job succeeds. This lets the first PR merge
+under the existing rule after Kevin approves it.
+The bridge publishes `sofa / quality-policy` from the sofa-scoped App on the
+current PR head. Require this status from App `5077388` before retiring the
+old `deterministic` check; a scheduled disposable fallback cannot clear a
+failed policy status. First observe the reusable job's actual check-run name
+on a pilot PR and add it as a required Actions check as well. Keep
+`sofa / hosted-e2e` required throughout the migration.
+
+The `profiles` workflow-call input accepts `auto` (the default) or a
+comma-separated list of `go`, `typescript`, and `react`. Auto detects `go.mod`,
+`package.json` plus `tsconfig.json`, and React in package dependencies. It fails
+when no profile applies. Explicit profiles fail if their manifests are absent.
+TypeScript requires exactly one npm, pnpm, or Yarn lockfile; pinned
+`packageManager` is required for pnpm and Yarn. Package scripts
+`format:check`, `lint`, `typecheck`, and `test` are required. React also requires
+`build`. Node installs ignore lifecycle scripts; test/build scripts still run
+from the untrusted PR checkout without secrets. Repositories with private
+packages need a separate reviewed design before using this gate.
+
+After the first tested release, downstream callers can reference
+`kevinmartin/sofa/.github/workflows/quality.reusable.yml@v1`. The moving major
+reference gets reviewed compatible fixes on subsequent runs. Do not publish or
+move `v1` until the hosted pilot, check-name migration, and Kevin's sofa merge
+approval are complete. A rerun of all jobs can resolve a newer moving ref;
+the run records the resolved workflow revision for audit. Consumer caller
+files change through PRs, even though compatible called-workflow updates take
+effect without editing those files.
+
+## Repository configuration
+
+An enrolled repository has a reviewed manifest under `managed-repos/` named
+`owner--repository.yaml`. It selects only predefined quality profiles,
+Dependabot ecosystems, a schedule, and an open-PR limit. Project tickets may
+request enrollment or a change, but their text cannot select an arbitrary
+repository or inject workflow YAML. The first version manages only a small
+quality caller and `.github/dependabot.yml`. New repositories must already
+exist; creation and GitHub settings are later work.
+
+From a trusted sofa checkout:
+
+```sh
+go run ./cmd/sofa config --repo kevinmartin/sofa check
+go run ./cmd/sofa config --repo kevinmartin/sofa render
+go run ./cmd/sofa config --repo OWNER/REPO reconcile
+```
+
+`check` proves that sofa dogfoods its own rendered configuration. `render`
+prints desired path/content pairs for review. `reconcile` is read-only by
+default and reports remote drift. To open or update one PR on the dedicated
+`sofa/config` branch, set `SOFA_CONFIG_TOKEN` to a short-lived GitHub App
+installation token restricted to the enrolled repository and run
+`reconcile --apply`. The App needs repository Contents and Pull requests write
+permissions, and permission to update workflow files. Keep the token in a
+trusted default-branch environment, never in a PR job. The reconciler refuses
+to replace a file that lacks its management marker, refuses unrelated changes
+on the dedicated branch, and never merges its PR.
+
+Sofa's own `main` still requires Kevin's review and merge approval. The
+existing `reconcile.reusable.yml` and `work.reusable.yml` are not yet invoked
+by sofa itself. Once those loops are admitted, they can call this deterministic
+configuration command after the normal specification and Ready gates.
