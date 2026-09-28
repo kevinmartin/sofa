@@ -104,7 +104,7 @@ func newConfigCommand() *cobra.Command {
 					return err
 				}
 			}
-			client := managedconfig.Client{GitHub: api}
+			client := managedconfig.Reconciler{GitHub: api}
 			result, err := client.Reconcile(command.Context(), spec, apply)
 			if err != nil {
 				return err
