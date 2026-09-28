@@ -34,7 +34,7 @@ func decodeRendered(data []byte, out any) error {
 }
 
 func validateRendered(s Spec, files map[string][]byte) error {
-	callerPath := ".github/workflows/sofa-quality.yml"
+	callerPath := ".github/workflows/sofa.quality.yml"
 	if s.Mode == "self" {
 		callerPath = ".github/workflows/pr-fast.yml"
 	}

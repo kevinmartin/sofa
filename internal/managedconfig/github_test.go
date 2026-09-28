@@ -11,7 +11,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kevinmartin/sofa/internal/github"
 )
+
+type testRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f testRoundTrip) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func clientForServer(t *testing.T, server *httptest.Server) Client {
+	t.Helper()
+	transport := testRoundTrip(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Scheme != "https" || request.URL.Host != "api.github.com" {
+			t.Fatalf("unexpected GitHub destination: %s", request.URL)
+		}
+		redirected := request.Clone(request.Context())
+		redirected.URL.Scheme = "http"
+		redirected.URL.Host = strings.TrimPrefix(server.URL, "http://")
+		return http.DefaultTransport.RoundTrip(redirected)
+	})
+	api, err := github.New("scoped-token", transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Client{GitHub: api}
+}
 
 func consumerSpec(t *testing.T) Spec {
 	t.Helper()
@@ -62,7 +88,7 @@ func TestReconcileReusesExistingConfigPR(t *testing.T) {
 		case r.URL.Path == "/repos/kevinmartin/example/git/ref/heads/sofa/config":
 			fmt.Fprint(w, `{"object":{"sha":"existing-branch"}}`)
 		case r.URL.Path == "/repos/kevinmartin/example/compare/main...sofa/config":
-			fmt.Fprint(w, `{"files":[{"filename":".github/dependabot.yml"},{"filename":".github/workflows/sofa-quality.yml"}]}`)
+			fmt.Fprint(w, `{"files":[{"filename":".github/dependabot.yml"},{"filename":".github/workflows/sofa.quality.yml"}]}`)
 		case r.URL.Path == "/repos/kevinmartin/example/pulls":
 			fmt.Fprint(w, `[{"html_url":"https://github.com/kevinmartin/example/pull/1"}]`)
 		default:
@@ -71,7 +97,7 @@ func TestReconcileReusesExistingConfigPR(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := Client{HTTP: server.Client(), APIURL: server.URL, Token: "scoped-token"}
+	client := clientForServer(t, server)
 	result, err := client.Reconcile(context.Background(), spec, true)
 	if err != nil || writes != 0 || result.PullURL != "https://github.com/kevinmartin/example/pull/1" {
 		t.Fatalf("existing PR not reused: %+v, writes=%d, err=%v", result, writes, err)
@@ -120,7 +146,7 @@ func TestReconcilePlansAndOpensOneScopedPR(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := Client{HTTP: server.Client(), APIURL: server.URL, Token: "scoped-token"}
+	client := clientForServer(t, server)
 	plan, err := client.Reconcile(context.Background(), consumerSpec(t), false)
 	if err != nil || len(plan.Changes) != 2 || len(writes) != 0 {
 		t.Fatalf("dry run changed state: %+v, writes=%v, err=%v", plan, writes, err)
@@ -145,7 +171,7 @@ func TestReconcileRefusesUnmanagedFile(t *testing.T) {
 		fmt.Fprintf(w, `{"sha":"abc","encoding":"base64","size":11,"content":%q}`, content)
 	}))
 	defer server.Close()
-	client := Client{HTTP: server.Client(), APIURL: server.URL, Token: "scoped-token"}
+	client := clientForServer(t, server)
 	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil {
 		t.Fatal("unmanaged repository file was accepted")
 	}
@@ -153,7 +179,11 @@ func TestReconcileRefusesUnmanagedFile(t *testing.T) {
 
 func TestReconcileApplyRequiresActionlintBeforeGitHub(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	client := Client{HTTP: http.DefaultClient, APIURL: "http://127.0.0.1:1", Token: "scoped-token"}
+	api, err := github.New("scoped-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := Client{GitHub: api}
 	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "actionlint") {
 		t.Fatalf("apply did not fail before GitHub without actionlint: %v", err)
 	}

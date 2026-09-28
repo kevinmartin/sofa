@@ -55,7 +55,8 @@ An enrolled repository has a reviewed manifest under `managed-repos/` named
 Dependabot ecosystems, a schedule, and an open-PR limit. Project tickets may
 request enrollment or a change, but their text cannot select an arbitrary
 repository or inject workflow YAML. The first version manages only a small
-quality caller and `.github/dependabot.yml`. New repositories must already
+quality caller (`.github/workflows/sofa.quality.yml` for consumers and
+`pr-fast.yml` for sofa) and `.github/dependabot.yml`. New repositories must already
 exist; creation and GitHub settings are later work.
 
 From a trusted sofa checkout:
@@ -80,7 +81,9 @@ installation token restricted to the enrolled repository and run
 permissions, and permission to update workflow files. Keep the token in a
 trusted default-branch environment, never in a PR job. The reconciler refuses
 to replace a file that lacks its management marker, refuses unrelated changes
-on the dedicated branch, and never merges its PR.
+on the dedicated branch, and never merges its PR. It uses sofa's shared
+bounded GitHub API client. Public read-only plans may use an anonymous client;
+writes require the configured token.
 
 Sofa's own `main` still requires Kevin's review and merge approval. The
 existing `reconcile.reusable.yml` and `work.reusable.yml` are not yet invoked

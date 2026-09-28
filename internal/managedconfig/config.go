@@ -113,23 +113,21 @@ func Render(s Spec) (map[string][]byte, error) {
 		return nil, err
 	}
 	view := struct {
-		Self                    bool
-		QualityWorkflow         string
 		QualityResultExpression string
 		Profiles                string
 		Ecosystems              []string
-		Day, Time, Timezone     string
+		Day                     string
+		Time                    string
+		Timezone                string
 		Limit                   int
 	}{
-		Self: s.Mode == "self", Profiles: strings.Join(s.Profiles, ","),
-		Ecosystems: s.Dependabot.Ecosystems, Day: s.Dependabot.Day,
-		Time: s.Dependabot.Time, Timezone: s.Dependabot.Timezone, Limit: s.Dependabot.Limit,
+		Profiles:                strings.Join(s.Profiles, ","),
+		Ecosystems:              s.Dependabot.Ecosystems,
+		Day:                     s.Dependabot.Day,
+		Time:                    s.Dependabot.Time,
+		Timezone:                s.Dependabot.Timezone,
+		Limit:                   s.Dependabot.Limit,
 		QualityResultExpression: "${{ needs.quality.result }}",
-	}
-	if view.Self {
-		view.QualityWorkflow = "./.github/workflows/quality.reusable.yml"
-	} else {
-		view.QualityWorkflow = "kevinmartin/sofa/.github/workflows/quality.reusable.yml@v1"
 	}
 	render := func(name string) ([]byte, error) {
 		parsed, err := template.New(filepath.Base(name)).Option("missingkey=error").ParseFS(templates, name)
@@ -142,7 +140,13 @@ func Render(s Spec) (map[string][]byte, error) {
 		}
 		return output.Bytes(), nil
 	}
-	caller, err := render("templates/caller.yml.tmpl")
+	callerPath := ".github/workflows/sofa.quality.yml"
+	callerTemplate := "templates/sofa.quality.yml.tmpl"
+	if s.Mode == "self" {
+		callerPath = ".github/workflows/pr-fast.yml"
+		callerTemplate = "templates/pr-fast.yml.tmpl"
+	}
+	caller, err := render(callerTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -150,11 +154,10 @@ func Render(s Spec) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	callerPath := ".github/workflows/sofa-quality.yml"
-	if s.Mode == "self" {
-		callerPath = ".github/workflows/pr-fast.yml"
+	files := map[string][]byte{
+		callerPath:                caller,
+		".github/dependabot.yml": dependabot,
 	}
-	files := map[string][]byte{callerPath: caller, ".github/dependabot.yml": dependabot}
 	if err := validateRendered(s, files); err != nil {
 		return nil, err
 	}
