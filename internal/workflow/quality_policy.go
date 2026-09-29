@@ -10,19 +10,20 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+var ErrUnapprovedQualityDigest = errors.New("candidate quality gate digest lacks prior trusted approval")
+
+var approvedCaller = map[string]bool{
+	"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
+}
+
+var approvedReusable = map[string]bool{
+	"d22d25aec69761d12d0c1ea977798efa5ca74181b69263bffa8209e905cbd805": true,
+}
+
 // CheckSofaQualityContract runs on trusted default-branch code against workflow
 // files fetched from a PR as data. It guards the minimum independent PR gate;
 // a change to this policy itself still requires ordinary owner review.
 func CheckSofaQualityContract(caller, reusable []byte) error {
-	// These digests are part of trusted default-branch code, not read from a PR.
-	// To change a gate, first merge a Kevin-reviewed policy change that adds
-	// its proposed digest; only then can the workflow PR pass this status.
-	approvedCaller := map[string]bool{
-		"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
-	}
-	approvedReusable := map[string]bool{
-		"d22d25aec69761d12d0c1ea977798efa5ca74181b69263bffa8209e905cbd805": true,
-	}
 	type step struct {
 		Name            string            `yaml:"name"`
 		Uses            string            `yaml:"uses"`
@@ -145,7 +146,30 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 		return errors.New("quality profile execution can be skipped")
 	}
 	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || !approvedReusable[fmt.Sprintf("%x", sha256.Sum256(reusable))] {
-		return errors.New("candidate quality gate digest lacks prior trusted approval")
+		return ErrUnapprovedQualityDigest
+	}
+	return nil
+}
+
+// CheckSofaQualityContractWithActionPins keeps all structural checks and the
+// exact caller digest. The only alternate path is a line-exact change to an
+// action pin relative to the PR's trusted main-branch base revision.
+func CheckSofaQualityContractWithActionPins(caller, reusable, baseReusable []byte, verify func(ActionPin) error) error {
+	err := CheckSofaQualityContract(caller, reusable)
+	if err == nil || !errors.Is(err, ErrUnapprovedQualityDigest) {
+		return err
+	}
+	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || verify == nil {
+		return err
+	}
+	pins, pinErr := ActionPinChanges(baseReusable, reusable)
+	if pinErr != nil {
+		return fmt.Errorf("candidate quality gate digest lacks prior trusted approval: %w", pinErr)
+	}
+	for _, pin := range pins {
+		if pinErr := verify(pin); pinErr != nil {
+			return fmt.Errorf("unverified official action release %s@%s: %w", pin.Name, pin.Tag, pinErr)
+		}
 	}
 	return nil
 }

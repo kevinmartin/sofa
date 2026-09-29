@@ -1,0 +1,5 @@
+# Require the sofa owner to review changes to the factory's executable policy.
+/.github/workflows/ @kevinmartin
+/internal/workflow/quality_policy.go @kevinmartin
+/internal/workflow/action_pins.go @kevinmartin
+/internal/managedconfig/templates/ @kevinmartin

@@ -7,11 +7,26 @@ workflow. The trusted default-branch bridge still listens for the unchanged
 hosted E2E gate. The bridge reads the candidate quality workflows **as data**
 and rejects changes that remove the minimum validators or broaden permissions.
 It never executes the candidate with its App credential.
-The trusted bridge also compares both gate files with preapproved SHA-256
-digests. A proposed change to either gate needs a separate Kevin-reviewed
-policy PR that adds the proposed digest to the bridge allowlist **before** the
-gate-changing PR can pass. This prevents a PR from satisfying the structural
-test with inert command text while bypassing the actual checks.
+The trusted bridge still requires a preapproved SHA-256 digest for the caller
+and accepts a preapproved digest for the reusable workflow. It also accepts
+one narrow Dependabot-style exception: relative to the PR's main-branch base,
+the reusable workflow may change only full SHA pins and release comments for
+`actions/checkout`, `actions/setup-go`, or `actions/setup-node`. The bridge
+checks that each replacement SHA is the commit behind a stable release tag in
+the official action repository. The candidate still runs every quality job.
+Changes to commands, permissions, conditions, checkout settings, other
+actions, or the caller still need a separate Kevin-reviewed policy PR that
+preapproves the exact digest. The hosted E2E observer applies the same
+pin-only rule to its candidate workflow and keeps exact-hash approval for all
+other changes. A changed candidate workflow needs an up-to-date main base for
+that comparison.
+
+`.github/CODEOWNERS` requests Kevin for workflow and gate-policy changes.
+Sofa's personal-repository branch rule cannot use a required owner review for
+PRs authored by the same account, so Kevin still controls the final merge of
+those PRs. Require `sofa / quality-policy` from the sofa App in branch
+protection; that automated status checks the trusted boundary but does not
+approve a dependency upgrade's compatibility or security impact.
 The current `deterministic` required check is a temporary compatibility job:
 it fails unless the reusable workflow succeeds. This lets the first PR merge
 under the existing rule after Kevin approves it.

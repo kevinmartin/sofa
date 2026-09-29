@@ -50,6 +50,55 @@ func TestBridgeListensForFastWorkflowName(t *testing.T) {
 	}
 }
 
+func TestBridgeVerifiesOfficialReleaseBeforeApprovingPinOnlyUpdate(t *testing.T) {
+	base, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := []byte(strings.Replace(string(base),
+		"actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0",
+		"actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0", 1))
+	if string(candidate) == string(base) {
+		t.Fatal("test fixture has no update")
+	}
+	for _, matching := range []bool{true, false} {
+		t.Run(fmt.Sprint(matching), func(t *testing.T) {
+			var releaseReads int
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
+					var data []byte
+					if filepath.Base(r.URL.Path) == "pr-fast.yml" {
+						data, _ = os.ReadFile("../../.github/workflows/pr-fast.yml")
+					} else if r.URL.Query().Get("ref") == testBaseSHA {
+						data = base
+					} else {
+						data = candidate
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "size": len(data), "content": base64.StdEncoding.EncodeToString(data)})
+				case "/repos/actions/setup-node/releases/tags/v7.0.0":
+					releaseReads++
+					fmt.Fprint(w, `{"draft":false,"prerelease":false}`)
+				case "/repos/actions/setup-node/git/ref/tags/v7.0.0":
+					sha := "820762786026740c76f36085b0efc47a31fe5020"
+					if !matching {
+						sha = testBaseSHA
+					}
+					fmt.Fprintf(w, `{"object":{"type":"commit","sha":%q}}`, sha)
+				default:
+					t.Errorf("unexpected API path %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			})
+			b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
+			err := b.checkQualityContract(t.Context(), testCandidateSHA, testBaseSHA)
+			if (err == nil) != matching || releaseReads != 1 {
+				t.Fatalf("matching=%v err=%v release reads=%d", matching, err, releaseReads)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -102,7 +151,7 @@ func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) 
 			if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer read-token" {
 				t.Error("PR read did not use read-only workflow token")
 			}
-			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
+			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"ref":"main","repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
 		case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
 			if r.URL.Query().Get("ref") != testCandidateSHA || r.Header.Get("Authorization") != "Bearer read-token" {
 				t.Error("quality policy did not read exact candidate with read token")
@@ -194,7 +243,7 @@ func TestBridgeDoesNotDispatchClosedOrUnassociatedPR(t *testing.T) {
 	var calls int
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		fmt.Fprintf(w, `{"number":2,"state":"closed","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
+		fmt.Fprintf(w, `{"number":2,"state":"closed","head":{"sha":%q},"base":{"sha":%q,"ref":"main","repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
 	})
 	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
 	if err := b.run(t.Context(), testEvent()); err != nil {
@@ -217,7 +266,7 @@ func TestBridgePublishesFailureForWeakenedQuality(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/kevinmartin/sofa/pulls/2":
-			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
+			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"ref":"main","repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
 		case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
 			name := filepath.Base(r.URL.Path)
 			data, err := os.ReadFile(filepath.Join("../../.github/workflows", name))

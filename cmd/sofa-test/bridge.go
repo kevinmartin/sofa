@@ -60,6 +60,7 @@ type pullRequest struct {
 	} `json:"head"`
 	Base struct {
 		SHA  string `json:"sha"`
+		Ref  string `json:"ref"`
 		Repo struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
@@ -148,11 +149,11 @@ func (b bridge) run(ctx context.Context, raw []byte) error {
 		if pr.State != "open" {
 			continue
 		}
-		if pr.Number != number || pr.Base.Repo.FullName != sofaRepository ||
+		if pr.Number != number || pr.Base.Repo.FullName != sofaRepository || pr.Base.Ref != "main" ||
 			!shaPattern.MatchString(pr.Head.SHA) || !shaPattern.MatchString(pr.Base.SHA) {
 			return errors.New("invalid current PR identity")
 		}
-		if err := b.checkQualityContract(ctx, pr.Head.SHA); err != nil {
+		if err := b.checkQualityContract(ctx, pr.Head.SHA, pr.Base.SHA); err != nil {
 			if statusErr := b.qualityStatus(ctx, pr.Head.SHA, "failure", "Required quality contract was weakened"); statusErr != nil {
 				return statusErr
 			}
@@ -207,7 +208,7 @@ func (b bridge) sofaStatusToken(ctx context.Context) (string, error) {
 	return credential.Token, nil
 }
 
-func (b bridge) checkQualityContract(ctx context.Context, sha string) error {
+func (b bridge) checkQualityContract(ctx context.Context, sha, baseSHA string) error {
 	caller, err := b.workflowAt(ctx, sha, "pr-fast.yml")
 	if err != nil {
 		return err
@@ -216,8 +217,47 @@ func (b bridge) checkQualityContract(ctx context.Context, sha string) error {
 	if err != nil {
 		return err
 	}
-	if err := workflow.CheckSofaQualityContract(caller, reusable); err != nil {
+	if err := workflow.CheckSofaQualityContract(caller, reusable); err == nil {
+		return nil
+	} else if !errors.Is(err, workflow.ErrUnapprovedQualityDigest) {
 		return fmt.Errorf("PR weakens required quality contract: %w", err)
+	}
+	baseReusable, err := b.workflowAt(ctx, baseSHA, "quality.reusable.yml")
+	if err != nil {
+		return err
+	}
+	if err := workflow.CheckSofaQualityContractWithActionPins(caller, reusable, baseReusable, func(pin workflow.ActionPin) error {
+		return b.verifyOfficialAction(ctx, pin)
+	}); err != nil {
+		return fmt.Errorf("PR weakens required quality contract: %w", err)
+	}
+	return nil
+}
+
+func (b bridge) verifyOfficialAction(ctx context.Context, pin workflow.ActionPin) error {
+	var release struct {
+		Draft      bool `json:"draft"`
+		Prerelease bool `json:"prerelease"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", b.apiURL, pin.Name, pin.Tag)
+	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &release, http.StatusOK); err != nil {
+		return err
+	}
+	if release.Draft || release.Prerelease {
+		return errors.New("action release is not stable")
+	}
+	var ref struct {
+		Object struct {
+			Type string `json:"type"`
+			SHA  string `json:"sha"`
+		} `json:"object"`
+	}
+	url = fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", b.apiURL, pin.Name, pin.Tag)
+	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &ref, http.StatusOK); err != nil {
+		return err
+	}
+	if ref.Object.Type != "commit" || ref.Object.SHA != pin.SHA {
+		return errors.New("action release tag does not resolve to pinned commit")
 	}
 	return nil
 }
