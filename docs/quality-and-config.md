@@ -13,7 +13,9 @@ reusable workflow, only a full 40-character action commit SHA and its version
 comment may change on an existing action line; action names, commands,
 permissions, conditions, and other bytes must match the trusted base. There
 is no approved-SHA list or release lookup. The candidate still runs every
-quality job. Other workflow changes remain blocked until a separately merged,
+quality job. A full SHA is immutable but this policy does not attest that it
+belongs to an official release; candidate quality jobs are secretless and
+read-only. Other workflow changes remain blocked until a separately merged,
 Kevin-reviewed bridge policy update deliberately admits them. The hosted E2E
 observer applies the same comparison to its candidate workflow. A changed candidate
 workflow needs an up-to-date main base for that comparison.
