@@ -46,3 +46,30 @@ func TestQualityActionPinOnlyException(t *testing.T) {
 		t.Fatal("pin update accepted without release verification")
 	}
 }
+
+func TestRepeatedCheckoutPinUpdateIsOneVerifiedRelease(t *testing.T) {
+	caller, err := os.ReadFile("../../.github/workflows/pr-fast.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oldPin = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2"
+	const newPin = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+	if strings.Count(string(base), oldPin) != 5 {
+		t.Fatal("reviewed checkout layout changed")
+	}
+	candidate := []byte(strings.ReplaceAll(string(base), oldPin, newPin))
+	verified := 0
+	if err := CheckSofaQualityContractWithActionPins(caller, candidate, base, func(pin ActionPin) error {
+		verified++
+		if pin.Name != "actions/checkout" || pin.Tag != "v7.0.1" {
+			t.Fatalf("unexpected pin %+v", pin)
+		}
+		return nil
+	}); err != nil || verified != 1 {
+		t.Fatalf("repeated pins were not verified once: err=%v checks=%d", err, verified)
+	}
+}
