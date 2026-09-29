@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -69,21 +70,30 @@ func (c *Client) CreateReference(ctx context.Context, repository, branch, sha st
 	}, nil)
 }
 
-func (c *Client) ChangedFiles(ctx context.Context, repository, base, head string) ([]string, error) {
+type Comparison struct {
+	Files    []string
+	BehindBy int
+}
+
+func (c *Client) ChangedFiles(ctx context.Context, repository, base, head string) (Comparison, error) {
 	var comparison struct {
-		Files []struct {
+		BehindBy *int `json:"behind_by"`
+		Files    []struct {
 			Filename string `json:"filename"`
 		} `json:"files"`
 	}
 	err := c.Request(ctx, http.MethodGet, "/repos/"+repository+"/compare/"+base+"..."+head, nil, &comparison)
 	if err != nil {
-		return nil, err
+		return Comparison{}, err
 	}
-	files := make([]string, 0, len(comparison.Files))
+	if comparison.BehindBy == nil || *comparison.BehindBy < 0 {
+		return Comparison{}, errors.New("GitHub comparison lacks a valid behind count")
+	}
+	result := Comparison{Files: make([]string, 0, len(comparison.Files)), BehindBy: *comparison.BehindBy}
 	for _, file := range comparison.Files {
-		files = append(files, file.Filename)
+		result.Files = append(result.Files, file.Filename)
 	}
-	return files, nil
+	return result, nil
 }
 
 func (c *Client) PutContent(ctx context.Context, repository, path, branch, sha string, content []byte, message string) error {
@@ -98,19 +108,32 @@ func (c *Client) PutContent(ctx context.Context, repository, path, branch, sha s
 	return c.Request(ctx, http.MethodPut, "/repos/"+repository+"/contents/"+path, input, nil)
 }
 
-func (c *Client) OpenPullRequests(ctx context.Context, repository, head, base string) ([]string, error) {
-	var pulls []struct {
-		HTMLURL string `json:"html_url"`
-	}
+type PullRequest struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+}
+
+func (c *Client) OpenPullRequests(ctx context.Context, repository, head, base string) ([]PullRequest, error) {
+	var pulls []PullRequest
 	err := c.Request(ctx, http.MethodGet, "/repos/"+repository+"/pulls?state=open&head="+url.QueryEscape(head)+"&base="+url.QueryEscape(base), nil, &pulls)
 	if err != nil {
 		return nil, err
 	}
-	urls := make([]string, 0, len(pulls))
 	for _, pull := range pulls {
-		urls = append(urls, pull.HTMLURL)
+		if pull.Number < 1 || pull.HTMLURL == "" {
+			return nil, errors.New("GitHub pull request response is incomplete")
+		}
 	}
-	return urls, nil
+	return pulls, nil
+}
+
+func (c *Client) ClosePullRequest(ctx context.Context, repository string, number int) error {
+	if number < 1 {
+		return errors.New("invalid GitHub pull request number")
+	}
+	return c.Request(ctx, http.MethodPatch, "/repos/"+repository+"/pulls/"+strconv.Itoa(number), map[string]string{
+		"state": "closed",
+	}, nil)
 }
 
 func (c *Client) CreatePullRequest(ctx context.Context, repository, title, head, base, body string) (string, error) {

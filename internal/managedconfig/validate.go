@@ -145,15 +145,15 @@ func ValidateActionlint(ctx context.Context, files map[string][]byte) error {
 	}
 	root, err := os.MkdirTemp("", "sofa-managed-actionlint-")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temporary workflow directory: %w", err)
 	}
 	defer os.RemoveAll(root)
 	path := filepath.Join(root, ".github", "workflows", "managed.yml")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+		return fmt.Errorf("create temporary workflow path: %w", err)
 	}
 	if err := os.WriteFile(path, workflow, 0600); err != nil {
-		return err
+		return fmt.Errorf("write temporary workflow: %w", err)
 	}
 	command := exec.CommandContext(ctx, "actionlint", "-no-color", path)
 	output, err := command.CombinedOutput()

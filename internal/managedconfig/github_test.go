@@ -88,9 +88,9 @@ func TestReconcileReusesExistingConfigPR(t *testing.T) {
 		case r.URL.Path == "/repos/kevinmartin/example/git/ref/heads/sofa/config":
 			fmt.Fprint(w, `{"object":{"sha":"existing-branch"}}`)
 		case r.URL.Path == "/repos/kevinmartin/example/compare/main...sofa/config":
-			fmt.Fprint(w, `{"files":[{"filename":".github/dependabot.yml"},{"filename":".github/workflows/sofa.quality.yml"}]}`)
+			fmt.Fprint(w, `{"behind_by":0,"files":[{"filename":".github/dependabot.yml"},{"filename":".github/workflows/sofa.quality.yml"}]}`)
 		case r.URL.Path == "/repos/kevinmartin/example/pulls":
-			fmt.Fprint(w, `[{"html_url":"https://github.com/kevinmartin/example/pull/1"}]`)
+			fmt.Fprint(w, `[{"number":1,"html_url":"https://github.com/kevinmartin/example/pull/1"}]`)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.String())
 			w.WriteHeader(http.StatusNotFound)
@@ -126,7 +126,7 @@ func TestReconcilePlansAndOpensOneScopedPR(t *testing.T) {
 		case r.URL.Path == "/repos/kevinmartin/example/git/refs" && r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusCreated)
 		case r.URL.Path == "/repos/kevinmartin/example/compare/main...sofa/config":
-			fmt.Fprint(w, `{"files":[]}`)
+			fmt.Fprint(w, `{"behind_by":0,"files":[]}`)
 		case strings.HasPrefix(r.URL.Path, "/repos/kevinmartin/example/contents/") && r.Method == http.MethodPut:
 			var body struct {
 				Branch string `json:"branch"`
@@ -199,6 +199,108 @@ func TestReconcileRefusesMalformedExistingBranchRef(t *testing.T) {
 	client := clientForServer(t, server)
 	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "config branch reference unavailable") {
 		t.Fatalf("malformed existing ref was accepted: %v", err)
+	}
+}
+
+func TestReconcileRefusesExistingEmptyFile(t *testing.T) {
+	stubActionlint(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Error("existing empty file led to a write")
+		}
+		switch {
+		case r.URL.Path == "/repos/kevinmartin/example":
+			fmt.Fprint(w, `{"full_name":"kevinmartin/example","default_branch":"main"}`)
+		case strings.HasPrefix(r.URL.Path, "/repos/kevinmartin/example/contents/"):
+			fmt.Fprint(w, `{"sha":"existing-file","encoding":"base64","size":0,"content":""}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := clientForServer(t, server)
+	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "not managed") {
+		t.Fatalf("existing empty file was accepted: %v", err)
+	}
+}
+
+func TestReconcileClosesStaleConfigPR(t *testing.T) {
+	stubActionlint(t)
+	spec := consumerSpec(t)
+	desired, err := Render(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/kevinmartin/example":
+			fmt.Fprint(w, `{"full_name":"kevinmartin/example","default_branch":"main"}`)
+		case strings.HasPrefix(r.URL.Path, "/repos/kevinmartin/example/contents/"):
+			path := strings.TrimPrefix(r.URL.Path, "/repos/kevinmartin/example/contents/")
+			content := desired[path]
+			fmt.Fprintf(w, `{"sha":"existing-file","encoding":"base64","size":%d,"content":%q}`, len(content), base64.StdEncoding.EncodeToString(content))
+		case r.URL.Path == "/repos/kevinmartin/example/pulls" && r.Method == http.MethodGet:
+			if closed {
+				fmt.Fprint(w, `[]`)
+			} else {
+				fmt.Fprint(w, `[{"number":7,"html_url":"https://github.com/kevinmartin/example/pull/7"}]`)
+			}
+		case r.URL.Path == "/repos/kevinmartin/example/pulls/7" && r.Method == http.MethodPatch:
+			var body struct {
+				State string `json:"state"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.State != "closed" {
+				t.Errorf("unexpected close request: %+v, %v", body, err)
+			}
+			closed = true
+			fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := clientForServer(t, server)
+	plan, err := client.Reconcile(context.Background(), spec, false)
+	if err != nil || closed || plan.PullURL == "" {
+		t.Fatalf("read-only plan lost stale PR: %+v, closed=%v, err=%v", plan, closed, err)
+	}
+	result, err := client.Reconcile(context.Background(), spec, true)
+	if err != nil || !closed || result.PullURL != "" || result.ClosedPullURL != "https://github.com/kevinmartin/example/pull/7" {
+		t.Fatalf("stale PR not closed: %+v, closed=%v, err=%v", result, closed, err)
+	}
+	result, err = client.Reconcile(context.Background(), spec, true)
+	if err != nil || result.PullURL != "" || result.ClosedPullURL != "" {
+		t.Fatalf("idempotent run changed state: %+v, err=%v", result, err)
+	}
+}
+
+func TestReconcileRefusesBranchBehindDefault(t *testing.T) {
+	stubActionlint(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Error("behind config branch led to a write")
+		}
+		switch {
+		case r.URL.Path == "/repos/kevinmartin/example":
+			fmt.Fprint(w, `{"full_name":"kevinmartin/example","default_branch":"main"}`)
+		case strings.HasPrefix(r.URL.Path, "/repos/kevinmartin/example/contents/"):
+			w.WriteHeader(http.StatusNotFound)
+		case r.URL.Path == "/repos/kevinmartin/example/git/ref/heads/sofa/config":
+			fmt.Fprint(w, `{"object":{"sha":"existing-branch"}}`)
+		case r.URL.Path == "/repos/kevinmartin/example/compare/main...sofa/config":
+			fmt.Fprint(w, `{"behind_by":1,"files":[]}`)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.String())
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := clientForServer(t, server)
+	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "behind default branch") {
+		t.Fatalf("behind config branch was accepted: %v", err)
 	}
 }
 

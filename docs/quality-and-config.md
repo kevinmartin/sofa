@@ -81,9 +81,11 @@ installation token restricted to the enrolled repository and run
 permissions, and permission to update workflow files. Keep the token in a
 trusted default-branch environment, never in a PR job. The reconciler refuses
 to replace a file that lacks its management marker, refuses unrelated changes
-on the dedicated branch, and never merges its PR. It uses sofa's shared
-bounded GitHub API client. Public read-only plans may use an anonymous client;
-writes require the configured token.
+or a branch behind the default branch, and never merges its PR. When the
+default branch already has the desired files, an apply run closes any stale
+config PR; a read-only run reports it without changing it. The reconciler uses
+sofa's shared bounded GitHub API client. Public read-only plans may use an
+anonymous client; writes require the configured token.
 
 Sofa's own `main` still requires Kevin's review and merge approval. The
 existing `reconcile.reusable.yml` and `work.reusable.yml` are not yet invoked

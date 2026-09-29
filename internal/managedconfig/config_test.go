@@ -24,7 +24,7 @@ func TestSofaOwnConfigurationIsRendered(t *testing.T) {
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("sofa is not using generated %s: %v", path, err)
 		}
-		if action, err := Difference(got, want); err != nil || action != "current" {
+		if action, err := Difference(got, true, want); err != nil || action != "current" {
 			t.Fatalf("current %s: %s %v", path, action, err)
 		}
 	}
@@ -83,10 +83,13 @@ func TestManifestIdentityAndOwnership(t *testing.T) {
 	if err := spec.Validate(); err == nil {
 		t.Fatal("self mode outside sofa accepted")
 	}
-	if _, err := Difference([]byte("version: 2\n"), []byte(Marker+"version: 2\n")); err == nil {
+	if _, err := Difference([]byte("version: 2\n"), true, []byte(Marker+"version: 2\n")); err == nil {
 		t.Fatal("unmanaged file was overwritten")
 	}
-	if action, err := Difference(nil, []byte(Marker)); err != nil || action != "create" {
+	if _, err := Difference(nil, true, []byte(Marker)); err == nil {
+		t.Fatal("existing empty file was overwritten")
+	}
+	if action, err := Difference(nil, false, []byte(Marker)); err != nil || action != "create" {
 		t.Fatalf("new managed file: %s %v", action, err)
 	}
 }

@@ -166,15 +166,15 @@ func Render(s Spec) (map[string][]byte, error) {
 
 // Difference refuses to take ownership of a hand-maintained file. A file
 // already equal to the desired content is safe to adopt without a write.
-func Difference(current, desired []byte) (string, error) {
+func Difference(current []byte, exists bool, desired []byte) (string, error) {
+	if !exists {
+		return "create", nil
+	}
 	if bytes.Equal(current, desired) {
 		return "current", nil
 	}
-	if len(current) != 0 && !bytes.HasPrefix(current, []byte(Marker)) {
+	if !bytes.HasPrefix(current, []byte(Marker)) {
 		return "", errors.New("existing file is not managed by sofa")
-	}
-	if len(current) == 0 {
-		return "create", nil
 	}
 	return "update", nil
 }

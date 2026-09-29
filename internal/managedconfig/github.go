@@ -22,10 +22,11 @@ type Change struct {
 }
 
 type Result struct {
-	Repository string   `json:"repository"`
-	BaseBranch string   `json:"base_branch"`
-	Changes    []Change `json:"changes"`
-	PullURL    string   `json:"pull_url,omitempty"`
+	Repository    string   `json:"repository"`
+	BaseBranch    string   `json:"base_branch"`
+	Changes       []Change `json:"changes"`
+	PullURL       string   `json:"pull_url,omitempty"`
+	ClosedPullURL string   `json:"closed_pull_url,omitempty"`
 }
 
 func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Result, error) {
@@ -57,11 +58,11 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 	}
 	slices.Sort(paths)
 	for _, path := range paths {
-		current, _, err := c.GitHub.Content(ctx, spec.Repository, path, repository.DefaultBranch)
+		current, sha, err := c.GitHub.Content(ctx, spec.Repository, path, repository.DefaultBranch)
 		if err != nil {
 			return result, err
 		}
-		action, err := Difference(current, desired[path])
+		action, err := Difference(current, sha != "", desired[path])
 		if err != nil {
 			return result, fmt.Errorf("%s: %w", path, err)
 		}
@@ -72,7 +73,31 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 			})
 		}
 	}
-	if !apply || len(result.Changes) == 0 {
+	owner := strings.SplitN(spec.Repository, "/", 2)[0]
+	if len(result.Changes) == 0 {
+		pulls, err := c.GitHub.OpenPullRequests(ctx, spec.Repository, owner+":"+configBranch, repository.DefaultBranch)
+		if err != nil {
+			return result, errors.New("config PR lookup unavailable")
+		}
+		if len(pulls) > 1 {
+			return result, errors.New("multiple config PRs for dedicated branch")
+		}
+		if len(pulls) == 1 {
+			result.PullURL = pulls[0].HTMLURL
+			if apply {
+				if !c.GitHub.Authenticated() {
+					return result, errors.New("SOFA_CONFIG_TOKEN is required to close a stale config PR")
+				}
+				if err := c.GitHub.ClosePullRequest(ctx, spec.Repository, pulls[0].Number); err != nil {
+					return result, err
+				}
+				result.ClosedPullURL = result.PullURL
+				result.PullURL = ""
+			}
+		}
+		return result, nil
+	}
+	if !apply {
 		return result, nil
 	}
 	if !c.GitHub.Authenticated() {
@@ -95,14 +120,17 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 	}
 	// Refuse a reused branch with unrelated changes. This branch is dedicated to
 	// the two rendered files and must never carry an arbitrary issue patch.
-	files, err := c.GitHub.ChangedFiles(ctx, spec.Repository, repository.DefaultBranch, configBranch)
+	comparison, err := c.GitHub.ChangedFiles(ctx, spec.Repository, repository.DefaultBranch, configBranch)
 	if err != nil {
 		return result, errors.New("config branch comparison unavailable")
 	}
-	if len(files) > len(paths) {
+	if comparison.BehindBy != 0 {
+		return result, errors.New("config branch is behind default branch")
+	}
+	if len(comparison.Files) > len(paths) {
 		return result, errors.New("config branch contains unrelated changes")
 	}
-	for _, file := range files {
+	for _, file := range comparison.Files {
 		if !slices.Contains(paths, file) {
 			return result, errors.New("config branch contains unrelated changes")
 		}
@@ -112,7 +140,7 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 		if err != nil {
 			return result, err
 		}
-		action, err := Difference(content, desired[path])
+		action, err := Difference(content, sha != "", desired[path])
 		if err != nil {
 			return result, fmt.Errorf("config branch %s: %w", path, err)
 		}
@@ -123,7 +151,6 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 			return result, err
 		}
 	}
-	owner := strings.SplitN(spec.Repository, "/", 2)[0]
 	pulls, err := c.GitHub.OpenPullRequests(ctx, spec.Repository, owner+":"+configBranch, repository.DefaultBranch)
 	if err != nil {
 		return result, errors.New("config PR lookup unavailable")
@@ -132,7 +159,7 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 		return result, errors.New("multiple config PRs for dedicated branch")
 	}
 	if len(pulls) == 1 {
-		result.PullURL = pulls[0]
+		result.PullURL = pulls[0].HTMLURL
 		return result, nil
 	}
 	url, err := c.GitHub.CreatePullRequest(ctx, spec.Repository,
