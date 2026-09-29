@@ -30,7 +30,7 @@ func TestSofaQualityContract(t *testing.T) {
 	if strings.Contains(oneJob, "  deterministic:\n") {
 		var markerFound bool
 		oneJob, markerFound = strings.CutSuffix(oneJob, "  # Temporary compatibility check for the existing branch-protection rule.\n"+
-		"  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
+			"  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
 		if !markerFound {
 			t.Fatal("legacy caller does not match the expected transition")
 		}
