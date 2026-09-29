@@ -29,15 +29,15 @@ PRs authored by the same account, so Kevin still controls the final merge of
 those PRs. Require `sofa / quality-policy` from the sofa App in branch
 protection; that automated status checks the trusted boundary but does not
 approve a dependency upgrade's compatibility or security impact.
-The current `deterministic` required check is a temporary compatibility job:
-it fails unless the reusable workflow succeeds. This lets the first PR merge
-under the existing rule after Kevin approves it.
+The current `deterministic` job is a temporary compatibility job: it fails
+unless the reusable workflow succeeds. It is no longer a required check and
+will be removed by the follow-up caller migration.
 The bridge publishes `sofa / quality-policy` from the sofa-scoped App on the
-current PR head. Require this status from App `5077388` before retiring the
-old `deterministic` check; a scheduled disposable fallback cannot clear a
-failed policy status. First observe the reusable aggregate `quality / result` check-run name
-on a pilot PR and add it as a required Actions check as well. Keep
-`sofa / hosted-e2e` required throughout the migration.
+current PR head. Branch protection requires this status and `sofa / hosted-e2e`
+from App `5077388`, with strict up-to-date checks and administrator enforcement.
+A scheduled disposable fallback cannot clear a failed policy status. Observe
+the reusable aggregate `quality / result` check-run name on a pilot PR before
+considering it as an additional required Actions check.
 
 The `profiles` workflow-call input accepts an empty value (the default),
 `auto`, or a comma-separated list of `go`, `typescript`, and `react`. The
