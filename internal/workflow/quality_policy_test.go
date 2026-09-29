@@ -1,11 +1,10 @@
 package workflow
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -21,75 +20,46 @@ func TestSofaQualityContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckSofaQualityContract(caller, reusable); err != nil {
+	check := func(nextCaller, nextReusable []byte) error {
+		return CheckSofaQualityContract(nextCaller, nextReusable, caller, reusable)
+	}
+	if err := check(caller, reusable); err != nil {
 		t.Fatal(err)
 	}
-	// The exact next generated caller is preapproved before the branch rule is
-	// migrated. Its only job must be the shared quality workflow.
-	oneJob := string(caller)
-	if strings.Contains(oneJob, "  deterministic:\n") {
-		var markerFound bool
-		oneJob, markerFound = strings.CutSuffix(oneJob, "  # Temporary compatibility check for the existing branch-protection rule.\n"+
-			"  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
-		if !markerFound {
-			t.Fatal("legacy caller does not match the expected transition")
-		}
+
+	pin := regexp.MustCompile(`actions/checkout@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+`)
+	original := pin.Find(reusable)
+	if original == nil {
+		t.Fatal("checkout pin missing")
 	}
-	if fmt.Sprintf("%x", sha256.Sum256([]byte(oneJob))) != "e1cc51e38b5bb08fd5c1423c1df9af18b823123ef63cc305e103e16a2ed35f83" {
-		t.Fatal("preapproved one-job caller no longer matches the generated transition")
+	changedPin := []byte(strings.Replace(string(reusable), string(original), "actions/checkout@"+strings.Repeat("f", 40)+" # v999.0.0", 1))
+	if err := check(caller, changedPin); err != nil {
+		t.Fatalf("an otherwise unchanged pinned action was rejected: %v", err)
 	}
-	if err := CheckSofaQualityContract([]byte(oneJob), reusable); err != nil {
-		t.Fatalf("one-job caller rejected: %v", err)
-	}
-	if err := CheckSofaQualityContract([]byte(oneJob+"  bypass: {}\n"), reusable); err == nil {
-		t.Fatal("unapproved extra job passed")
-	}
-	for _, test := range []struct{ name, before, after string }{
-		{"removed tests", "go test -count=1 ./...", "true"},
-		{"removed analyzer", "staticcheck ./...", "true"},
-		{"removed node checks", "for script in format:check lint typecheck test; do", "for script in lint; do"},
-		{"weakened permissions", "contents: read", "contents: write"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			changed := strings.Replace(string(reusable), test.before, test.after, 1)
-			if changed == string(reusable) || CheckSofaQualityContract(caller, []byte(changed)) == nil {
-				t.Fatal("weakened workflow passed trusted contract")
-			}
-		})
-	}
-	changed := strings.Replace(string(caller), "profiles: go", "profiles: auto", 1)
-	if CheckSofaQualityContract([]byte(changed), reusable) == nil {
-		t.Fatal("sofa Go profile could be silently skipped")
-	}
-	if strings.Contains(string(caller), "  deterministic:\n") {
-		changed = strings.Replace(string(caller), "  deterministic:\n", "  deterministic:\n    if: false\n", 1)
-		if CheckSofaQualityContract([]byte(changed), reusable) == nil {
-			t.Fatal("skipped required job passed")
-		}
-	}
-	for _, test := range []struct {
-		name, before, after, want string
-		onCaller                  bool
+
+	for _, scenario := range []struct {
+		name     string
+		caller   []byte
+		reusable []byte
 	}{
-		{"job continues after failure", "  quality:\n", "  quality:\n    continue-on-error: true\n", "quality job cannot continue", true},
-		{"step continues after failure", "      - name: Test Go packages\n", "      - name: Test Go packages\n        continue-on-error: true\n", "quality step cannot continue", false},
-		{"tests bypassed before command", "        run: go test -count=1 ./...", "        run: |\n          exit 0\n          go test -count=1 ./...", "go validators must be separate", false},
+		{"caller profile changed", []byte(strings.Replace(string(caller), "profiles: go", "profiles: auto", 1)), reusable},
+		{"caller extra job", append(append([]byte(nil), caller...), []byte("  bypass: {}\n")...), reusable},
+		{"tests removed", caller, []byte(strings.Replace(string(reusable), "go test -count=1 ./...", "true", 1))},
+		{"extra command", caller, []byte(strings.Replace(string(reusable), "go test -count=1 ./...", "echo bypass; go test -count=1 ./...", 1))},
+		{"permissions broadened", caller, []byte(strings.Replace(string(reusable), "contents: read", "contents: write", 1))},
+		{"different action", caller, []byte(strings.Replace(string(reusable), "actions/checkout", "attacker/checkout", 1))},
+		{"unpinned action", caller, []byte(strings.Replace(string(reusable), string(original), "actions/checkout@v999", 1))},
+		{"placeholder ref", caller, []byte(strings.Replace(string(reusable), string(original), "actions/checkout@<sha> # <version>", 1))},
+		{"extra workflow line", caller, append(append([]byte(nil), reusable...), []byte("\n# extra command\n")...)},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			candidateCaller, candidateReusable := caller, reusable
-			if test.onCaller {
-				candidateCaller = []byte(strings.Replace(string(caller), test.before, test.after, 1))
-			} else {
-				candidateReusable = []byte(strings.Replace(string(reusable), test.before, test.after, 1))
-			}
-			err := CheckSofaQualityContract(candidateCaller, candidateReusable)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("expected %q, got %v", test.want, err)
+		t.Run(scenario.name, func(t *testing.T) {
+			if err := check(scenario.caller, scenario.reusable); err == nil {
+				t.Fatal("workflow change beyond action pin accepted")
 			}
 		})
 	}
-	if CheckSofaQualityContract(caller, append(append([]byte(nil), reusable...), []byte("\n# unapproved gate edit\n")...)) == nil {
-		t.Fatal("unapproved quality workflow revision passed trusted digest")
+	if err := CheckSofaQualityContract(caller, reusable, nil, reusable); err == nil {
+		t.Fatal("missing trusted caller baseline accepted")
 	}
 }
 

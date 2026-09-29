@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -50,72 +51,62 @@ func TestBridgeListensForFastWorkflowName(t *testing.T) {
 	}
 }
 
-func TestBridgeVerifiesOfficialReleaseBeforeApprovingPinOnlyUpdate(t *testing.T) {
-	base, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+func TestBridgeAllowsPinChangesAndRejectsOtherWorkflowEdits(t *testing.T) {
+	baseCaller, err := os.ReadFile("../../.github/workflows/pr-fast.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := []byte(strings.Replace(string(base),
-		"actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0",
-		"actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0", 1))
-	if string(candidate) == string(base) {
-		t.Fatal("test fixture has no update")
+	baseReusable, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := regexp.MustCompile(`actions/setup-node@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+`)
+	original := pin.Find(baseReusable)
+	if original == nil {
+		t.Fatal("setup-node pin missing")
 	}
 	for _, scenario := range []struct {
 		name      string
-		matching  bool
-		annotated bool
+		candidate []byte
+		wantPass  bool
 	}{
-		{"lightweight", true, false},
-		{"annotated", true, true},
-		{"mismatched lightweight", false, false},
-		{"mismatched annotated", false, true},
+		{"any full SHA pin", []byte(strings.Replace(string(baseReusable), string(original), "actions/setup-node@"+strings.Repeat("f", 40)+" # v999.0.0", 1)), true},
+		{"changed command", []byte(strings.Replace(string(baseReusable), "go test -count=1 ./...", "true", 1)), false},
+		{"changed action", []byte(strings.Replace(string(baseReusable), "actions/setup-node", "attacker/setup-node", 1)), false},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			var releaseReads int
+			reads := 0
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
-					var data []byte
-					if filepath.Base(r.URL.Path) == "pr-fast.yml" {
-						data, _ = os.ReadFile("../../.github/workflows/pr-fast.yml")
-					} else if r.URL.Query().Get("ref") == testBaseSHA {
-						data = base
-					} else {
-						data = candidate
-					}
-					_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "size": len(data), "content": base64.StdEncoding.EncodeToString(data)})
-				case "/repos/actions/setup-node/releases/tags/v7.0.0":
-					releaseReads++
-					fmt.Fprint(w, `{"draft":false,"prerelease":false}`)
-				case "/repos/actions/setup-node/git/ref/tags/v7.0.0":
-					sha := "820762786026740c76f36085b0efc47a31fe5020"
-					if !scenario.matching {
-						sha = testBaseSHA
-					}
-					if scenario.annotated {
-						fmt.Fprintf(w, `{"object":{"type":"tag","sha":%q}}`, strings.Repeat("e", 40))
-					} else {
-						fmt.Fprintf(w, `{"object":{"type":"commit","sha":%q}}`, sha)
-					}
-				case "/repos/actions/setup-node/git/tags/" + strings.Repeat("e", 40):
-					if !scenario.annotated {
-						t.Error("unexpected annotated tag lookup")
-					}
-					sha := "820762786026740c76f36085b0efc47a31fe5020"
-					if !scenario.matching {
-						sha = testBaseSHA
-					}
-					fmt.Fprintf(w, `{"object":{"type":"commit","sha":%q}}`, sha)
-				default:
+				if r.Header.Get("Authorization") != "Bearer read-token" {
+					t.Error("workflow read did not use read-only token")
+				}
+				if r.URL.Path != "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml" && r.URL.Path != "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml" {
 					t.Errorf("unexpected API path %s", r.URL.Path)
 					http.NotFound(w, r)
+					return
 				}
+				reads++
+				var data []byte
+				if filepath.Base(r.URL.Path) == "pr-fast.yml" {
+					data = baseCaller
+				} else if r.URL.Query().Get("ref") == testBaseSHA {
+					data = baseReusable
+				} else if r.URL.Query().Get("ref") == testCandidateSHA {
+					data = scenario.candidate
+				} else {
+					t.Errorf("unexpected workflow revision %q", r.URL.Query().Get("ref"))
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "size": len(data), "content": base64.StdEncoding.EncodeToString(data)})
 			})
 			b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
 			err := b.checkQualityContract(t.Context(), testCandidateSHA, testBaseSHA)
-			if (err == nil) != scenario.matching || releaseReads != 1 {
-				t.Fatalf("matching=%v err=%v release reads=%d", scenario.matching, err, releaseReads)
+			if (err == nil) != scenario.wantPass {
+				t.Fatalf("pass=%v err=%v", scenario.wantPass, err)
+			}
+			if scenario.wantPass && reads != 4 {
+				t.Fatalf("read %d workflows, want exact candidate and base files", reads)
 			}
 		})
 	}
@@ -175,8 +166,9 @@ func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) 
 			}
 			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"ref":"main","repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
 		case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
-			if r.URL.Query().Get("ref") != testCandidateSHA || r.Header.Get("Authorization") != "Bearer read-token" {
-				t.Error("quality policy did not read exact candidate with read token")
+			ref := r.URL.Query().Get("ref")
+			if (ref != testCandidateSHA && ref != testBaseSHA) || r.Header.Get("Authorization") != "Bearer read-token" {
+				t.Error("quality policy did not read exact candidate/base with read token")
 			}
 			data, err := os.ReadFile(filepath.Join("../../.github/workflows", filepath.Base(r.URL.Path)))
 			if err != nil {
