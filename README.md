@@ -19,8 +19,6 @@ Start with the [milestone plan](docs/milestones/01-delivery-slice.md),
 [current evidence](docs/milestones/evidence/01-delivery-slice.md). The broader
 architecture and future milestones are in [PLAN.md](PLAN.md) and
 [the milestone index](docs/milestones/README.md).
-The [Go 1.27 upgrade review](docs/go-1.27-upgrade.md) records toolchain and
-testing decisions.
 
 Sofa's shared PR quality gate and its reviewable repository-file reconciler
 are described in [shared quality and managed configuration](docs/quality-and-config.md).
