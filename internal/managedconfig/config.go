@@ -113,21 +113,19 @@ func Render(s Spec) (map[string][]byte, error) {
 		return nil, err
 	}
 	view := struct {
-		QualityResultExpression string
-		Profiles                string
-		Ecosystems              []string
-		Day                     string
-		Time                    string
-		Timezone                string
-		Limit                   int
+		Profiles   string
+		Ecosystems []string
+		Day        string
+		Time       string
+		Timezone   string
+		Limit      int
 	}{
-		Profiles:                strings.Join(s.Profiles, ","),
-		Ecosystems:              s.Dependabot.Ecosystems,
-		Day:                     s.Dependabot.Day,
-		Time:                    s.Dependabot.Time,
-		Timezone:                s.Dependabot.Timezone,
-		Limit:                   s.Dependabot.Limit,
-		QualityResultExpression: "${{ needs.quality.result }}",
+		Profiles:   strings.Join(s.Profiles, ","),
+		Ecosystems: s.Dependabot.Ecosystems,
+		Day:        s.Dependabot.Day,
+		Time:       s.Dependabot.Time,
+		Timezone:   s.Dependabot.Timezone,
+		Limit:      s.Dependabot.Limit,
 	}
 	render := func(name string) ([]byte, error) {
 		parsed, err := template.New(filepath.Base(name)).Option("missingkey=error").ParseFS(templates, name)

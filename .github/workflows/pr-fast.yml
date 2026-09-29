@@ -16,15 +16,3 @@ jobs:
     uses: ./.github/workflows/quality.reusable.yml
     with:
       profiles: go
-  # Temporary compatibility check for the existing branch-protection rule.
-  deterministic:
-    needs: quality
-    if: always()
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Require shared quality gate
-        env:
-          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}
-        run: test "$SOFA_QUALITY_RESULT" = success
