@@ -257,6 +257,9 @@ func (b bridge) verifyOfficialAction(ctx context.Context, pin workflow.ActionPin
 		return err
 	}
 	if ref.Object.Type == "tag" {
+		if !shaPattern.MatchString(ref.Object.SHA) {
+			return errors.New("action release tag object SHA is invalid")
+		}
 		var tag struct {
 			Object struct {
 				Type string `json:"type"`
