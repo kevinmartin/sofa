@@ -26,9 +26,16 @@ func TestSofaQualityContract(t *testing.T) {
 	}
 	// The exact next generated caller is preapproved before the branch rule is
 	// migrated. Its only job must be the shared quality workflow.
-	oneJob, markerFound := strings.CutSuffix(string(caller), "  # Temporary compatibility check for the existing branch-protection rule.\n"+
-		"  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
-	if !markerFound || fmt.Sprintf("%x", sha256.Sum256([]byte(oneJob))) != "e1cc51e38b5bb08fd5c1423c1df9af18b823123ef63cc305e103e16a2ed35f83" {
+	oneJob := string(caller)
+	if strings.Contains(oneJob, "  deterministic:\n") {
+		var markerFound bool
+		oneJob, markerFound = strings.CutSuffix(oneJob, "  # Temporary compatibility check for the existing branch-protection rule.\n"+
+			"  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
+		if !markerFound {
+			t.Fatal("legacy caller does not match the expected transition")
+		}
+	}
+	if fmt.Sprintf("%x", sha256.Sum256([]byte(oneJob))) != "e1cc51e38b5bb08fd5c1423c1df9af18b823123ef63cc305e103e16a2ed35f83" {
 		t.Fatal("preapproved one-job caller no longer matches the generated transition")
 	}
 	if err := CheckSofaQualityContract([]byte(oneJob), reusable); err != nil {
@@ -54,15 +61,17 @@ func TestSofaQualityContract(t *testing.T) {
 	if CheckSofaQualityContract([]byte(changed), reusable) == nil {
 		t.Fatal("sofa Go profile could be silently skipped")
 	}
-	changed = strings.Replace(string(caller), "  deterministic:\n", "  deterministic:\n    if: false\n", 1)
-	if CheckSofaQualityContract([]byte(changed), reusable) == nil {
-		t.Fatal("skipped required job passed")
+	if strings.Contains(string(caller), "  deterministic:\n") {
+		changed = strings.Replace(string(caller), "  deterministic:\n", "  deterministic:\n    if: false\n", 1)
+		if CheckSofaQualityContract([]byte(changed), reusable) == nil {
+			t.Fatal("skipped required job passed")
+		}
 	}
 	for _, test := range []struct {
 		name, before, after, want string
 		onCaller                  bool
 	}{
-		{"job continues after failure", "  deterministic:\n", "  deterministic:\n    continue-on-error: true\n", "quality job cannot continue", true},
+		{"job continues after failure", "  quality:\n", "  quality:\n    continue-on-error: true\n", "quality job cannot continue", true},
 		{"step continues after failure", "      - name: Test Go packages\n", "      - name: Test Go packages\n        continue-on-error: true\n", "quality step cannot continue", false},
 		{"tests bypassed before command", "        run: go test -count=1 ./...", "        run: |\n          exit 0\n          go test -count=1 ./...", "go validators must be separate", false},
 	} {

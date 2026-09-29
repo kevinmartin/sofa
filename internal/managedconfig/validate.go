@@ -78,16 +78,9 @@ func validateRendered(s Spec, files map[string][]byte) error {
 		return errors.New("rendered quality caller no longer requires its selected profiles")
 	}
 	if s.Mode == "self" {
-		if caller.Name != "Sofa / PR deterministic checks" || len(caller.Jobs) != 2 ||
+		if caller.Name != "Sofa / PR deterministic checks" || len(caller.Jobs) != 1 ||
 			!strings.Contains(string(files[callerPath]), "# This workflow name is consumed by the trusted hosted-gate bridge.") {
 			return errors.New("sofa caller name or bridge comment changed")
-		}
-		compat := caller.Jobs["deterministic"]
-		if compat.Needs != "quality" || compat.If != "always()" || compat.RunsOn != "ubuntu-24.04" ||
-			!reflect.DeepEqual(compat.Permissions, map[string]string{"contents": "read"}) || len(compat.Steps) != 1 ||
-			compat.Steps[0].Run != `test "$SOFA_QUALITY_RESULT" = success` ||
-			compat.Steps[0].Env["SOFA_QUALITY_RESULT"] != "${{ needs.quality.result }}" {
-			return errors.New("rendered compatibility gate changed")
 		}
 	} else if caller.Name != "Sofa / PR quality" || len(caller.Jobs) != 1 {
 		return errors.New("consumer caller name or jobs changed")

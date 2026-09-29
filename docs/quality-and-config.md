@@ -29,16 +29,14 @@ PRs authored by the same account, so Kevin still controls the final merge of
 those PRs. Require `sofa / quality-policy` from the sofa App in branch
 protection; that automated status checks the trusted boundary but does not
 approve a dependency upgrade's compatibility or security impact.
-The current `deterministic` job is a temporary compatibility job: it fails
-unless the reusable workflow succeeds. It is no longer a required check and
-will be removed by the follow-up caller migration.
 The bridge publishes `sofa / quality-policy` from the sofa-scoped App on the
 current PR head. Branch protection requires this status and `sofa / hosted-e2e`
 from App `5077388`, plus `quality / result` from the GitHub Actions App
 `15368`, with strict up-to-date checks and administrator enforcement. The
 policy status verifies the workflow contract; `quality / result` proves the
 actual validators passed. A scheduled disposable fallback cannot clear a failed
-policy status.
+policy status. The old `deterministic` job has been retired; the caller now has
+one job invoking the reusable quality workflow.
 
 The `profiles` workflow-call input accepts an empty value (the default),
 `auto`, or a comma-separated list of `go`, `typescript`, and `react`. The
