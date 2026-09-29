@@ -51,7 +51,7 @@ func TestBridgeListensForFastWorkflowName(t *testing.T) {
 }
 
 func TestBridgeVerifiesOfficialReleaseBeforeApprovingPinOnlyUpdate(t *testing.T) {
-	base, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+	base, err := os.ReadFile("../../internal/workflow/testdata/approved-quality.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) 
 			if r.URL.Query().Get("ref") != testCandidateSHA || r.Header.Get("Authorization") != "Bearer read-token" {
 				t.Error("quality policy did not read exact candidate with read token")
 			}
-			data, err := os.ReadFile(filepath.Join("../../.github/workflows", filepath.Base(r.URL.Path)))
+			data, err := os.ReadFile(filepath.Join("../../internal/workflow/testdata", "approved-"+filepath.Base(r.URL.Path)))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1,0 +1,18 @@
+# Managed by sofa config; edit the source manifest in kevinmartin/sofa.
+# This workflow name is consumed by the trusted hosted-gate bridge.
+name: Sofa / PR deterministic checks
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/quality.reusable.yml
+    with:
+      profiles: go

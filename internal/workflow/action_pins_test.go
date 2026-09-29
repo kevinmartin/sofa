@@ -11,7 +11,7 @@ func TestQualityActionPinOnlyException(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+	base, err := os.ReadFile("testdata/approved-quality.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestRepeatedCheckoutPinUpdateIsOneVerifiedRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := os.ReadFile("../../.github/workflows/quality.reusable.yml")
+	base, err := os.ReadFile("testdata/approved-quality.reusable.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
