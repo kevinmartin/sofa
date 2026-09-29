@@ -15,7 +15,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/quality.reusable.yml
     with:
-      profiles: go
+      profiles: {{ .Profiles }}
   # Temporary compatibility check for the existing branch-protection rule.
   deterministic:
     needs: quality
@@ -26,5 +26,5 @@ jobs:
     steps:
       - name: Require shared quality gate
         env:
-          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}
+          SOFA_QUALITY_RESULT: {{ .QualityResultExpression }}
         run: test "$SOFA_QUALITY_RESULT" = success

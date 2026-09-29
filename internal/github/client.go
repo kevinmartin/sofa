@@ -25,6 +25,16 @@ func New(token string, transport http.RoundTripper) (*Client, error) {
 	if strings.TrimSpace(token) == "" || strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("GitHub credential reference is unset or invalid")
 	}
+	return newClient(token, transport), nil
+}
+
+// NewAnonymous permits public read-only discovery without a credential.
+// GitHub still rejects write requests made through this client.
+func NewAnonymous(transport http.RoundTripper) *Client {
+	return newClient("", transport)
+}
+
+func newClient(token string, transport http.RoundTripper) *Client {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
@@ -35,7 +45,11 @@ func New(token string, transport http.RoundTripper) (*Client, error) {
 			Timeout:       30 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("GitHub redirect refused") },
 		},
-	}, nil
+	}
+}
+
+func (c *Client) Authenticated() bool {
+	return c != nil && c.token != ""
 }
 
 type APIError struct {
@@ -63,7 +77,9 @@ func (c *Client) Request(ctx context.Context, method, p string, input, output an
 	if err != nil {
 		return errors.New("construct GitHub request")
 	}
-	r.Header.Set("Authorization", "Bearer "+c.token)
+	if c.token != "" {
+		r.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	r.Header.Set("Accept", "application/vnd.github+json")
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-GitHub-Api-Version", "2022-11-28")

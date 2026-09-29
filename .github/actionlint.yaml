@@ -1,0 +1,11 @@
+# GitHub documents this Copilot scope, but actionlint 1.7.12 does not yet know it.
+# Keep this exception exact so other unknown permissions still fail lint.
+# Remove it when supported; tracked in https://github.com/kevinmartin/sofa/issues/9.
+paths:
+  .github/workflows/work.reusable.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"'
+  # SC2129 only asks for a single redirect around these three output lines.
+  .github/workflows/reconcile.reusable.yml:
+    ignore:
+      - 'shellcheck reported issue in this script: SC2129:'

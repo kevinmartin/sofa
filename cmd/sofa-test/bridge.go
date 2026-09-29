@@ -20,8 +20,10 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/kevinmartin/sofa/internal/workflow"
 	"github.com/spf13/cobra"
 )
 
@@ -150,11 +152,94 @@ func (b bridge) run(ctx context.Context, raw []byte) error {
 			!shaPattern.MatchString(pr.Head.SHA) || !shaPattern.MatchString(pr.Base.SHA) {
 			return errors.New("invalid current PR identity")
 		}
+		if err := b.checkQualityContract(ctx, pr.Head.SHA); err != nil {
+			if statusErr := b.qualityStatus(ctx, pr.Head.SHA, "failure", "Required quality contract was weakened"); statusErr != nil {
+				return statusErr
+			}
+			return err
+		}
+		if err := b.qualityStatus(ctx, pr.Head.SHA, "success", "Required quality contract is intact"); err != nil {
+			return err
+		}
 		if err := b.dispatch(ctx, pr, e.WorkflowRun.ID, e.WorkflowRun.RunAttempt); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (b bridge) qualityStatus(ctx context.Context, sha, state, description string) error {
+	token, err := b.sofaStatusToken(ctx)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/repos/%s/statuses/%s", b.apiURL, sofaRepository, sha)
+	body := map[string]string{"state": state, "context": "sofa / quality-policy", "description": description}
+	if err := b.request(ctx, http.MethodPost, url, token, body, nil, http.StatusCreated); err != nil {
+		return fmt.Errorf("publish trusted quality status: %w", err)
+	}
+	return nil
+}
+
+func (b bridge) sofaStatusToken(ctx context.Context) (string, error) {
+	jwt, err := b.appJWT()
+	if err != nil {
+		return "", err
+	}
+	var installation struct {
+		ID int64 `json:"id"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/installation", b.apiURL, sofaRepository)
+	if err := b.request(ctx, http.MethodGet, url, jwt, nil, &installation, http.StatusOK); err != nil || installation.ID <= 0 {
+		return "", errors.New("sofa App installation unavailable")
+	}
+	var credential struct {
+		Token string `json:"token"`
+	}
+	body := struct {
+		Repositories []string          `json:"repositories"`
+		Permissions  map[string]string `json:"permissions"`
+	}{[]string{"sofa"}, map[string]string{"statuses": "write", "metadata": "read"}}
+	url = fmt.Sprintf("%s/app/installations/%d/access_tokens", b.apiURL, installation.ID)
+	if err := b.request(ctx, http.MethodPost, url, jwt, body, &credential, http.StatusCreated); err != nil || credential.Token == "" {
+		return "", errors.New("unable to mint sofa status token")
+	}
+	return credential.Token, nil
+}
+
+func (b bridge) checkQualityContract(ctx context.Context, sha string) error {
+	caller, err := b.workflowAt(ctx, sha, "pr-fast.yml")
+	if err != nil {
+		return err
+	}
+	reusable, err := b.workflowAt(ctx, sha, "quality.reusable.yml")
+	if err != nil {
+		return err
+	}
+	if err := workflow.CheckSofaQualityContract(caller, reusable); err != nil {
+		return fmt.Errorf("PR weakens required quality contract: %w", err)
+	}
+	return nil
+}
+
+func (b bridge) workflowAt(ctx context.Context, sha, name string) ([]byte, error) {
+	var file struct {
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+		Size     int    `json:"size"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/contents/.github/workflows/%s?ref=%s", b.apiURL, sofaRepository, name, sha)
+	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &file, http.StatusOK); err != nil {
+		return nil, fmt.Errorf("read candidate quality workflow: %w", err)
+	}
+	if file.Encoding != "base64" || file.Size <= 0 || file.Size > 128<<10 {
+		return nil, errors.New("candidate quality workflow unavailable")
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
+	if err != nil || len(data) != file.Size {
+		return nil, errors.New("candidate quality workflow content invalid")
+	}
+	return data, nil
 }
 
 func (b bridge) readPR(ctx context.Context, number int) (pullRequest, error) {
@@ -228,7 +313,7 @@ func (b bridge) disposableAppToken(ctx context.Context) (string, error) {
 
 func (b bridge) appJWT() (string, error) {
 	if b.appID == "" || b.keyPEM == "" {
-		return "", errors.New("App credential unavailable")
+		return "", errors.New("app credential unavailable")
 	}
 	if _, err := strconv.ParseInt(b.appID, 10, 64); err != nil {
 		return "", errors.New("invalid App ID")

@@ -20,6 +20,9 @@ Start with the [milestone plan](docs/milestones/01-delivery-slice.md),
 architecture and future milestones are in [PLAN.md](PLAN.md) and
 [the milestone index](docs/milestones/README.md).
 
+Sofa's shared PR quality gate and its reviewable repository-file reconciler
+are described in [shared quality and managed configuration](docs/quality-and-config.md).
+
 This public repository holds **no Kevin-owned reusable workflow secret**.
 Callers pass their own Project read credential explicitly; the scoped
 `GITHUB_TOKEN` created for a caller run handles repository state and Copilot
