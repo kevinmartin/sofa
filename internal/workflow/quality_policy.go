@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -164,7 +165,15 @@ func CheckSofaQualityContractWithActionPins(caller, reusable, baseReusable []byt
 	if err == nil || !errors.Is(err, ErrUnapprovedQualityDigest) {
 		return err
 	}
-	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] || verify == nil {
+	if !approvedCaller[fmt.Sprintf("%x", sha256.Sum256(caller))] {
+		return err
+	}
+	// Once a reviewed pin update lands on main, subsequent PRs inherit those
+	// exact trusted bytes without needing a new digest approval or release call.
+	if bytes.Equal(baseReusable, reusable) && len(reusable) != 0 {
+		return nil
+	}
+	if verify == nil {
 		return err
 	}
 	pins, pinErr := ActionPinChanges(baseReusable, reusable)

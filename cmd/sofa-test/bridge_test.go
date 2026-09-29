@@ -61,8 +61,17 @@ func TestBridgeVerifiesOfficialReleaseBeforeApprovingPinOnlyUpdate(t *testing.T)
 	if string(candidate) == string(base) {
 		t.Fatal("test fixture has no update")
 	}
-	for _, matching := range []bool{true, false} {
-		t.Run(fmt.Sprint(matching), func(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		matching  bool
+		annotated bool
+	}{
+		{"lightweight", true, false},
+		{"annotated", true, true},
+		{"mismatched lightweight", false, false},
+		{"mismatched annotated", false, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
 			var releaseReads int
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
@@ -81,7 +90,20 @@ func TestBridgeVerifiesOfficialReleaseBeforeApprovingPinOnlyUpdate(t *testing.T)
 					fmt.Fprint(w, `{"draft":false,"prerelease":false}`)
 				case "/repos/actions/setup-node/git/ref/tags/v7.0.0":
 					sha := "820762786026740c76f36085b0efc47a31fe5020"
-					if !matching {
+					if !scenario.matching {
+						sha = testBaseSHA
+					}
+					if scenario.annotated {
+						fmt.Fprintf(w, `{"object":{"type":"tag","sha":%q}}`, strings.Repeat("e", 40))
+					} else {
+						fmt.Fprintf(w, `{"object":{"type":"commit","sha":%q}}`, sha)
+					}
+				case "/repos/actions/setup-node/git/tags/" + strings.Repeat("e", 40):
+					if !scenario.annotated {
+						t.Error("unexpected annotated tag lookup")
+					}
+					sha := "820762786026740c76f36085b0efc47a31fe5020"
+					if !scenario.matching {
 						sha = testBaseSHA
 					}
 					fmt.Fprintf(w, `{"object":{"type":"commit","sha":%q}}`, sha)
@@ -92,8 +114,8 @@ func TestBridgeVerifiesOfficialReleaseBeforeApprovingPinOnlyUpdate(t *testing.T)
 			})
 			b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
 			err := b.checkQualityContract(t.Context(), testCandidateSHA, testBaseSHA)
-			if (err == nil) != matching || releaseReads != 1 {
-				t.Fatalf("matching=%v err=%v release reads=%d", matching, err, releaseReads)
+			if (err == nil) != scenario.matching || releaseReads != 1 {
+				t.Fatalf("matching=%v err=%v release reads=%d", scenario.matching, err, releaseReads)
 			}
 		})
 	}

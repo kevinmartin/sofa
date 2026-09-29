@@ -29,6 +29,9 @@ func TestQualityActionPinOnlyException(t *testing.T) {
 	if len(verified) != 1 || verified[0] != (ActionPin{Name: "actions/setup-node", SHA: "820762786026740c76f36085b0efc47a31fe5020", Tag: "v7.0.0"}) {
 		t.Fatalf("unexpected provenance checks: %+v", verified)
 	}
+	if err := CheckSofaQualityContractWithActionPins(caller, candidate, candidate, nil); err != nil {
+		t.Fatalf("unchanged workflow on trusted main was rejected: %v", err)
+	}
 	for name, changed := range map[string]string{
 		"command":     strings.Replace(string(candidate), "go test -count=1 ./...", "true", 1),
 		"permissions": strings.Replace(string(candidate), "contents: read", "contents: write", 1),

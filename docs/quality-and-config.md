@@ -13,7 +13,9 @@ one narrow Dependabot-style exception: relative to the PR's main-branch base,
 the reusable workflow may change only full SHA pins and release comments for
 `actions/checkout`, `actions/setup-go`, or `actions/setup-node`. The bridge
 checks that each replacement SHA is the commit behind a stable release tag in
-the official action repository. The candidate still runs every quality job.
+the official action repository. A later PR may reuse those exact workflow
+bytes once they are on `main`; the bridge still checks the workflow structure.
+The candidate still runs every quality job.
 Changes to commands, permissions, conditions, checkout settings, other
 actions, or the caller still need a separate Kevin-reviewed policy PR that
 preapproves the exact digest. The hosted E2E observer applies the same

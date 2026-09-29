@@ -256,6 +256,19 @@ func (b bridge) verifyOfficialAction(ctx context.Context, pin workflow.ActionPin
 	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &ref, http.StatusOK); err != nil {
 		return err
 	}
+	if ref.Object.Type == "tag" {
+		var tag struct {
+			Object struct {
+				Type string `json:"type"`
+				SHA  string `json:"sha"`
+			} `json:"object"`
+		}
+		url = fmt.Sprintf("%s/repos/%s/git/tags/%s", b.apiURL, pin.Name, ref.Object.SHA)
+		if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &tag, http.StatusOK); err != nil {
+			return err
+		}
+		ref.Object = tag.Object
+	}
 	if ref.Object.Type != "commit" || ref.Object.SHA != pin.SHA {
 		return errors.New("action release tag does not resolve to pinned commit")
 	}
