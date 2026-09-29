@@ -49,6 +49,7 @@ func TestSofaQualityContract(t *testing.T) {
 		{"permissions broadened", caller, []byte(strings.Replace(string(reusable), "contents: read", "contents: write", 1))},
 		{"different action", caller, []byte(strings.Replace(string(reusable), "actions/checkout", "attacker/checkout", 1))},
 		{"unpinned action", caller, []byte(strings.Replace(string(reusable), string(original), "actions/checkout@v999", 1))},
+		{"placeholder ref", caller, []byte(strings.Replace(string(reusable), string(original), "actions/checkout@<sha> # <version>", 1))},
 		{"extra workflow line", caller, append(append([]byte(nil), reusable...), []byte("\n# extra command\n")...)},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {

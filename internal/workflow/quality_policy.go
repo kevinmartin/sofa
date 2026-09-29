@@ -10,7 +10,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-var actionPinLine = regexp.MustCompile(`(?m)^([ \t]*(?:- )?uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$`)
+var actionPinLine = regexp.MustCompile(`^([ \t]*(?:- )?uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+\n?$`)
 
 // CheckSofaQualityContract compares PR workflows with their trusted main-branch
 // base. Existing action pins may change; all other workflow bytes must match.
@@ -19,14 +19,30 @@ func CheckSofaQualityContract(caller, reusable, baseCaller, baseReusable []byte)
 		return err
 	}
 	if len(baseCaller) == 0 || len(baseReusable) == 0 || !bytes.Equal(caller, baseCaller) ||
-		!bytes.Equal(normalizeActionPins(reusable), normalizeActionPins(baseReusable)) {
+		!sameExceptActionPins(baseReusable, reusable) {
 		return errors.New("candidate quality workflow changed beyond action pins")
 	}
 	return nil
 }
 
-func normalizeActionPins(data []byte) []byte {
-	return actionPinLine.ReplaceAll(data, []byte("${1}@<sha> # <version>"))
+func sameExceptActionPins(base, candidate []byte) bool {
+	if len(base) == 0 || len(base) > 128<<10 || len(candidate) == 0 || len(candidate) > 128<<10 {
+		return false
+	}
+	before, after := strings.SplitAfter(string(base), "\n"), strings.SplitAfter(string(candidate), "\n")
+	if len(before) != len(after) {
+		return false
+	}
+	for i, line := range before {
+		if line == after[i] {
+			continue
+		}
+		old, next := actionPinLine.FindStringSubmatch(line), actionPinLine.FindStringSubmatch(after[i])
+		if old == nil || next == nil || old[1] != next[1] || strings.HasSuffix(line, "\n") != strings.HasSuffix(after[i], "\n") {
+			return false
+		}
+	}
+	return true
 }
 
 // CheckSofaQualityContractStructure rejects weakened candidate workflows
