@@ -34,10 +34,11 @@ unless the reusable workflow succeeds. It is no longer a required check and
 will be removed by the follow-up caller migration.
 The bridge publishes `sofa / quality-policy` from the sofa-scoped App on the
 current PR head. Branch protection requires this status and `sofa / hosted-e2e`
-from App `5077388`, with strict up-to-date checks and administrator enforcement.
-A scheduled disposable fallback cannot clear a failed policy status. Observe
-the reusable aggregate `quality / result` check-run name on a pilot PR before
-considering it as an additional required Actions check.
+from App `5077388`, plus `quality / result` from the GitHub Actions App
+`15368`, with strict up-to-date checks and administrator enforcement. The
+policy status verifies the workflow contract; `quality / result` proves the
+actual validators passed. A scheduled disposable fallback cannot clear a failed
+policy status.
 
 The `profiles` workflow-call input accepts an empty value (the default),
 `auto`, or a comma-separated list of `go`, `typescript`, and `react`. The

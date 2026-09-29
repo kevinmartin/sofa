@@ -2,4 +2,5 @@
 /.github/workflows/ @kevinmartin
 /internal/workflow/quality_policy.go @kevinmartin
 /internal/workflow/action_pins.go @kevinmartin
+/cmd/sofa-test/bridge.go @kevinmartin
 /internal/managedconfig/templates/ @kevinmartin
