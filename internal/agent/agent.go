@@ -97,8 +97,8 @@ func Run(parent context.Context, cfg Config, prompt string) (result Result, retE
 		}
 		var path string
 		for _, e := range cfg.Env {
-			if strings.HasPrefix(e, "PATH=") {
-				path = strings.TrimPrefix(e, "PATH=")
+			if after, ok := strings.CutPrefix(e, "PATH="); ok {
+				path = after
 			}
 		}
 		command = resolveExecutable(command, path)
@@ -245,8 +245,7 @@ func classify(ctx context.Context, stage string, err error, stderr *stderrOSCode
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	var remote *acp.RequestError
-	if errors.As(err, &remote) {
+	if remote, ok := errors.AsType[*acp.RequestError](err); ok {
 		if remote.Code == -32000 {
 			return ErrAuthentication
 		}
@@ -298,8 +297,7 @@ func protocolFailure(stage string, err error, stderr *stderrOSCode) error {
 	category := "invalid response"
 	if err != nil {
 		category = "transport"
-		var remote *acp.RequestError
-		if errors.As(err, &remote) {
+		if remote, ok := errors.AsType[*acp.RequestError](err); ok {
 			category = fmt.Sprintf("RPC code %d", remote.Code)
 		} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			category = "connection closed"
@@ -396,7 +394,7 @@ func safeRelative(p string) bool {
 	if p == "" || filepath.IsAbs(p) || filepath.Clean(p) != p || p == "." || strings.ContainsAny(p, "\\\x00\r\n") {
 		return false
 	}
-	for _, part := range strings.Split(p, "/") {
+	for part := range strings.SplitSeq(p, "/") {
 		if part == ".." || strings.HasPrefix(part, ".") || part == "AGENTS.md" || part == "SKILL.md" {
 			return false
 		}

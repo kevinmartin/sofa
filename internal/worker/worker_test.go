@@ -97,7 +97,7 @@ func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
 			ToolFailedUpdates:        1,
 		}, nil
 	})
-	out, err := Execute(context.Background(), in)
+	out, err := Execute(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,14 +115,14 @@ func TestRecipeBypassesAgentAndRequiresPreconditions(t *testing.T) {
 	in.CanonicalSpec, _ = json.Marshal(map[string]string{"title": "Format Go", "body": "Format existing fixture.\n<!-- sofa:recipe=gofmt -->"})
 	calls := 0
 	in.Runner = RunnerFunc(func(context.Context, agent.Config, string) (agent.Result, error) { calls++; return agent.Result{}, nil })
-	out, err := Execute(context.Background(), in)
+	out, err := Execute(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 || out.UsedAgent || out.ModelCalls != nil || len(out.Bundle.Files) != 1 {
 		t.Fatal("recipe invoked model or did not produce change")
 	}
-	out, err = Execute(context.Background(), in)
+	out, err = Execute(t.Context(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestRecipeBypassesAgentAndRequiresPreconditions(t *testing.T) {
 	if err := os.WriteFile(path, []byte("package fixture\nfunc ("), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Execute(context.Background(), in); err == nil || calls != 0 {
+	if _, err := Execute(t.Context(), in); err == nil || calls != 0 {
 		t.Fatal("invalid recipe input did not fail closed")
 	}
 }
@@ -144,7 +144,7 @@ func TestRefusedAgentTurnCannotBecomeCandidate(t *testing.T) {
 			StopReason: "refusal",
 		}, nil
 	})
-	if _, err := Execute(context.Background(), in); err == nil {
+	if _, err := Execute(t.Context(), in); err == nil {
 		t.Fatal("refused turn accepted")
 	}
 }
@@ -162,7 +162,7 @@ func TestFailedAgentTurnRetainsPromptAccounting(t *testing.T) {
 			ToolFailedUpdates:        1,
 		}, agent.ErrQuota
 	})
-	out, err := Execute(context.Background(), in)
+	out, err := Execute(t.Context(), in)
 	if err != agent.ErrQuota || !out.UsedAgent || out.PromptRequests != 1 || out.Updates != 2 || out.PermissionRequests != 1 || out.PermissionDenials != 1 || out.PermissionExecuteDenials != 1 || out.ToolExecutes != 1 || out.ToolFailedUpdates != 1 || len(out.Bundle.Files) != 0 {
 		t.Fatalf("failed ACP turn lost bounded accounting: %+v, %v", out, err)
 	}

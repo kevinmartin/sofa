@@ -136,7 +136,7 @@ func (s StateStore) SaveSpec(ctx context.Context, issueID, digest string, canoni
 	if hex.EncodeToString(h[:]) != digest {
 		return errors.New("specification digest mismatch")
 	}
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		current, err := s.Load(ctx)
 		if err != nil {
 			return err

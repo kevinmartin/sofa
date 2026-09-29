@@ -12,6 +12,7 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -126,10 +127,8 @@ func (c Config) Validate() error {
 		return errors.New("a copilot profile with a credential environment reference is required")
 	}
 	// These credentials must never be selected as model authentication.
-	for _, reserved := range []string{"SOFA_PROJECTS_TOKEN", "SOFA_PUBLISH_TOKEN", "SOFA_STATE_TOKEN", "SOFA_APP_PRIVATE_KEY"} {
-		if c.Profile.SecretEnv == reserved {
-			return errors.New("privileged credential cannot be a model profile")
-		}
+	if slices.Contains([]string{"SOFA_PROJECTS_TOKEN", "SOFA_PUBLISH_TOKEN", "SOFA_STATE_TOKEN", "SOFA_APP_PRIVATE_KEY"}, c.Profile.SecretEnv) {
+		return errors.New("privileged credential cannot be a model profile")
 	}
 	l := c.Limits
 	if l.AttemptSeconds < 1 || l.AttemptSeconds > 21600 || l.RepairAttempts < 0 || l.RepairAttempts > 10 || l.InfraRetries < 0 || l.InfraRetries > 10 || l.MaxAgentTurns < 1 || l.MaxAgentTurns > 100 {
@@ -182,7 +181,7 @@ func SafePath(p string) bool {
 	if p == "" || p == "." || len(p) > 512 || path.Clean(p) != p || strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\\:\x00\r\n\t*?[]") {
 		return false
 	}
-	for _, part := range strings.Split(p, "/") {
+	for part := range strings.SplitSeq(p, "/") {
 		if part == ".." || part == "." || strings.TrimSpace(part) != part || strings.HasSuffix(part, ".") {
 			return false
 		}

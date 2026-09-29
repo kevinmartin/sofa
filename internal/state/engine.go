@@ -27,7 +27,7 @@ func (e Engine) update(ctx context.Context, f func(*State) (bool, error)) error 
 	if e.Store == nil {
 		return fmt.Errorf("%w: missing store", ErrInvalid)
 	}
-	for retry := 0; retry < 64; retry++ {
+	for range 64 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

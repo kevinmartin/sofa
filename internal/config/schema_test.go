@@ -253,7 +253,7 @@ func TestSchemaPortablePathRules(t *testing.T) {
 
 func TestConsumerEditorSchemaAssociation(t *testing.T) {
 	text := fixture(t)
-	line := strings.SplitN(text, "\n", 2)[0]
+	line, _, _ := strings.Cut(text, "\n")
 	const prefix = "# yaml-language-server: $schema="
 	if !strings.HasPrefix(line, prefix) {
 		t.Fatal("consumer example is missing its editor schema association")

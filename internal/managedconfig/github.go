@@ -73,7 +73,7 @@ func (c Reconciler) Reconcile(ctx context.Context, spec Spec, apply bool) (Resul
 			})
 		}
 	}
-	owner := strings.SplitN(spec.Repository, "/", 2)[0]
+	owner, _, _ := strings.Cut(spec.Repository, "/")
 	if len(result.Changes) == 0 {
 		pulls, err := c.GitHub.OpenPullRequests(ctx, spec.Repository, owner+":"+configBranch, repository.DefaultBranch)
 		if err != nil {

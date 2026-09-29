@@ -114,7 +114,7 @@ func config(t *testing.T, mode string) Config {
 
 func TestNegotiationStreamingAndPermissionDenial(t *testing.T) {
 	t.Setenv("SOFA_SECRET_SENTINEL", "host-credential")
-	got, err := Run(context.Background(), config(t, "ok"), "make a fixture change")
+	got, err := Run(t.Context(), config(t, "ok"), "make a fixture change")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestSessionUpdateCountsOnlyFixedToolCategories(t *testing.T) {
 	}
 	sensitive := "SECRET_SHOULD_NEVER_APPEAR"
 	for _, kind := range []acp.ToolKind{acp.ToolKindRead, acp.ToolKindEdit, acp.ToolKindExecute, acp.ToolKind("SECRET_KIND_SHOULD_NEVER_APPEAR")} {
-		if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+		if err := c.SessionUpdate(t.Context(), acp.SessionNotification{
 			SessionId: c.session,
 			Update: acp.SessionUpdate{
 				ToolCall: &acp.SessionUpdateToolCall{
@@ -147,7 +147,7 @@ func TestSessionUpdateCountsOnlyFixedToolCategories(t *testing.T) {
 		}
 	}
 	failed := acp.ToolCallStatusFailed
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+	if err := c.SessionUpdate(t.Context(), acp.SessionNotification{
 		SessionId: c.session,
 		Update: acp.SessionUpdate{
 			ToolCallUpdate: &acp.SessionToolCallUpdate{
@@ -161,7 +161,7 @@ func TestSessionUpdateCountsOnlyFixedToolCategories(t *testing.T) {
 	if c.updates != 5 || c.toolReads != 1 || c.toolEdits != 1 || c.toolExecutes != 1 || c.toolOthers != 1 || c.toolFailedUpdates != 1 {
 		t.Fatalf("unexpected fixed counters: %+v", c)
 	}
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+	if err := c.SessionUpdate(t.Context(), acp.SessionNotification{
 		SessionId: c.session,
 		Update: acp.SessionUpdate{
 			ToolCall: &acp.SessionUpdateToolCall{
@@ -175,13 +175,13 @@ func TestSessionUpdateCountsOnlyFixedToolCategories(t *testing.T) {
 	}); err != nil || c.updates != 6 || c.toolFailedUpdates != 2 {
 		t.Fatal("failed status counted more than once per notification")
 	}
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+	if err := c.SessionUpdate(t.Context(), acp.SessionNotification{
 		SessionId: "other",
 	}); !errors.Is(err, ErrProtocol) || c.updates != 6 {
 		t.Fatal("cross-session update changed counters")
 	}
 	c.updates = MaxObservationCount
-	if err := c.SessionUpdate(context.Background(), acp.SessionNotification{
+	if err := c.SessionUpdate(t.Context(), acp.SessionNotification{
 		SessionId: c.session,
 		Update: acp.SessionUpdate{
 			ToolCall: &acp.SessionUpdateToolCall{
@@ -211,7 +211,7 @@ func TestProtocolAuthenticationAndQuotaFailures(t *testing.T) {
 		turns: 1,
 	}} {
 		t.Run(tc.mode, func(t *testing.T) {
-			got, err := Run(context.Background(), config(t, tc.mode), "test")
+			got, err := Run(t.Context(), config(t, tc.mode), "test")
 			if !errors.Is(err, tc.want) || got.PromptRequests != tc.turns {
 				t.Fatalf("result %+v, error %v", got, err)
 			}
@@ -238,7 +238,7 @@ func TestTimeoutKillsDescendants(t *testing.T) {
 	cfg.Timeout = 400 * time.Millisecond
 	pidPath := filepath.Join(cfg.Dir, "child-pid")
 	cfg.Env = append(cfg.Env, "SOFA_PID_PATH="+pidPath)
-	got, err := Run(context.Background(), cfg, "hang")
+	got, err := Run(t.Context(), cfg, "hang")
 	if !errors.Is(err, context.DeadlineExceeded) || got.PromptRequests != 1 {
 		t.Fatalf("result %+v, err %v", got, err)
 	}
@@ -269,7 +269,7 @@ func processStopped(pid int) bool {
 	return err == nil && strings.Contains(string(b), ") Z ")
 }
 func TestPreCancelledStartsNoPrompt(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	got, err := Run(ctx, config(t, "ok"), "test")
 	if !errors.Is(err, context.Canceled) || got.PromptRequests != 0 {
@@ -290,7 +290,7 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "ok.go"), []byte("before"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.WriteTextFile(context.Background(), acp.WriteTextFileRequest{
+	_, err = c.WriteTextFile(t.Context(), acp.WriteTextFileRequest{
 		SessionId: "s",
 		Path:      filepath.Join(root, "ok.go"),
 		Content:   "after",
@@ -298,7 +298,7 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	read, err := c.ReadTextFile(context.Background(), acp.ReadTextFileRequest{
+	read, err := c.ReadTextFile(t.Context(), acp.ReadTextFileRequest{
 		SessionId: "s",
 		Path:      filepath.Join(root, "ok.go"),
 	})
@@ -319,13 +319,13 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range []string{filepath.Join(outside, "secret"), filepath.Join(root, "link.go"), filepath.Join(root, "dir/nested.go"), filepath.Join(root, "hard.go"), filepath.Join(root, ".git/config"), "relative.go"} {
-		if _, err := c.ReadTextFile(context.Background(), acp.ReadTextFileRequest{
+		if _, err := c.ReadTextFile(t.Context(), acp.ReadTextFileRequest{
 			SessionId: "s",
 			Path:      p,
 		}); !errors.Is(err, ErrPermission) {
 			t.Fatalf("read allowed %q", p)
 		}
-		if _, err := c.WriteTextFile(context.Background(), acp.WriteTextFileRequest{
+		if _, err := c.WriteTextFile(t.Context(), acp.WriteTextFileRequest{
 			SessionId: "s",
 			Path:      p,
 			Content:   "bad",
@@ -350,19 +350,19 @@ func TestFilesystemScopeAndPermissions(t *testing.T) {
 			OptionId: "yes",
 		}},
 	}
-	answer, err := c.RequestPermission(context.Background(), p)
+	answer, err := c.RequestPermission(t.Context(), p)
 	if err != nil || answer.Outcome.Selected == nil {
 		t.Fatal("scoped edit permission denied")
 	}
 	p.ToolCall.Locations = []acp.ToolCallLocation{{
 		Path: filepath.Join(root, "link.go"),
 	}}
-	answer, err = c.RequestPermission(context.Background(), p)
+	answer, err = c.RequestPermission(t.Context(), p)
 	if err != nil || answer.Outcome.Cancelled == nil {
 		t.Fatal("symlink permission allowed")
 	}
 	p.ToolCall.Locations = nil
-	answer, err = c.RequestPermission(context.Background(), p)
+	answer, err = c.RequestPermission(t.Context(), p)
 	if err != nil || answer.Outcome.Cancelled == nil {
 		t.Fatal("unscoped edit permission allowed")
 	}
@@ -372,7 +372,7 @@ func TestCancellationKillsRunningAgent(t *testing.T) {
 	cfg := config(t, "timeout")
 	pidPath := filepath.Join(cfg.Dir, "child-pid")
 	cfg.Env = append(cfg.Env, "SOFA_PID_PATH="+pidPath)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := Run(ctx, cfg, "hang"); done <- err }()
@@ -409,7 +409,7 @@ func TestInvalidConfiguration(t *testing.T) {
 	for _, p := range []string{"../x", ".git/config", ".github/workflows/x.yml", "AGENTS.md", "dir/.secret", "/tmp/x"} {
 		cfg := config(t, "ok")
 		cfg.AllowedPaths = []string{p}
-		got, err := Run(context.Background(), cfg, "test")
+		got, err := Run(t.Context(), cfg, "test")
 		if !errors.Is(err, ErrConfiguration) || got.PromptRequests != 0 {
 			t.Fatalf("allowed %q: %+v %v", p, got, err)
 		}

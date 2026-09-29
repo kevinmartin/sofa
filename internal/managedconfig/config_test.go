@@ -2,7 +2,6 @@ package managedconfig
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +60,7 @@ func TestActionlintRenderedCallers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := ValidateActionlint(context.Background(), files); err != nil {
+			if err := ValidateActionlint(t.Context(), files); err != nil {
 				t.Fatal(err)
 			}
 		})

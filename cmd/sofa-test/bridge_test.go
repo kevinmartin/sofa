@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -183,7 +182,7 @@ func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) 
 		}
 	})
 	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token", appID: "123", keyPEM: key, now: time.Now}
-	if err := b.run(context.Background(), testEvent(2, 2)); err != nil {
+	if err := b.run(t.Context(), testEvent(2, 2)); err != nil {
 		t.Fatal(err)
 	}
 	if dispatches != 1 || policyStatuses != 1 {
@@ -198,13 +197,13 @@ func TestBridgeDoesNotDispatchClosedOrUnassociatedPR(t *testing.T) {
 		fmt.Fprintf(w, `{"number":2,"state":"closed","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
 	})
 	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
-	if err := b.run(context.Background(), testEvent()); err != nil {
+	if err := b.run(t.Context(), testEvent()); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
 		t.Fatal("unassociated run made an API request")
 	}
-	if err := b.run(context.Background(), testEvent(2)); err != nil {
+	if err := b.run(t.Context(), testEvent(2)); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -247,7 +246,7 @@ func TestBridgePublishesFailureForWeakenedQuality(t *testing.T) {
 		}
 	})
 	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token", appID: "123", keyPEM: key, now: time.Now}
-	if err := b.run(context.Background(), testEvent(2)); err == nil || !failed {
+	if err := b.run(t.Context(), testEvent(2)); err == nil || !failed {
 		t.Fatalf("weakened gate was not blocked, err=%v failed=%v", err, failed)
 	}
 }
@@ -264,7 +263,7 @@ func TestBridgeRejectsForeignOrMalformedPRIdentityBeforeDispatch(t *testing.T) {
 				fmt.Fprint(w, response)
 			})
 			b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
-			if err := b.run(context.Background(), testEvent(2)); err == nil {
+			if err := b.run(t.Context(), testEvent(2)); err == nil {
 				t.Fatal("accepted invalid PR identity")
 			}
 			if calls != 1 {

@@ -1,7 +1,6 @@
 package github
 
 import (
-	"context"
 	"net/http"
 	"testing"
 )
@@ -20,7 +19,7 @@ func TestAnonymousClientOmitsAuthorization(t *testing.T) {
 	var repository struct {
 		FullName string `json:"full_name"`
 	}
-	if err := client.Request(context.Background(), http.MethodGet, "/repos/kevinmartin/sofa", nil, &repository); err != nil ||
+	if err := client.Request(t.Context(), http.MethodGet, "/repos/kevinmartin/sofa", nil, &repository); err != nil ||
 		repository.FullName != "kevinmartin/sofa" {
 		t.Fatalf("anonymous public read failed: %v, %+v", err, repository)
 	}

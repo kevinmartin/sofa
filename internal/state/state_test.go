@@ -124,11 +124,9 @@ func TestConcurrentClaimsAndStaleCAS(t *testing.T) {
 	a := admitted(t, e)
 	var won atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < 24; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, err := e.Claim(context.Background(), a.ID, Owner{
+	for i := range 24 {
+		wg.Go(func() {
+			_, err := e.Claim(t.Context(), a.ID, Owner{
 				RunID:      "run",
 				RunAttempt: i + 1,
 			})
@@ -137,7 +135,7 @@ func TestConcurrentClaimsAndStaleCAS(t *testing.T) {
 			} else if !errors.Is(err, ErrClaimed) {
 				t.Errorf("claim: %v", err)
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 	if won.Load() != 1 {
@@ -616,10 +614,8 @@ func TestGitStoreConcurrentClaims(t *testing.T) {
 	var winners atomic.Int32
 	var wg sync.WaitGroup
 	for i := 1; i <= 8; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, err := e.Claim(context.Background(), a.ID, Owner{
+		wg.Go(func() {
+			_, err := e.Claim(t.Context(), a.ID, Owner{
 				RunID:      "claiming-run",
 				RunAttempt: i,
 			})
@@ -628,7 +624,7 @@ func TestGitStoreConcurrentClaims(t *testing.T) {
 			} else if !errors.Is(err, ErrClaimed) {
 				t.Errorf("concurrent Git claim: %v", err)
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 	if winners.Load() != 1 {

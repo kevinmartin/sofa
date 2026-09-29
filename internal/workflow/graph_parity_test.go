@@ -116,7 +116,7 @@ func jobNames(w contractWorkflow) []string {
 func jobUploadsPath(job contractJob, path string) bool {
 	for _, step := range job.Steps {
 		if strings.HasPrefix(step.Uses, "actions/upload-artifact@") {
-			for _, candidate := range strings.Fields(step.With["path"]) {
+			for candidate := range strings.FieldsSeq(step.With["path"]) {
 				if candidate == path {
 					return true
 				}

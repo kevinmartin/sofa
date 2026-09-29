@@ -503,7 +503,7 @@ func TestHostedArtifactPublicationConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := github.PublishInput{Bundle: b, Expected: expected, Policy: bundlePolicy(c), Checks: checks, RequiredChecks: requiredChecks, BaseBranch: "main", Title: "Fixture", Body: "Simulated hosted branch conflict", Guard: func(context.Context) error { return nil }}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := client.PublishDraft(context.Background(), input); err == nil {
 			t.Fatal("unexpected existing branch was accepted")
 		}

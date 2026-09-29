@@ -153,7 +153,7 @@ func (g GitStore) SaveSpec(ctx context.Context, issueID, specDigest string, cano
 	if hex.EncodeToString(h[:]) != specDigest {
 		return fmt.Errorf("%w: specification digest", ErrInvalid)
 	}
-	for attempt := 0; attempt < 12; attempt++ {
+	for range 12 {
 		snapshot, err := g.Load(ctx)
 		if err != nil {
 			return err

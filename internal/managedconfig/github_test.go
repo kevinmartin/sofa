@@ -1,7 +1,6 @@
 package managedconfig
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -98,7 +97,7 @@ func TestReconcileReusesExistingConfigPR(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	result, err := client.Reconcile(context.Background(), spec, true)
+	result, err := client.Reconcile(t.Context(), spec, true)
 	if err != nil || writes != 0 || result.PullURL != "https://github.com/kevinmartin/example/pull/1" {
 		t.Fatalf("existing PR not reused: %+v, writes=%d, err=%v", result, writes, err)
 	}
@@ -147,11 +146,11 @@ func TestReconcilePlansAndOpensOneScopedPR(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	plan, err := client.Reconcile(context.Background(), consumerSpec(t), false)
+	plan, err := client.Reconcile(t.Context(), consumerSpec(t), false)
 	if err != nil || len(plan.Changes) != 2 || len(writes) != 0 {
 		t.Fatalf("dry run changed state: %+v, writes=%v, err=%v", plan, writes, err)
 	}
-	result, err := client.Reconcile(context.Background(), consumerSpec(t), true)
+	result, err := client.Reconcile(t.Context(), consumerSpec(t), true)
 	if err != nil || len(writes) != 4 || result.PullURL == "" {
 		t.Fatalf("apply did not create exactly one PR: %+v, writes=%v, err=%v", result, writes, err)
 	}
@@ -172,7 +171,7 @@ func TestReconcileRefusesUnmanagedFile(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil {
+	if _, err := client.Reconcile(t.Context(), consumerSpec(t), true); err == nil {
 		t.Fatal("unmanaged repository file was accepted")
 	}
 }
@@ -197,7 +196,7 @@ func TestReconcileRefusesMalformedExistingBranchRef(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "config branch reference unavailable") {
+	if _, err := client.Reconcile(t.Context(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "config branch reference unavailable") {
 		t.Fatalf("malformed existing ref was accepted: %v", err)
 	}
 }
@@ -220,7 +219,7 @@ func TestReconcileRefusesExistingEmptyFile(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "not managed") {
+	if _, err := client.Reconcile(t.Context(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "not managed") {
 		t.Fatalf("existing empty file was accepted: %v", err)
 	}
 }
@@ -263,15 +262,15 @@ func TestReconcileClosesStaleConfigPR(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	plan, err := client.Reconcile(context.Background(), spec, false)
+	plan, err := client.Reconcile(t.Context(), spec, false)
 	if err != nil || closed || plan.PullURL == "" {
 		t.Fatalf("read-only plan lost stale PR: %+v, closed=%v, err=%v", plan, closed, err)
 	}
-	result, err := client.Reconcile(context.Background(), spec, true)
+	result, err := client.Reconcile(t.Context(), spec, true)
 	if err != nil || !closed || result.PullURL != "" || result.ClosedPullURL != "https://github.com/kevinmartin/example/pull/7" {
 		t.Fatalf("stale PR not closed: %+v, closed=%v, err=%v", result, closed, err)
 	}
-	result, err = client.Reconcile(context.Background(), spec, true)
+	result, err = client.Reconcile(t.Context(), spec, true)
 	if err != nil || result.PullURL != "" || result.ClosedPullURL != "" {
 		t.Fatalf("idempotent run changed state: %+v, err=%v", result, err)
 	}
@@ -299,7 +298,7 @@ func TestReconcileRefusesBranchBehindDefault(t *testing.T) {
 	}))
 	defer server.Close()
 	client := clientForServer(t, server)
-	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "behind default branch") {
+	if _, err := client.Reconcile(t.Context(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "behind default branch") {
 		t.Fatalf("behind config branch was accepted: %v", err)
 	}
 }
@@ -311,7 +310,7 @@ func TestReconcileApplyRequiresActionlintBeforeGitHub(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := Reconciler{GitHub: api}
-	if _, err := client.Reconcile(context.Background(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "actionlint") {
+	if _, err := client.Reconcile(t.Context(), consumerSpec(t), true); err == nil || !strings.Contains(err.Error(), "actionlint") {
 		t.Fatalf("apply did not fail before GitHub without actionlint: %v", err)
 	}
 }
