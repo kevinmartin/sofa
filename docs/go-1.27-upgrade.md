@@ -3,6 +3,7 @@
 The toolkit and disposable consumer example require Go 1.27.1. CI selects the
 toolchain from each module's `go.mod`. Go 1.27.1 includes fixes to `go fix`,
 `encoding/json`, and `net/http` after the initial 1.27 release.
+The shared quality gate pins Staticcheck 2026.2.1, which supports Go 1.27.
 
 | Release | Relevant changes | Decision in this repository |
 | --- | --- | --- |

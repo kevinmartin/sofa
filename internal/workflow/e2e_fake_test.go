@@ -1,8 +1,11 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,7 +61,8 @@ func checkFakeWorkflowContract(data []byte) error {
 		return fmt.Errorf("fake worker isolation or identity changed")
 	}
 	for _, required := range []string{
-		"export SOFA_E2E_HOST_ONLY_TOKEN=\"sofa-e2e-host-$(openssl rand -hex 32)\"",
+		"SOFA_E2E_HOST_ONLY_TOKEN=\"sofa-e2e-host-$(openssl rand -hex 32)\"",
+		"export SOFA_E2E_HOST_ONLY_TOKEN",
 		"host_file_sentinel=\"sofa-e2e-host-file-$(openssl rand -hex 32)\"",
 		"host_file=\"$(mktemp \"$RUNNER_TEMP/sofa-e2e-host-only.XXXXXX\")\"",
 		"echo \"::add-mask::$SOFA_E2E_HOST_ONLY_TOKEN\"",
@@ -112,6 +116,48 @@ func checkFakeWorkflowContract(data []byte) error {
 		return fmt.Errorf("fake denial report or scheduler assertions are missing")
 	}
 	return nil
+}
+
+func TestFakeSentinelGenerationFailsClosed(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/e2e-fake.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := parseContractWorkflow(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run, shell string
+	for _, step := range w.Jobs["execute"].Steps {
+		if step.Name == "Run fake ACP in the restricted networkless worker" {
+			run, shell = step.Run, step.Shell
+			break
+		}
+	}
+	prefix, _, found := strings.Cut(run, "host_file_sentinel=")
+	if !found || shell != "bash" {
+		t.Fatal("fake worker shell or sentinel step changed")
+	}
+	dir := t.TempDir()
+	called := filepath.Join(dir, "openssl-called")
+	continued := filepath.Join(dir, "continued")
+	if err := os.WriteFile(filepath.Join(dir, "openssl"), []byte("#!/bin/sh\nprintf called > \"$SOFA_OPENSSL_CALLED\"\nexit 23\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", prefix+"printf continued > \"$SOFA_CONTINUED\"\n")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "SOFA_OPENSSL_CALLED="+called, "SOFA_CONTINUED="+continued)
+	output, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 23 {
+		t.Fatalf("failed openssl did not stop the step: err=%v output=%s", err, output)
+	}
+	if _, err := os.Stat(called); err != nil {
+		t.Fatalf("fake openssl was not called: %v", err)
+	}
+	if _, err := os.Stat(continued); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("step continued after failed openssl: %v", err)
+	}
 }
 
 func TestFakeHostedWorkflowContract(t *testing.T) {

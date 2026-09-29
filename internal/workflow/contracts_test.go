@@ -28,10 +28,11 @@ type contractJob struct {
 	With        map[string]string `yaml:"with"`
 	Permissions map[string]string `yaml:"permissions"`
 	Steps       []struct {
-		Name string            `yaml:"name"`
-		Run  string            `yaml:"run"`
-		Uses string            `yaml:"uses"`
-		With map[string]string `yaml:"with"`
+		Name  string            `yaml:"name"`
+		Run   string            `yaml:"run"`
+		Shell string            `yaml:"shell"`
+		Uses  string            `yaml:"uses"`
+		With  map[string]string `yaml:"with"`
 	} `yaml:"steps"`
 }
 

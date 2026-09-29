@@ -1,10 +1,10 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -95,7 +95,7 @@ func testAppKey(t *testing.T) string {
 
 func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) {
 	key := testAppKey(t)
-	var dispatches int
+	var dispatches, policyStatuses int
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/kevinmartin/sofa/pulls/2":
@@ -103,11 +103,44 @@ func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) 
 				t.Error("PR read did not use read-only workflow token")
 			}
 			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
+		case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
+			if r.URL.Query().Get("ref") != testCandidateSHA || r.Header.Get("Authorization") != "Bearer read-token" {
+				t.Error("quality policy did not read exact candidate with read token")
+			}
+			data, err := os.ReadFile(filepath.Join("../../.github/workflows", filepath.Base(r.URL.Path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "size": len(data), "content": base64.StdEncoding.EncodeToString(data)})
 		case "/repos/kevinmartin/sofa-disposable/installation":
 			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer eyJ") {
 				t.Error("installation discovery did not use App JWT")
 			}
 			fmt.Fprint(w, `{"id":42}`)
+		case "/repos/kevinmartin/sofa/installation":
+			fmt.Fprint(w, `{"id":43}`)
+		case "/app/installations/43/access_tokens":
+			var request struct {
+				Repositories []string          `json:"repositories"`
+				Permissions  map[string]string `json:"permissions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			if len(request.Repositories) != 1 || request.Repositories[0] != "sofa" || request.Permissions["statuses"] != "write" || len(request.Permissions) != 2 {
+				t.Errorf("sofa status token not scoped: %+v", request)
+			}
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"token":"status-token"}`)
+		case "/repos/kevinmartin/sofa/statuses/" + testCandidateSHA:
+			policyStatuses++
+			var request struct {
+				State, Context string
+			}
+			if r.Header.Get("Authorization") != "Bearer status-token" || json.NewDecoder(r.Body).Decode(&request) != nil || request.State != "success" || request.Context != "sofa / quality-policy" {
+				t.Errorf("unexpected trusted quality status: %+v", request)
+			}
+			w.WriteHeader(http.StatusCreated)
 		case "/app/installations/42/access_tokens":
 			var request struct {
 				Repositories []string          `json:"repositories"`
@@ -149,11 +182,11 @@ func TestBridgeDispatchesOnlyCurrentExactPRPairWithNarrowAppToken(t *testing.T) 
 		}
 	})
 	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token", appID: "123", keyPEM: key, now: time.Now}
-	if err := b.run(context.Background(), testEvent(2, 2)); err != nil {
+	if err := b.run(t.Context(), testEvent(2, 2)); err != nil {
 		t.Fatal(err)
 	}
-	if dispatches != 1 {
-		t.Fatalf("got %d dispatches, want exactly one", dispatches)
+	if dispatches != 1 || policyStatuses != 1 {
+		t.Fatalf("got %d dispatches and %d policy statuses, want one each", dispatches, policyStatuses)
 	}
 }
 
@@ -164,17 +197,57 @@ func TestBridgeDoesNotDispatchClosedOrUnassociatedPR(t *testing.T) {
 		fmt.Fprintf(w, `{"number":2,"state":"closed","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
 	})
 	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
-	if err := b.run(context.Background(), testEvent()); err != nil {
+	if err := b.run(t.Context(), testEvent()); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
 		t.Fatal("unassociated run made an API request")
 	}
-	if err := b.run(context.Background(), testEvent(2)); err != nil {
+	if err := b.run(t.Context(), testEvent(2)); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
 		t.Fatalf("closed PR made %d API requests, want only the current PR read", calls)
+	}
+}
+
+func TestBridgePublishesFailureForWeakenedQuality(t *testing.T) {
+	key := testAppKey(t)
+	var failed bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/kevinmartin/sofa/pulls/2":
+			fmt.Fprintf(w, `{"number":2,"state":"open","head":{"sha":%q},"base":{"sha":%q,"repo":{"full_name":"kevinmartin/sofa"}}}`, testCandidateSHA, testBaseSHA)
+		case "/repos/kevinmartin/sofa/contents/.github/workflows/pr-fast.yml", "/repos/kevinmartin/sofa/contents/.github/workflows/quality.reusable.yml":
+			name := filepath.Base(r.URL.Path)
+			data, err := os.ReadFile(filepath.Join("../../.github/workflows", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "quality.reusable.yml" {
+				data = []byte(strings.Replace(string(data), "go test -count=1 ./...", "true", 1))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"encoding": "base64", "size": len(data), "content": base64.StdEncoding.EncodeToString(data)})
+		case "/repos/kevinmartin/sofa/installation":
+			fmt.Fprint(w, `{"id":43}`)
+		case "/app/installations/43/access_tokens":
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"token":"status-token"}`)
+		case "/repos/kevinmartin/sofa/statuses/" + testCandidateSHA:
+			var request struct{ State, Context string }
+			if json.NewDecoder(r.Body).Decode(&request) != nil || request.State != "failure" || request.Context != "sofa / quality-policy" {
+				t.Errorf("weakened quality did not fail: %+v", request)
+			}
+			failed = true
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Errorf("unexpected dispatch or API request: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token", appID: "123", keyPEM: key, now: time.Now}
+	if err := b.run(t.Context(), testEvent(2)); err == nil || !failed {
+		t.Fatalf("weakened gate was not blocked, err=%v failed=%v", err, failed)
 	}
 }
 
@@ -190,7 +263,7 @@ func TestBridgeRejectsForeignOrMalformedPRIdentityBeforeDispatch(t *testing.T) {
 				fmt.Fprint(w, response)
 			})
 			b := bridge{client: testClient(handler), apiURL: "https://api.test", readToken: "read-token"}
-			if err := b.run(context.Background(), testEvent(2)); err == nil {
+			if err := b.run(t.Context(), testEvent(2)); err == nil {
 				t.Fatal("accepted invalid PR identity")
 			}
 			if calls != 1 {
