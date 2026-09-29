@@ -1,6 +1,8 @@
 package workflow
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,19 @@ func TestSofaQualityContract(t *testing.T) {
 	}
 	if err := CheckSofaQualityContract(caller, reusable); err != nil {
 		t.Fatal(err)
+	}
+	// The exact next generated caller is preapproved before the branch rule is
+	// migrated. Its only job must be the shared quality workflow.
+	oneJob, markerFound := strings.CutSuffix(string(caller), "  # Temporary compatibility check for the existing branch-protection rule.\n"+
+		"  deterministic:\n    needs: quality\n    if: always()\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - name: Require shared quality gate\n        env:\n          SOFA_QUALITY_RESULT: ${{ needs.quality.result }}\n        run: test \"$SOFA_QUALITY_RESULT\" = success\n")
+	if !markerFound || fmt.Sprintf("%x", sha256.Sum256([]byte(oneJob))) != "e1cc51e38b5bb08fd5c1423c1df9af18b823123ef63cc305e103e16a2ed35f83" {
+		t.Fatal("preapproved one-job caller no longer matches the generated transition")
+	}
+	if err := CheckSofaQualityContract([]byte(oneJob), reusable); err != nil {
+		t.Fatalf("one-job caller rejected: %v", err)
+	}
+	if err := CheckSofaQualityContract([]byte(oneJob+"  bypass: {}\n"), reusable); err == nil {
+		t.Fatal("unapproved extra job passed")
 	}
 	for _, test := range []struct{ name, before, after string }{
 		{"removed tests", "go test -count=1 ./...", "true"},
