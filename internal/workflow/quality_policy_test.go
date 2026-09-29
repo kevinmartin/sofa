@@ -102,9 +102,13 @@ func TestCurrentSofaQualityWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The trusted default branch supplies the baseline at runtime. Validate
-	// current workflow structure without requiring today's action pins forever.
-	if err := CheckSofaQualityContractWithActionPins(caller, reusable, reusable, nil); err != nil {
+	approved, err := os.ReadFile("testdata/approved-quality.reusable.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The trusted bridge verifies release provenance at runtime. This test
+	// ensures the live workflow differs from the approved fixture only by pins.
+	if err := CheckSofaQualityContractWithActionPins(caller, reusable, approved, func(ActionPin) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }
