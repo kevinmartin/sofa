@@ -14,6 +14,8 @@ var ErrUnapprovedQualityDigest = errors.New("candidate quality gate digest lacks
 
 var approvedCaller = map[string]bool{
 	"5f21aca5983e0ed8dbeca8747b5e11d0503033d98e605f65ff193e28dcb73c51": true,
+	// Preapprove the exact generated one-job caller for retiring the legacy check.
+	"e1cc51e38b5bb08fd5c1423c1df9af18b823123ef63cc305e103e16a2ed35f83": true,
 }
 
 var approvedReusable = map[string]bool{
@@ -75,19 +77,22 @@ func CheckSofaQualityContract(caller, reusable []byte) error {
 	if err != nil {
 		return err
 	}
-	if c.Name != "Sofa / PR deterministic checks" || len(c.On) != 1 || c.On["pull_request"] == nil || len(c.Jobs) != 2 {
+	if c.Name != "Sofa / PR deterministic checks" || len(c.On) != 1 || c.On["pull_request"] == nil ||
+		(len(c.Jobs) != 1 && len(c.Jobs) != 2) {
 		return errors.New("sofa PR quality trigger changed")
 	}
 	call := c.Jobs["quality"]
 	if call.Uses != "./.github/workflows/quality.reusable.yml" || call.If != "" || len(call.With) != 1 || call.With["profiles"] != "go" || len(call.Permissions) != 1 || call.Permissions["contents"] != "read" {
 		return errors.New("sofa no longer requires its local Go quality workflow")
 	}
-	compat := c.Jobs["deterministic"]
-	if compat.Needs != "quality" || compat.If != "always()" || compat.RunsOn != "ubuntu-24.04" ||
-		len(compat.Permissions) != 1 || compat.Permissions["contents"] != "read" || len(compat.Steps) != 1 ||
-		compat.Steps[0].Run != `test "$SOFA_QUALITY_RESULT" = success` ||
-		compat.Steps[0].Env["SOFA_QUALITY_RESULT"] != "${{ needs.quality.result }}" {
-		return errors.New("required compatibility check no longer follows shared quality")
+	if len(c.Jobs) == 2 {
+		compat := c.Jobs["deterministic"]
+		if compat.Needs != "quality" || compat.If != "always()" || compat.RunsOn != "ubuntu-24.04" ||
+			len(compat.Permissions) != 1 || compat.Permissions["contents"] != "read" || len(compat.Steps) != 1 ||
+			compat.Steps[0].Run != `test "$SOFA_QUALITY_RESULT" = success` ||
+			compat.Steps[0].Env["SOFA_QUALITY_RESULT"] != "${{ needs.quality.result }}" {
+			return errors.New("required compatibility check no longer follows shared quality")
+		}
 	}
 	r, err := parse(reusable)
 	if err != nil {
