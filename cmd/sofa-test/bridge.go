@@ -217,63 +217,19 @@ func (b bridge) checkQualityContract(ctx context.Context, sha, baseSHA string) e
 	if err != nil {
 		return err
 	}
-	if err := workflow.CheckSofaQualityContract(caller, reusable); err == nil {
-		return nil
-	} else if !errors.Is(err, workflow.ErrUnapprovedQualityDigest) {
+	if err := workflow.CheckSofaQualityContractStructure(caller, reusable); err != nil {
 		return fmt.Errorf("PR weakens required quality contract: %w", err)
+	}
+	baseCaller, err := b.workflowAt(ctx, baseSHA, "pr-fast.yml")
+	if err != nil {
+		return err
 	}
 	baseReusable, err := b.workflowAt(ctx, baseSHA, "quality.reusable.yml")
 	if err != nil {
 		return err
 	}
-	if err := workflow.CheckSofaQualityContractWithActionPins(caller, reusable, baseReusable, func(pin workflow.ActionPin) error {
-		return b.verifyOfficialAction(ctx, pin)
-	}); err != nil {
+	if err := workflow.CheckSofaQualityContract(caller, reusable, baseCaller, baseReusable); err != nil {
 		return fmt.Errorf("PR weakens required quality contract: %w", err)
-	}
-	return nil
-}
-
-func (b bridge) verifyOfficialAction(ctx context.Context, pin workflow.ActionPin) error {
-	var release struct {
-		Draft      bool `json:"draft"`
-		Prerelease bool `json:"prerelease"`
-	}
-	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", b.apiURL, pin.Name, pin.Tag)
-	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &release, http.StatusOK); err != nil {
-		return err
-	}
-	if release.Draft || release.Prerelease {
-		return errors.New("action release is not stable")
-	}
-	var ref struct {
-		Object struct {
-			Type string `json:"type"`
-			SHA  string `json:"sha"`
-		} `json:"object"`
-	}
-	url = fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", b.apiURL, pin.Name, pin.Tag)
-	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &ref, http.StatusOK); err != nil {
-		return err
-	}
-	if ref.Object.Type == "tag" {
-		if !shaPattern.MatchString(ref.Object.SHA) {
-			return errors.New("action release tag object SHA is invalid")
-		}
-		var tag struct {
-			Object struct {
-				Type string `json:"type"`
-				SHA  string `json:"sha"`
-			} `json:"object"`
-		}
-		url = fmt.Sprintf("%s/repos/%s/git/tags/%s", b.apiURL, pin.Name, ref.Object.SHA)
-		if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &tag, http.StatusOK); err != nil {
-			return err
-		}
-		ref.Object = tag.Object
-	}
-	if ref.Object.Type != "commit" || ref.Object.SHA != pin.SHA {
-		return errors.New("action release tag does not resolve to pinned commit")
 	}
 	return nil
 }

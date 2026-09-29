@@ -7,21 +7,16 @@ workflow. The trusted default-branch bridge still listens for the unchanged
 hosted E2E gate. The bridge reads the candidate quality workflows **as data**
 and rejects changes that remove the minimum validators or broaden permissions.
 It never executes the candidate with its App credential.
-The trusted bridge still requires a preapproved SHA-256 digest for the caller
-and accepts a preapproved digest for the reusable workflow. It also accepts
-one narrow Dependabot-style exception: relative to the PR's main-branch base,
-the reusable workflow may change only full SHA pins and release comments for
-`actions/checkout`, `actions/setup-go`, or `actions/setup-node`. The bridge
-checks that each replacement SHA is the commit behind a stable release tag in
-the official action repository. A later PR may reuse those exact workflow
-bytes once they are on `main`; the bridge still checks the workflow structure.
-The candidate still runs every quality job.
-Changes to commands, permissions, conditions, checkout settings, other
-actions, or the caller still need a separate Kevin-reviewed policy PR that
-preapproves the exact digest. The hosted E2E observer applies the same
-pin-only rule to its candidate workflow and keeps exact-hash approval for all
-other changes. A changed candidate workflow needs an up-to-date main base for
-that comparison.
+The trusted bridge compares the candidate caller and reusable workflow with
+their exact main-branch base revisions. The caller must be unchanged. In the
+reusable workflow, only a full 40-character action commit SHA and its version
+comment may change on an existing action line; action names, commands,
+permissions, conditions, and other bytes must match the trusted base. There
+is no approved-SHA list or release lookup. The candidate still runs every
+quality job. Other workflow changes remain blocked until a separately merged,
+Kevin-reviewed bridge policy update deliberately admits them. The hosted E2E
+observer applies the same comparison to its candidate workflow. A changed candidate
+workflow needs an up-to-date main base for that comparison.
 
 `.github/CODEOWNERS` requests Kevin for workflow and gate-policy changes.
 Sofa's personal-repository branch rule cannot use a required owner review for
