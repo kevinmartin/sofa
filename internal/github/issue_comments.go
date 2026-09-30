@@ -76,6 +76,11 @@ func (c *Client) IssueComments(ctx context.Context, repository string, issue int
 			return nil, err
 		}
 		for _, item := range raw {
+			// An unrelated comment cannot be our bounded publication. Keep
+			// strict validation for the exact comment fetched by IssueComment.
+			if len(item.Body) > 64<<10 || item.User.NodeID == "" {
+				continue
+			}
 			comment, err := commentSnapshot(repository, issue, item)
 			if err != nil {
 				return nil, err

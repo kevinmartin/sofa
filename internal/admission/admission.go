@@ -124,3 +124,30 @@ func Revalidate(c config.Config, s Snapshot, expected Grant) error {
 	}
 	return nil
 }
+
+// RevalidateDelivery permits a previously admitted attempt to finish after the
+// factory advances its Project item. The Ready grant remains the authority;
+// this does not admit a new attempt from a later stage.
+func RevalidateDelivery(c config.Config, s Snapshot, expected Grant) error {
+	if s.CurrentStatus == c.ReadyStatus {
+		return Revalidate(c, s, expected)
+	}
+	if c.Lifecycle == nil || s.StatusOptionID == "" || !s.StatusUpdatedAt.After(expected.StatusUpdatedAt) {
+		return errors.New("current delivery stage is not authorized")
+	}
+	allowed := false
+	for _, stage := range []string{"building", "verification", "review", "release"} {
+		if s.CurrentStatus == c.Lifecycle.Statuses[stage] {
+			allowed = true
+			break
+		}
+	}
+	if !allowed || !s.IssueLastEditedAt.IsZero() && !s.IssueLastEditedAt.Before(expected.StatusUpdatedAt) {
+		return errors.New("current delivery stage is not authorized")
+	}
+	ready := s
+	ready.CurrentStatus = c.ReadyStatus
+	ready.StatusOptionID = expected.StatusOptionID
+	ready.StatusUpdatedAt = expected.StatusUpdatedAt
+	return Revalidate(c, ready, expected)
+}

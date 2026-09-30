@@ -164,6 +164,27 @@ func TestScanKeepsPRResultsAndResourcesSeparate(t *testing.T) {
 	}
 }
 
+func TestScanRetriesPendingMoveOnlyWithCurrentEvidence(t *testing.T) {
+	input := scanFixture(t)
+	prior := input.Ledger.Projections["I_1"]
+	prior.PendingStage = "review"
+	prior.PendingOptionID = "review-option"
+	prior.PendingFromOptionID = prior.OptionID
+	prior.PendingFromUpdatedAt = prior.UpdatedAt
+	input.Ledger.Projections["I_1"] = prior
+	effects, err := Scan(input)
+	if err != nil || effects[0].Kind != Move || effects[0].To != Review || !effects[0].RetryIntent {
+		t.Fatalf("current pending move did not retry: %+v, %v", effects, err)
+	}
+	first := input.Evidence["I_1"]
+	first.Gates = nil
+	input.Evidence["I_1"] = first
+	effects, err = Scan(input)
+	if err != nil || effects[0].Kind != Hold || effects[0].RetryIntent || effects[0].BlockedReason == "" || effects[1].Kind != Move {
+		t.Fatalf("stale evidence retried or affected another item: %+v, %v", effects, err)
+	}
+}
+
 func TestScanDefersManualBoardChangeAndChangedBase(t *testing.T) {
 	input := scanFixture(t)
 	input.Issues[0].CurrentStatus = "Building"

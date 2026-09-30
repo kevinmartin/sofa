@@ -34,6 +34,10 @@ func (e Engine) ObserveBoard(ctx context.Context, observed BoardProjection) erro
 				s.Projections[observed.IssueID] = observed
 				return true, nil
 			}
+			if observed.Stage == "discovery" && prior.Stage != "discovery" && observed.UpdatedAt.After(prior.PendingFromUpdatedAt) {
+				s.Projections[observed.IssueID] = observed // Newer owner reset cancels stale write intent.
+				return true, nil
+			}
 			if sameBoardRevision(prior, observed) {
 				return false, nil // Write intent remains recoverable.
 			}
@@ -56,8 +60,8 @@ func sameBoardRevision(a, b BoardProjection) bool {
 
 func ownerTransition(from, to string) bool {
 	switch {
-	case from == "inbox" && to == "discovery":
-		return true
+	case from != "discovery" && to == "discovery":
+		return true // Owner revision; Discovery admission fences any older work.
 	case from == "spec_review" && to == "backlog":
 		return true
 	case from == "backlog" && to == "ready":

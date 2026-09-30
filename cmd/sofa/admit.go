@@ -89,7 +89,11 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 		InfrastructureRetries: int64(c.Limits.InfraRetries),
 		RuntimeSeconds:        int64(c.Limits.AttemptSeconds) * maxAttempts,
 	}
-	attempt, _, err := engine.Admit(ctx, ledgerAdmission(grant), limits)
+	legacyAttempts := int64(c.Limits.InfraRetries + 1)
+	legacyLimits := limits
+	legacyLimits.ModelCalls = int64(c.Limits.MaxAgentTurns) * legacyAttempts
+	legacyLimits.RuntimeSeconds = int64(c.Limits.AttemptSeconds) * legacyAttempts
+	attempt, _, err := admitWithLegacyLimits(ctx, engine, ledgerAdmission(grant), limits, legacyLimits)
 	if err != nil {
 		return err
 	}
@@ -203,4 +207,14 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 		}
 		return ""
 	}()})
+}
+
+// Existing attempts keep the limits persisted by the previous toolkit formula.
+// Only the exact same admission may replay them; new attempts use current limits.
+func admitWithLegacyLimits(ctx context.Context, engine state.Engine, admission state.Admission, current, legacy state.Limits) (state.Attempt, bool, error) {
+	attempt, created, err := engine.Admit(ctx, admission, current)
+	if !errors.Is(err, state.ErrAdmissionChanged) || current == legacy || attempt.ID != state.AttemptID(admission) || attempt.Admission != admission || attempt.Limits != legacy || !attempt.SupersededAt.IsZero() {
+		return attempt, created, err
+	}
+	return engine.Admit(ctx, admission, legacy)
 }

@@ -114,19 +114,20 @@ func Scan(input ScanInput) ([]Effect, error) {
 			effects = append(effects, effect)
 			continue
 		}
+		pendingRetry := false
 		if prior.PendingStage != "" {
 			if string(stage) == prior.PendingStage && issue.StatusOptionID == prior.PendingOptionID && issue.StatusUpdatedAt.After(prior.PendingFromUpdatedAt) {
 				effect.Kind = Observe
 			} else if string(stage) == prior.Stage && issue.StatusOptionID == prior.OptionID && issue.StatusUpdatedAt.Equal(prior.UpdatedAt) {
-				effect.Kind = Move
-				effect.To = Stage(prior.PendingStage)
-				effect.RetryIntent = true
+				pendingRetry = true
 			} else {
 				effect.BlockedReason = "Project changed during pending transition"
 				effect.Conflict = true
 			}
-			effects = append(effects, effect)
-			continue
+			if !pendingRetry {
+				effects = append(effects, effect)
+				continue
+			}
 		}
 		if prior.Stage != string(stage) || prior.OptionID != issue.StatusOptionID || !prior.UpdatedAt.Equal(issue.StatusUpdatedAt) {
 			effect.Kind = Observe // Engine accepts owner moves; rejects other edits.
@@ -203,8 +204,14 @@ func Scan(input ScanInput) ([]Effect, error) {
 		effect.NextAction = decision.NextAction
 		effect.Conflict = decision.Conflict
 		if decision.MoveTo != "" {
-			effect.Kind = Move
-			effect.To = decision.MoveTo
+			if pendingRetry && string(decision.MoveTo) != prior.PendingStage {
+				effect.BlockedReason = "pending transition no longer justified"
+				effect.Conflict = true
+			} else {
+				effect.Kind = Move
+				effect.To = decision.MoveTo
+				effect.RetryIntent = pendingRetry
+			}
 		}
 		effects = append(effects, effect)
 	}

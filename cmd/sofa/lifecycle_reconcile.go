@@ -240,6 +240,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			RequiredGates: []string{},
 		}
 		if pull.Merged {
+			observed.ReleaseRequired = true
 			if err := observeRelease(ctx, projects, engine, c, attempt, pull, issue.BaseSHA, &observed); err != nil {
 				result.Held = append(result.Held, issue.Number)
 			} else if stage == lifecycle.Done && observed.ReleasePassed {

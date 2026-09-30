@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/config"
 	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/integrity"
@@ -105,12 +107,19 @@ func runPublish(ctx context.Context, opts publishOptions) error {
 			if err != nil {
 				return err
 			}
-			snapshot, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, snapshot)
+			if snapshot.CurrentStatus == c.ReadyStatus {
+				snapshot, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, snapshot)
+			} else {
+				snapshot, err = discovery.VerifyApprovedRevision(ctx, projects, store, policy, snapshot)
+			}
 			if err != nil {
 				return err
 			}
 		}
-		return admission.Revalidate(c, snapshot, m.Grant)
+		if err := admission.RevalidateDelivery(c, snapshot, m.Grant); err != nil {
+			return err
+		}
+		return publicationStageCurrent(ctx, store, c, snapshot)
 	}
 	if err := guard(ctx); err != nil {
 		return err
@@ -188,4 +197,34 @@ func runPublish(ctx context.Context, opts publishOptions) error {
 		return err
 	}
 	return writeJSON("publication.json", result)
+}
+
+// A later delivery stage must be the exact Project revision already observed
+// by the factory, or the target of its durable pending write intent.
+func publicationStageCurrent(ctx context.Context, store state.Store, c config.Config, issue admission.Snapshot) error {
+	if issue.CurrentStatus == c.ReadyStatus {
+		return nil
+	}
+	if c.Lifecycle == nil {
+		return errors.New("delivery stage has no lifecycle policy")
+	}
+	stage, known := lifecycleStatuses(c).StageFor(issue.CurrentStatus)
+	if !known {
+		return errors.New("delivery stage is not configured")
+	}
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	board, ok := snapshot.State.Projections[issue.IssueID]
+	if !ok || !strings.EqualFold(board.Repository, c.Repository) || board.ProjectID != issue.ProjectID || board.ProjectItemID != issue.ProjectItemID || board.IssueID != issue.IssueID {
+		return errors.New("delivery Project identity is not recorded")
+	}
+	if board.PendingStage == "" && board.Stage == string(stage) && board.OptionID == issue.StatusOptionID && board.UpdatedAt.Equal(issue.StatusUpdatedAt) {
+		return nil
+	}
+	if board.PendingStage == string(stage) && board.PendingOptionID == issue.StatusOptionID && issue.StatusUpdatedAt.After(board.PendingFromUpdatedAt) {
+		return nil
+	}
+	return errors.New("delivery Project revision is not factory-authorized")
 }

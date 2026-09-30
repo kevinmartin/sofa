@@ -94,3 +94,44 @@ func TestBoardProjectionNeverFightsManualOrLateChange(t *testing.T) {
 		t.Fatalf("conflict erased pending intent: %t, %v", ok, err)
 	}
 }
+
+func TestBoardProjectionOwnerCanResetSpecReviewToDiscovery(t *testing.T) {
+	ctx := context.Background()
+	engine := Engine{Store: &MemoryStore{}}
+	base := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	review := boardRecord("spec_review", "review-option", base)
+	if err := engine.ObserveBoard(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	discovery := boardRecord("discovery", "discovery-option", base.Add(time.Minute))
+	if err := engine.ObserveBoard(ctx, discovery); err != nil {
+		t.Fatalf("owner revision was rejected: %v", err)
+	}
+	if err := engine.BeginBoardMove(ctx, discovery, "spec_review", "review-option"); err != nil {
+		t.Fatal(err)
+	}
+	updated := boardRecord("spec_review", "review-option", base.Add(2*time.Minute))
+	if err := engine.ObserveBoard(ctx, updated); err != nil {
+		t.Fatalf("new specification review was rejected: %v", err)
+	}
+}
+
+func TestBoardProjectionOwnerResetCancelsPendingFactoryMove(t *testing.T) {
+	ctx := context.Background()
+	engine := Engine{Store: &MemoryStore{}}
+	base := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	building := boardRecord("building", "building-option", base)
+	if err := engine.ObserveBoard(ctx, building); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.BeginBoardMove(ctx, building, "verification", "verification-option"); err != nil {
+		t.Fatal(err)
+	}
+	discovery := boardRecord("discovery", "discovery-option", base.Add(time.Minute))
+	if err := engine.ObserveBoard(ctx, discovery); err != nil {
+		t.Fatalf("newer owner reset did not cancel pending move: %v", err)
+	}
+	if _, pending, err := engine.PendingBoardMove(ctx, building.IssueID); err != nil || pending {
+		t.Fatalf("stale factory move survived owner reset: %t, %v", pending, err)
+	}
+}

@@ -152,7 +152,10 @@ func TestLifecycleTransitionsAndTerminalOutcomes(t *testing.T) {
 	reviewMerged.PRMerged = true
 	reviewMerged.MergedSHA = sha
 	release := verified(Release)
+	release.PRMerged = true
 	release.MergedSHA = sha
+	releaseOpen := release
+	releaseOpen.PRMerged = false
 	releaseRequired := release
 	releaseRequired.ReleaseRequired = true
 	releaseWrong := releaseRequired
@@ -201,6 +204,11 @@ func TestLifecycleTransitionsAndTerminalOutcomes(t *testing.T) {
 			name:  "review to release",
 			input: reviewMerged,
 			want:  Release,
+		},
+		{
+			name:    "open PR in release cannot finish",
+			input:   releaseOpen,
+			blocked: true,
 		},
 		{
 			name:  "release to done without configured gate",

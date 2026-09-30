@@ -307,7 +307,7 @@ func ProjectDecision(p Projection) Decision {
 				NextAction:    "restore current required gate evidence",
 			}
 		}
-		if !shaPattern.MatchString(p.MergedSHA) {
+		if !p.PRMerged || !shaPattern.MatchString(p.MergedSHA) {
 			return Decision{
 				BlockedReason: "merge identity unavailable",
 				NextAction:    "observe merged commit",
