@@ -63,7 +63,7 @@ func matchingPublishedComment(comments []SpecComment, body, key, author string) 
 			continue
 		}
 		if comment.Body != body || !comment.valid() {
-			return SpecComment{}, false, errors.New("Discovery bot comment with this key changed")
+			return SpecComment{}, false, errors.New("discovery bot comment with this key changed")
 		}
 		if found {
 			return SpecComment{}, false, errors.New("multiple Discovery bot comments share one publication key")
@@ -112,7 +112,7 @@ func PublishSpecification(ctx context.Context, engine state.Engine, store SpecSt
 		return SpecComment{}, err
 	}
 	if err := integrity.ScanSecrets([]byte(body), in.ForbiddenValues); err != nil {
-		return SpecComment{}, errors.New("Discovery specification contains sensitive material")
+		return SpecComment{}, errors.New("discovery specification contains sensitive material")
 	}
 	if err := store.SaveSpec(ctx, task.IssueID, digest, canonical); err != nil {
 		return SpecComment{}, err
@@ -135,7 +135,7 @@ func PublishSpecification(ctx context.Context, engine state.Engine, store SpecSt
 		}
 		current := latest.State.Discoveries[in.IssueID]
 		if current.Publication == nil || current.Publication.Digest != digest || current.Publication.Key != key || current.Publication.PostAttempted {
-			return SpecComment{}, errors.New("Discovery comment outcome uncertain; inspect exact publication key")
+			return SpecComment{}, errors.New("discovery comment outcome uncertain; inspect exact publication key")
 		}
 		if err := engine.AssertDiscoveryOwner(ctx, in.Fence); err != nil {
 			return SpecComment{}, err
@@ -149,7 +149,7 @@ func PublishSpecification(ctx context.Context, engine state.Engine, store SpecSt
 			return SpecComment{}, err
 		}
 		if !first {
-			return SpecComment{}, errors.New("Discovery comment POST already attempted")
+			return SpecComment{}, errors.New("discovery comment POST already attempted")
 		}
 		comment, err = publisher.CreateIssueComment(ctx, in.Policy.Repository, int64(source.Number), body)
 		if err != nil {

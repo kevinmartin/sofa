@@ -118,25 +118,25 @@ func Generate(ctx context.Context, in GenerateInput) (GenerateResult, error) {
 		return out, err
 	}
 	if result.StopReason != "end_turn" {
-		return out, errors.New("Discovery agent did not complete its turn")
+		return out, errors.New("discovery agent did not complete its turn")
 	}
 	for _, name := range []string{"idea.md", "facts.md"} {
 		info, err := os.Lstat(filepath.Join(directory, name))
 		if err != nil || !info.Mode().IsRegular() {
-			return out, errors.New("Discovery agent replaced immutable input")
+			return out, errors.New("discovery agent replaced immutable input")
 		}
 		current, err := os.ReadFile(filepath.Join(directory, name))
 		if err != nil || string(current) != inputs[name] {
-			return out, errors.New("Discovery agent changed immutable inputs")
+			return out, errors.New("discovery agent changed immutable inputs")
 		}
 	}
 	info, err := os.Lstat(filepath.Join(directory, "spec.md"))
 	if err != nil || !info.Mode().IsRegular() {
-		return out, errors.New("Discovery agent replaced specification file")
+		return out, errors.New("discovery agent replaced specification file")
 	}
 	content, err := os.ReadFile(filepath.Join(directory, "spec.md"))
 	if err != nil || len(content) > 64<<10 || string(content) == draftTemplate {
-		return out, errors.New("Discovery agent did not produce a bounded specification")
+		return out, errors.New("discovery agent did not produce a bounded specification")
 	}
 	if _, err := Parse(string(content)); err != nil {
 		return out, fmt.Errorf("invalid Discovery specification: %w", err)

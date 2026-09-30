@@ -222,7 +222,7 @@ func (e Engine) FailDiscovery(ctx context.Context, fence DiscoveryFence, kind st
 			return false, err
 		}
 		if d.Publication != nil {
-			return false, errors.New("Discovery publication intent requires reconciliation")
+			return false, errors.New("discovery publication intent requires reconciliation")
 		}
 		d.Phase = DiscoveryBlocked
 		d.Failure = kind
@@ -272,7 +272,7 @@ func (e Engine) CancelDiscovery(ctx context.Context, issueID string) error {
 			return false, errors.New("completed Discovery cannot be cancelled")
 		}
 		if d.Publication != nil {
-			return false, errors.New("Discovery publication intent requires reconciliation before cancellation")
+			return false, errors.New("discovery publication intent requires reconciliation before cancellation")
 		}
 		d.Owner = nil
 		d.Generation++

@@ -224,7 +224,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	for _, effect := range effects {
 		item, found := byID[effect.IssueID]
 		if !found {
-			return errors.New("Project item disappeared during scan")
+			return errors.New("project item disappeared during scan")
 		}
 		switch effect.Kind {
 		case lifecycle.Observe:
@@ -434,7 +434,7 @@ func applyBoardMove(ctx context.Context, client *github.Client, engine state.Eng
 		return err
 	}
 	if current.ProjectItemID != item.ProjectItemID || current.CurrentStatus != statuses[effect.To] || current.StatusOptionID == item.StatusOptionID || !current.StatusUpdatedAt.After(item.StatusUpdatedAt) {
-		return errors.New("Project move outcome not yet observable")
+		return errors.New("project move outcome not yet observable")
 	}
 	return engine.ObserveBoard(ctx, boardFromSnapshot(c, effect.To, current))
 }

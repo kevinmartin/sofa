@@ -86,7 +86,7 @@ func WithPublicationKey(body, key string) (string, error) {
 		return "", err
 	}
 	if strings.Contains(body, publicationKeyPrefix) {
-		return "", errors.New("Discovery publication key already present")
+		return "", errors.New("discovery publication key already present")
 	}
 	return strings.Replace(body, marker, marker+"\n"+publicationKeyPrefix+key+" -->", 1), nil
 }

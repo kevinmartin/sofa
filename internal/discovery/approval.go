@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrAuthority = errors.New("Discovery lacks trusted Project authority")
+	ErrAuthority = errors.New("discovery lacks trusted Project authority")
 	ErrRevision  = errors.New("specification revision requires new review")
 )
 

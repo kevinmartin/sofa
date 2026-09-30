@@ -107,7 +107,7 @@ func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dep
 				continue
 			}
 			if item.ID == "" || item.Content.ID == "" || item.Content.Number <= 0 || item.Content.Repository.DefaultBranchRef == nil || item.FieldValueByName == nil || item.FieldValueByName.Name == "" || item.FieldValueByName.OptionID == "" || item.FieldValueByName.UpdatedAt.IsZero() || seen[item.Content.ID] || seenItems[item.ID] {
-				return pageInfo{}, errors.New("Project issue identity or status unavailable")
+				return pageInfo{}, errors.New("project issue identity or status unavailable")
 			}
 			seen[item.Content.ID] = true
 			seenItems[item.ID] = true
@@ -200,7 +200,7 @@ func ParseDependencies(text string, self int) ([]int, error) {
 // Names are display labels; option IDs are what status mutations must use.
 func (c *Client) ProjectStatusField(ctx context.Context, projectID string) (string, map[string]string, error) {
 	if projectID == "" {
-		return "", nil, errors.New("Project identity required")
+		return "", nil, errors.New("project identity required")
 	}
 	const query = `query($id:ID!,$after:String){node(id:$id){... on ProjectV2{id public fields(first:100,after:$after){nodes{... on ProjectV2SingleSelectField{id name options{id name}}} pageInfo{hasNextPage endCursor}}}}}`
 	var fieldID string
@@ -247,7 +247,7 @@ func (c *Client) ProjectStatusField(ctx context.Context, projectID string) (stri
 		return "", nil, err
 	}
 	if fieldID == "" || len(options) == 0 {
-		return "", nil, errors.New("Project Status field unavailable")
+		return "", nil, errors.New("project Status field unavailable")
 	}
 	return fieldID, options, nil
 }
@@ -259,10 +259,10 @@ func (c *Client) SetProjectStatusIfCurrent(ctx context.Context, issueID, project
 	switch targetStage {
 	case lifecycle.SpecReview, lifecycle.Building, lifecycle.Verification, lifecycle.Review, lifecycle.Release, lifecycle.Done:
 	default:
-		return errors.New("Project status requires owner transition")
+		return errors.New("project status requires owner transition")
 	}
 	if issueID == "" || projectID == "" || itemID == "" || currentOptionID == "" || currentUpdatedAt.IsZero() || statuses.Validate() != nil {
-		return errors.New("Project status identity unavailable")
+		return errors.New("project status identity unavailable")
 	}
 	fieldID, options, err := c.ProjectStatusField(ctx, projectID)
 	if err != nil {
@@ -277,7 +277,7 @@ func (c *Client) SetProjectStatusIfCurrent(ctx context.Context, issueID, project
 		return err
 	}
 	if current.ItemID != itemID || current.OptionID != currentOptionID || !current.UpdatedAt.Equal(currentUpdatedAt) {
-		return errors.New("Project status changed during reconciliation")
+		return errors.New("project status changed during reconciliation")
 	}
 	if currentOptionID == targetOptionID {
 		return nil
@@ -290,7 +290,7 @@ func (c *Client) SetProjectStatusIfCurrent(ctx context.Context, issueID, project
 		return err
 	}
 	if data.UpdateProjectV2ItemFieldValue == nil || data.UpdateProjectV2ItemFieldValue.ProjectV2Item == nil || data.UpdateProjectV2ItemFieldValue.ProjectV2Item.ID != itemID {
-		return fmt.Errorf("Project status update identity unavailable")
+		return fmt.Errorf("project status update identity unavailable")
 	}
 	return nil
 }
