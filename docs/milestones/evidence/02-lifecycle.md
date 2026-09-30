@@ -8,7 +8,8 @@ owner-approved or a candidate has passed required release gates.
 ## Current implementation and decisions
 
 - Work branch: `codex/milestone-02-lifecycle` in a managed worktree created from
-  current `main` (`e5ed5b07fb81d20ec84916d05d8aed7ae274f888`). It includes
+  `main` (`e5ed5b07fb81d20ec84916d05d8aed7ae274f888`) and rebased onto
+  current `main` (`e1d29cb290d51e45436d931de6e943f172a20ba8`). It includes
   the repository's new `AGENTS.md`; unrelated changes in the primary checkout
   were left untouched.
 - `.sofa.yml` lifecycle configuration is opt-in for delivery-only v1 consumers.
@@ -40,10 +41,10 @@ owner-approved or a candidate has passed required release gates.
 
 | ID | Observed result | Evidence and remaining proof |
 | --- | --- | --- |
-| 02-A | Pending | No live Discovery specification or Kevin Backlog approval yet. |
+| 02-A | Partial | Live issue #215 reached model execution but produced no specification file; the failure was blocked without a comment or approval. Corrected issue #219 produced a versioned specification with stated evidence and acceptance examples, and the reconciler moved it to Spec Review. Its exact comment/digest is recorded without approval; Kevin's Backlog move remains pending. |
 | 02-B | Partial | Local v1→v2 replay requires changed source, a later owner Discovery move, a new bot comment, a new Spec Review observation, a later Backlog approval, and a later Ready admission. The old attempt is fenced and its budget carries forward. No live revision has been exercised. |
-| 02-C | Partial | Table-driven transition and isolated-item replay tests pass locally; no hosted Project write has been exercised. |
-| 02-D | Partial | Local coalesced polling, pending retry, Discovery/delivery WIP, and no-inference tests pass. The reusable lifecycle workflow now dispatches bounded Discovery and Ready lists; the scheduled consumer caller is not installed. |
+| 02-C | Partial | Table-driven transition and isolated-item replay tests pass locally. The hosted controller moved only the published #219 specification to Spec Review. Remaining lifecycle stages and adverse human edits lack hosted evidence. |
+| 02-D | Partial | Local coalesced polling, pending retry, Discovery/delivery WIP, and no-inference tests pass. The scheduled consumer caller is installed. A live manual wake on roughly 40 Project items dispatched no unauthorized Ready work; after skipping remote approval reads for items with no recorded spec, the next wake finished in 49 seconds instead of 4m11s. |
 | 02-E | Partial | Local owner-review, same-PR lease, repair-budget, and interrupted-admission recovery tests pass. The reusable repair workflow separates model, verifier, publisher, and failure-finalizer credentials. Recovery requires exact terminal-run proof and retains charged counters; a prepared publication remains for operator reconciliation. No hosted repair has run. |
 | 02-F | Partial | Local missing/wrong-candidate gate tests hold work; no hosted milestone 04 gate evidence is available. |
 | 02-G | Partial | Read-only observation of designated, already-merged disposable PR #178 reached `done` for the exact merge commit and required `wake / status` check. Local replay covers missing, failed, wrong-App, and successful checks plus closed-unmerged; hosted post-merge smoke is not configured. |
@@ -56,7 +57,8 @@ owner-approved or a candidate has passed required release gates.
   not lifecycle behavior.
 - GitHub GraphQL returned the private Project and its updated Status options.
   No model inference or paid profile was used for that administrative setup.
-  Cost and runtime usage are not measured yet.
+  Hosted run durations below are measured; ACP does not expose provider token
+  counts, so model-token cost remains unknown.
 - Signed-in Project settings showed six enabled automations on September 30.
   `Item added to project` placed issues and PRs in Inbox; `Auto-close issue`
   closed issues on Done; `Item closed` placed issues and PRs in Done; `Pull
@@ -73,17 +75,56 @@ owner-approved or a candidate has passed required release gates.
 - `actionlint` v1.7.12 parsed `.github/workflows/lifecycle.reusable.yml` without findings, using the cached module source and Go 1.27.1. ShellCheck is not installed locally; the hosted GitHub Actions quality job passed on the code revision below.
 - After integrating the credentialed Discovery and review-repair workflows plus the same-issue revision path, the full local Go suite and `go vet ./...` passed on September 30, 2026. The first full test attempt failed only because the sandbox denied an existing `httptest` loopback listener; the authorized local-port rerun passed. Targeted race tests for `internal/state`, `internal/discovery`, `internal/lifecycle`, and `cmd/sofa` passed. `actionlint` v1.7.12 parsed all three new/changed reusable workflows with the existing exact-path Copilot permission exception; `git diff --check` passed. These are local validations, not hosted milestone 02 acceptance.
 - Draft [sofa PR #18](https://github.com/kevinmartin/sofa/pull/18) code revision `2a18884fb512ae2db40d66cfd140f86825258a2c`, base `e5ed5b07fb81d20ec84916d05d8aed7ae274f888`, passed the hosted `quality / go`, `quality / github-actions`, `quality / result`, and App-sourced `sofa / quality-policy` checks. The established fake-ACP [hosted suite](https://github.com/kevinmartin/sofa-disposable/actions/runs/36662911037) passed execute, secretless verify, controlled publication interruption, retained-candidate recovery, Project completion, suite-owned cleanup, and App status publication. Its [redacted cleaned artifact](https://github.com/kevinmartin/sofa-disposable/actions/runs/36662911037/artifacts/11075590062) binds that exact pair, disposable base `9d4dc05724e55a9b090e0895abbf24ff5be97fed`, digest `718ea37cb6ae417e7fedc58d2de7a0b6be0e624a1155d0f348a952383ccc7dc6`, producer `36662523444`, recovery `36662751308`, one fake prompt, zero provider requests, closed issue #206 and draft PR #207, archived Project item, and absent suite refs. `kevins-sofa[bot]` posted `sofa / hosted-e2e` success on the exact head. This validates the existing delivery-gate surrogate, **not** live milestone 02 Discovery, review repair, or release handoffs. A subsequent evidence-only commit requires its own exact-head gate result before the draft PR can be considered green again.
+- Disposable [PR #213](https://github.com/kevinmartin/sofa-disposable/pull/213)
+  installed the lifecycle, Discovery, and review callers plus opt-in consumer
+  policy; [PR #218](https://github.com/kevinmartin/sofa-disposable/pull/218)
+  updated all exact toolkit pins after the first live fixes. Both were merged
+  within the delegated disposable repo. The first metadata-only
+  [poll](https://github.com/kevinmartin/sofa-disposable/actions/runs/36729919450)
+  passed in 4m11s on roughly 40 Project items and dispatched no Ready issue.
+  A ledger precheck skipped remote approval reads for items without specs; the
+  next [poll](https://github.com/kevinmartin/sofa-disposable/actions/runs/36732317712)
+  passed in 49s with no unauthorized dispatch. The first-time projection writes
+  also contributed to the first poll, so this is an observed end-to-end delta,
+  not an isolated benchmark of the precheck.
+- [Issue #215](https://github.com/kevinmartin/sofa-disposable/issues/215)
+  was owner-admitted to Discovery under the delegated disposable grant. Its
+  [run](https://github.com/kevinmartin/sofa-disposable/actions/runs/36730636430)
+  reserved one model turn but the ACP agent did not edit `spec.md`; the bounded
+  finalizer marked the task blocked, published no comment, and did not set an
+  approval status. The worker prompt was then changed to explicitly request
+  ACP file read/edit rather than a chat proposal, with only non-sensitive tool
+  counters in no-output errors. The next issue was used because #215's one-call
+  budget was retained.
+- [Issue #219](https://github.com/kevinmartin/sofa-disposable/issues/219)
+  had a fresh private Project Discovery admission. Its
+  [run](https://github.com/kevinmartin/sofa-disposable/actions/runs/36732538728)
+  made one bounded ACP turn, produced a validated v1 specification, and posted
+  [comment #5913836437](https://github.com/kevinmartin/sofa-disposable/issues/219#issuecomment-5913836437)
+  through the credentialed publisher after revalidating Project and issue
+  identity. [Handoff](https://github.com/kevinmartin/sofa-disposable/actions/runs/36733163354)
+  moved that item to Spec Review; a second
+  [poll](https://github.com/kevinmartin/sofa-disposable/actions/runs/36733485053)
+  captured the immutable comment digest
+  `a7470245026479bcf6f22d68365155d411cbc38170d633f25d5175c417983bef`
+  in the trusted ledger with no `approved_digest`. The specification cites the
+  admitted idea and bounded repository facts; it explicitly marks source-code
+  details it could not inspect as unverified. Kevin has not approved Backlog.
+- The hosted gate on former Sofa head `c9f459c19945502a66d54f23c65bb66fec0b7ce2`
+  correctly posted a failure when PR #18's base remained at `e5ed5b0` after
+  `main` advanced to `e1d29cb` through Dependabot PR #11. The trusted observer
+  requires the PR base to equal current main before comparing
+  `e2e-fake.yml`; it did not accept the stale base or weaken the pin rule.
+  PR #18 was rebased onto current main, and its new exact-head gate must run.
 - Read-only `sofa-test release-observe --repository kevinmartin/sofa-disposable --pr 178 --expected-merge-sha 9d4dc05724e55a9b090e0895abbf24ff5be97fed --required-check 'wake / status@15368'` returned `outcome=done`. [PR #178](https://github.com/kevinmartin/sofa-disposable/pull/178) is closed and merged, its merge commit matches that SHA and the disposable default branch head, and GitHub reports a successful exact-commit `wake / status` check from Actions App 15368. This is a designated merged fixture; sofa did not generate or merge it as part of milestone 02.
 
 ## Remaining prerequisites and recovery
 
-The consumer's committed `.sofa.yml` still has the delivery-only policy, and
-its caller does not yet run lifecycle reconciliation. A disposable branch is
-being prepared with the lifecycle policy, a one-repair limit, and callers
-pinned to the eventual reviewed Sofa commit; it has not been published or
-merged. Live Discovery requires a
-new designated disposable issue and a human move from Spec Review to Backlog;
-sofa will not make that approval move. Project write access and automations must
+The disposable consumer now has lifecycle policy, a one-repair limit, and
+scheduled/manual lifecycle, Discovery, and review callers pinned to a reviewed
+Sofa commit. The #219 specification is waiting in Spec Review for Kevin's
+decision. Sofa will not make the Backlog approval move. Project write access
+and automations must
 remain restricted so untrusted actors cannot set Backlog or Ready. Re-run local
 tests and inspect exact Project/issue revisions after code integration. Later
 release checks require a merged fixture selected without merging a sofa PR.
