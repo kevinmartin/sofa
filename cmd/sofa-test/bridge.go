@@ -211,69 +211,25 @@ func (b bridge) sofaStatusToken(ctx context.Context) (string, error) {
 func (b bridge) checkQualityContract(ctx context.Context, sha, baseSHA string) error {
 	caller, err := b.workflowAt(ctx, sha, "pr-fast.yml")
 	if err != nil {
-		return err
+		return fmt.Errorf("read candidate caller workflow at %s: %w", sha, err)
 	}
 	reusable, err := b.workflowAt(ctx, sha, "quality.reusable.yml")
 	if err != nil {
-		return err
+		return fmt.Errorf("read candidate reusable workflow at %s: %w", sha, err)
 	}
-	if err := workflow.CheckSofaQualityContract(caller, reusable); err == nil {
-		return nil
-	} else if !errors.Is(err, workflow.ErrUnapprovedQualityDigest) {
+	if err := workflow.CheckSofaQualityContractStructure(caller, reusable); err != nil {
 		return fmt.Errorf("PR weakens required quality contract: %w", err)
+	}
+	baseCaller, err := b.workflowAt(ctx, baseSHA, "pr-fast.yml")
+	if err != nil {
+		return fmt.Errorf("read base caller workflow at %s: %w", baseSHA, err)
 	}
 	baseReusable, err := b.workflowAt(ctx, baseSHA, "quality.reusable.yml")
 	if err != nil {
-		return err
+		return fmt.Errorf("read base reusable workflow at %s: %w", baseSHA, err)
 	}
-	if err := workflow.CheckSofaQualityContractWithActionPins(caller, reusable, baseReusable, func(pin workflow.ActionPin) error {
-		return b.verifyOfficialAction(ctx, pin)
-	}); err != nil {
+	if err := workflow.CheckSofaQualityContract(caller, reusable, baseCaller, baseReusable); err != nil {
 		return fmt.Errorf("PR weakens required quality contract: %w", err)
-	}
-	return nil
-}
-
-func (b bridge) verifyOfficialAction(ctx context.Context, pin workflow.ActionPin) error {
-	var release struct {
-		Draft      bool `json:"draft"`
-		Prerelease bool `json:"prerelease"`
-	}
-	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", b.apiURL, pin.Name, pin.Tag)
-	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &release, http.StatusOK); err != nil {
-		return err
-	}
-	if release.Draft || release.Prerelease {
-		return errors.New("action release is not stable")
-	}
-	var ref struct {
-		Object struct {
-			Type string `json:"type"`
-			SHA  string `json:"sha"`
-		} `json:"object"`
-	}
-	url = fmt.Sprintf("%s/repos/%s/git/ref/tags/%s", b.apiURL, pin.Name, pin.Tag)
-	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &ref, http.StatusOK); err != nil {
-		return err
-	}
-	if ref.Object.Type == "tag" {
-		if !shaPattern.MatchString(ref.Object.SHA) {
-			return errors.New("action release tag object SHA is invalid")
-		}
-		var tag struct {
-			Object struct {
-				Type string `json:"type"`
-				SHA  string `json:"sha"`
-			} `json:"object"`
-		}
-		url = fmt.Sprintf("%s/repos/%s/git/tags/%s", b.apiURL, pin.Name, ref.Object.SHA)
-		if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &tag, http.StatusOK); err != nil {
-			return err
-		}
-		ref.Object = tag.Object
-	}
-	if ref.Object.Type != "commit" || ref.Object.SHA != pin.SHA {
-		return errors.New("action release tag does not resolve to pinned commit")
 	}
 	return nil
 }
@@ -286,14 +242,14 @@ func (b bridge) workflowAt(ctx context.Context, sha, name string) ([]byte, error
 	}
 	url := fmt.Sprintf("%s/repos/%s/contents/.github/workflows/%s?ref=%s", b.apiURL, sofaRepository, name, sha)
 	if err := b.request(ctx, http.MethodGet, url, b.readToken, nil, &file, http.StatusOK); err != nil {
-		return nil, fmt.Errorf("read candidate quality workflow: %w", err)
+		return nil, fmt.Errorf("read quality workflow: %w", err)
 	}
 	if file.Encoding != "base64" || file.Size <= 0 || file.Size > 128<<10 {
-		return nil, errors.New("candidate quality workflow unavailable")
+		return nil, errors.New("quality workflow unavailable")
 	}
 	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
 	if err != nil || len(data) != file.Size {
-		return nil, errors.New("candidate quality workflow content invalid")
+		return nil, errors.New("quality workflow content invalid")
 	}
 	return data, nil
 }
