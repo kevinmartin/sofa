@@ -15,6 +15,7 @@ import (
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/lifecycle"
 	"github.com/kevinmartin/sofa/internal/release"
+	"github.com/kevinmartin/sofa/internal/review"
 	"github.com/kevinmartin/sofa/internal/state"
 )
 
@@ -204,6 +205,12 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		if pull.Merged {
 			if err := observeRelease(ctx, projects, engine, c, attempt, pull, issue.BaseSHA, &observed); err != nil {
 				result.Held = append(result.Held, issue.Number)
+			} else if stage == lifecycle.Done && observed.ReleasePassed {
+				// Completion corrections are observations only. A failed comment or
+				// commit read holds this item without rewriting its prior Done event.
+				if err := observeCompletionCorrections(ctx, projects, engine, attempt, pull, issue.BaseSHA); err != nil {
+					result.Held = append(result.Held, issue.Number)
+				}
 			}
 		}
 		evidence[issue.IssueID] = observed
@@ -322,6 +329,50 @@ func observeRelease(ctx context.Context, client *github.Client, engine state.Eng
 	observed.ReleasePassed = decision.Kind == "done"
 	observed.ReleaseSHA = decision.CommitSHA
 	return nil
+}
+
+type completionReader interface {
+	IssueComments(context.Context, string, int64) ([]discovery.SpecComment, error)
+	RecentDefaultCommits(context.Context, string, string) ([]github.DefaultCommit, error)
+	release.RevertVerifier
+}
+
+// observeCompletionCorrections links later reports and strict inverse commits
+// to one already completed PR. Commit messages only narrow the bounded search;
+// they are never sufficient evidence for a revert event.
+func observeCompletionCorrections(ctx context.Context, reader completionReader, engine state.Engine, attempt state.Attempt, pull github.PullSnapshot, defaultHead string) error {
+	if attempt.Publication == nil || pull.Number != attempt.Publication.PRNumber || pull.URL != attempt.Publication.PRURL || pull.HeadSHA != attempt.Publication.HeadSHA || pull.HeadRef != attempt.Publication.Branch || !strings.EqualFold(pull.HeadRepository, attempt.Admission.Repository) || !strings.EqualFold(pull.BaseRepository, attempt.Admission.Repository) || !pull.Merged || pull.State != "closed" || pull.MergedAt.IsZero() || pull.MergeCommitSHA == "" {
+		return errors.New("completed PR identity changed")
+	}
+	comments, err := reader.IssueComments(ctx, attempt.Admission.Repository, pull.Number)
+	if err != nil {
+		return err
+	}
+	for _, comment := range comments {
+		if comment.CreatedAt.Before(pull.MergedAt) {
+			continue
+		}
+		if err := review.RecordLaterFeedback(ctx, engine, attempt, pull, comment); err != nil {
+			return err
+		}
+	}
+	commits, err := reader.RecentDefaultCommits(ctx, attempt.Admission.Repository, defaultHead)
+	if err != nil {
+		return err
+	}
+	for _, commit := range commits {
+		if !revertMessageReferences(commit.Message, pull.MergeCommitSHA) {
+			continue
+		}
+		if err := release.ObserveRevert(ctx, reader, engine, attempt, pull, commit.SHA, defaultHead, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func revertMessageReferences(message, mergedSHA string) bool {
+	return strings.Contains(strings.ToLower(message), "this reverts commit "+strings.ToLower(mergedSHA))
 }
 
 func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger state.State, authority map[string]bool, statuses lifecycle.Statuses, held []int) []int {

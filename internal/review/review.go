@@ -37,7 +37,7 @@ type Decision struct {
 // without treating it as a new repair grant. Only bounded metadata and the
 // comment reference enter the ledger; raw comment text remains external data.
 func RecordLaterFeedback(ctx context.Context, engine state.Engine, attempt state.Attempt, pull github.PullSnapshot, comment discovery.SpecComment) error {
-	if attempt.Publication == nil || pull.Number != attempt.Publication.PRNumber || pull.URL != attempt.Publication.PRURL || !pull.Merged || pull.MergedAt.IsZero() || pull.MergeCommitSHA == "" || comment.ID < 1 || comment.CreatedAt.Before(pull.MergedAt) || len(comment.Body) > 64<<10 {
+	if attempt.Publication == nil || pull.Number != attempt.Publication.PRNumber || pull.URL != attempt.Publication.PRURL || pull.HeadSHA != attempt.Publication.HeadSHA || pull.HeadRef != attempt.Publication.Branch || !pull.Merged || pull.MergedAt.IsZero() || !shaPattern.MatchString(pull.MergeCommitSHA) || comment.ID < 1 || comment.CreatedAt.Before(pull.MergedAt) || len(comment.Body) > 64<<10 {
 		return errors.New("later feedback is not bound to the merged PR")
 	}
 	if !strings.EqualFold(pull.HeadRepository, attempt.Admission.Repository) || !strings.EqualFold(pull.BaseRepository, attempt.Admission.Repository) {

@@ -151,7 +151,7 @@ func TestLaterFeedbackAppendsOnlyLinkedMetadata(t *testing.T) {
 	}
 	mergedAt := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	pull := github.PullSnapshot{
-		Number: 7, URL: a.Publication.PRURL, Merged: true, MergedAt: mergedAt,
+		Number: 7, URL: a.Publication.PRURL, HeadSHA: a.Publication.HeadSHA, HeadRef: a.Publication.Branch, Merged: true, MergedAt: mergedAt,
 		MergeCommitSHA: strings.Repeat("f", 40), HeadRepository: "owner/repo", BaseRepository: "owner/repo",
 	}
 	comment := discovery.SpecComment{
@@ -163,6 +163,11 @@ func TestLaterFeedbackAppendsOnlyLinkedMetadata(t *testing.T) {
 	}
 	if err := RecordLaterFeedback(ctx, engine, a, pull, comment); err != nil {
 		t.Fatalf("duplicate feedback changed ledger: %v", err)
+	}
+	changedPull := pull
+	changedPull.HeadSHA = strings.Repeat("1", 40)
+	if err := RecordLaterFeedback(ctx, engine, a, changedPull, comment); err == nil {
+		t.Fatal("later feedback accepted a different PR head")
 	}
 	snapshot, err = engine.Store.Load(ctx)
 	if err != nil || len(snapshot.State.Observations) != 1 || strings.Contains(snapshot.State.Observations[0].EvidenceRef, comment.Body) || snapshot.State.Observations[0].Revision != pull.MergeCommitSHA {

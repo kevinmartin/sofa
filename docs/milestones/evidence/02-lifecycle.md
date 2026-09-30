@@ -47,7 +47,7 @@ owner-approved or a candidate has passed required release gates.
 | 02-E | Partial | Local owner-review, same-PR lease, repair-budget, and interrupted-admission recovery tests pass. Recovery requires exact terminal-run proof and retains charged counters; a prepared publication remains for operator reconciliation. The hosted repair workflow is absent. |
 | 02-F | Partial | Local missing/wrong-candidate gate tests hold work; no hosted milestone 04 gate evidence is available. |
 | 02-G | Partial | Read-only observation of designated, already-merged disposable PR #178 reached `done` for the exact merge commit and required `wake / status` check. Local replay covers missing, failed, wrong-App, and successful checks plus closed-unmerged; hosted post-merge smoke is not configured. |
-| 02-H | Partial | Local later-feedback and exact-inverse-revert append-only tests pass; hosted correction observation is unproved. |
+| 02-H | Partial | Lifecycle reconciliation now reads later PR comments and bounded default-branch revert candidates for a Done item whose exact merged PR passed configured release checks. Local two-PR replay proves a transient read failure cannot borrow another PR's comments or erase a prior Done event; the verified inverse check, append-only replay, and no-raw-feedback tests pass. Hosted correction observation is unproved. |
 
 ## Local and live checks
 
@@ -64,6 +64,7 @@ owner-approved or a candidate has passed required release gates.
   protected from an automatic move. A signed-in Project settings UI inspection
   remains required before counting live Backlog approval as trusted.
 - The integrated local run `GOCACHE=/private/tmp/sofa-milestone02-gocache go test -count=1 ./...` passed on September 29, 2026, including the existing `httptest` package with local-port permission. `go vet ./...`, `go mod tidy -diff`, and `git diff --check` passed. These include replay fixtures, not a hosted lifecycle run. The installed `staticcheck` cannot decode Go 1.27 export data; hosted quality validation remains needed.
+- After wiring completion corrections, the integrated `go test -count=1 ./...`, `go vet ./...`, and `git diff --check` passed again. Revert discovery reads at most the latest 100 commits at the observed default-branch head and uses standard revert messages only as hints; exact inverse verification remains mandatory. This bound can miss older or unlabeled reversions.
 - `actionlint` v1.7.12 parsed `.github/workflows/lifecycle.reusable.yml` without findings, using the cached module source and Go 1.27.1. ShellCheck is not installed locally; hosted quality validation is still needed.
 - Read-only `sofa-test release-observe --repository kevinmartin/sofa-disposable --pr 178 --expected-merge-sha 9d4dc05724e55a9b090e0895abbf24ff5be97fed --required-check 'wake / status@15368'` returned `outcome=done`. [PR #178](https://github.com/kevinmartin/sofa-disposable/pull/178) is closed and merged, its merge commit matches that SHA and the disposable default branch head, and GitHub reports a successful exact-commit `wake / status` check from Actions App 15368. This is a designated merged fixture; sofa did not generate or merge it as part of milestone 02.
 
