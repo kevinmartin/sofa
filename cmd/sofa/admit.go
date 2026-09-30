@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/state"
@@ -53,9 +54,23 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 	if err != nil {
 		return err
 	}
+	store := github.StateStore{
+		Client:     ledgerClient,
+		Repository: c.Repository,
+	}
 	snapshot, err := projects.Issue(ctx, c, opts.issue)
 	if err != nil {
 		return err
+	}
+	if c.Lifecycle != nil {
+		policy, err := discoveryPolicy(c)
+		if err != nil {
+			return err
+		}
+		snapshot, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, snapshot)
+		if err != nil {
+			return err
+		}
 	}
 	grant, spec, err := admission.Authorize(c, snapshot)
 	if err != nil {
@@ -64,14 +79,10 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 	if err := integrity.ScanSecrets(spec, [][]byte{[]byte(os.Getenv("SOFA_PROJECTS_TOKEN")), []byte(os.Getenv("SOFA_STATE_TOKEN"))}); err != nil {
 		return errors.New("approved specification contains sensitive material")
 	}
-	store := github.StateStore{
-		Client:     ledgerClient,
-		Repository: c.Repository,
-	}
 	engine := state.Engine{
 		Store: store,
 	}
-	maxAttempts := int64(c.Limits.InfraRetries + 1)
+	maxAttempts := int64(c.Limits.InfraRetries + c.Limits.RepairAttempts + 1)
 	limits := state.Limits{
 		ModelCalls:            int64(c.Limits.MaxAgentTurns) * maxAttempts,
 		Repairs:               int64(c.Limits.RepairAttempts),

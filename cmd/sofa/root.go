@@ -24,7 +24,7 @@ func newRootCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return errors.New("command required: admit, execute, verify, publish, fail, spec-digest, config")
+			return errors.New("command required: admit, execute, verify, publish, fail, lifecycle, review-repair, spec-digest, config")
 		},
 	}
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, _ error) error {
@@ -36,6 +36,8 @@ func newRootCommand() *cobra.Command {
 		newVerifyCommand(),
 		newPublishCommand(),
 		newFailCommand(),
+		newLifecycleCommand(),
+		newReviewRepairCommand(),
 		newSpecDigestCommand(),
 		newConfigCommand(),
 	)

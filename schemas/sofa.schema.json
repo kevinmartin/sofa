@@ -166,9 +166,61 @@
         }
       ],
       "description": "Optional exact formatter recipe; omitted or null disables recipes."
+    },
+    "lifecycle": {
+      "type": "object",
+      "description": "Optional lifecycle policy. All canonical stages must map to distinct Project Status names.",
+      "additionalProperties": false,
+      "required": ["statuses"],
+      "properties": {
+        "statuses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inbox", "discovery", "spec_review", "backlog", "ready", "building", "verification", "review", "release", "done"],
+          "properties": {
+            "inbox": {"$ref": "#/$defs/statusName"},
+            "discovery": {"$ref": "#/$defs/statusName"},
+            "spec_review": {"$ref": "#/$defs/statusName"},
+            "backlog": {"$ref": "#/$defs/statusName"},
+            "ready": {"$ref": "#/$defs/statusName"},
+            "building": {"$ref": "#/$defs/statusName"},
+            "verification": {"$ref": "#/$defs/statusName"},
+            "review": {"$ref": "#/$defs/statusName"},
+            "release": {"$ref": "#/$defs/statusName"},
+            "done": {"$ref": "#/$defs/statusName"}
+          }
+        },
+        "poll_minutes": {"type": "integer", "enum": [0, 10, 60], "default": 10},
+        "discovery_wip": {"type": "integer", "minimum": 0, "maximum": 20, "default": 2},
+        "delivery_wip": {"type": "integer", "minimum": 0, "maximum": 20, "default": 1},
+        "spec_author_id": {"type": "string", "maxLength": 128, "not": {"pattern": "[ \\t\\r\\n\u0000]"}, "description": "Immutable node ID of the configured trusted specification-comment publisher; hosted Discovery requires a nonempty value."},
+        "dependencies_field": {"type": "string", "maxLength": 100, "not": {"pattern": "[\\r\\n\u0000]"}},
+        "priority_field": {"type": "string", "maxLength": 100, "not": {"pattern": "[\\r\\n\u0000]"}},
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "required_checks": {
+              "type": "array", "maxItems": 20, "uniqueItems": true,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["name", "app_id"],
+                "properties": {
+                  "name": {"type": "string", "minLength": 1, "maxLength": 128, "not": {"pattern": "[\\r\\n\u0000]"}},
+                  "app_id": {"type": "integer", "minimum": 1}
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
+    "statusName": {
+      "type": "string", "minLength": 1, "maxLength": 100,
+      "not": {"pattern": "[\\r\\n\u0000]"}
+    },
     "immutableID": {
       "type": "string",
       "minLength": 1,

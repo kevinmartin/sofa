@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/state"
@@ -98,6 +99,16 @@ func runPublish(ctx context.Context, opts publishOptions) error {
 		snapshot, err := projects.Issue(ctx, c, m.Grant.IssueNumber)
 		if err != nil {
 			return err
+		}
+		if c.Lifecycle != nil {
+			policy, err := discoveryPolicy(c)
+			if err != nil {
+				return err
+			}
+			snapshot, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, snapshot)
+			if err != nil {
+				return err
+			}
 		}
 		return admission.Revalidate(c, snapshot, m.Grant)
 	}

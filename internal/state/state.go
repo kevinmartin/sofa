@@ -100,20 +100,40 @@ type Publication struct {
 	PRURL           string `json:"pr_url,omitempty"`
 }
 
+// RepairIntent reserves an authorized review repair for one exact PR head.
+// A later head or another PR cannot reuse the same feedback reservation.
+type RepairIntent struct {
+	FeedbackID      string `json:"feedback_id"`
+	FeedbackHash    string `json:"feedback_hash"`
+	PRBaseSHA       string `json:"pr_base_sha"`
+	PRHeadSHA       string `json:"pr_head_sha"`
+	PRNumber        int64  `json:"pr_number"`
+	CandidateDigest string `json:"candidate_digest,omitempty"`
+	CandidateSHA    string `json:"candidate_sha,omitempty"`
+}
+
+func (r RepairIntent) valid(p *Publication) bool {
+	if p == nil || !reference(r.FeedbackID) || !digestPattern.MatchString(r.FeedbackHash) || !shaPattern.MatchString(r.PRBaseSHA) || !shaPattern.MatchString(r.PRHeadSHA) || r.PRNumber <= 0 || p.PRNumber != r.PRNumber || p.HeadSHA != r.PRHeadSHA {
+		return false
+	}
+	return r.CandidateDigest == "" && r.CandidateSHA == "" || digestPattern.MatchString(r.CandidateDigest) && shaPattern.MatchString(r.CandidateSHA)
+}
+
 type Attempt struct {
-	ID          string       `json:"id"`
-	Admission   Admission    `json:"admission"`
-	Phase       Phase        `json:"phase"`
-	Generation  int64        `json:"generation"`
-	Owner       *Owner       `json:"owner,omitempty"`
-	Dispatch    string       `json:"dispatch"`
-	Limits      Limits       `json:"limits"`
-	Counts      Counters     `json:"counts"`
-	Checkpoint  *Checkpoint  `json:"checkpoint,omitempty"`
-	Publication *Publication `json:"publication,omitempty"`
-	Failure     string       `json:"failure,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
+	ID          string        `json:"id"`
+	Admission   Admission     `json:"admission"`
+	Phase       Phase         `json:"phase"`
+	Generation  int64         `json:"generation"`
+	Owner       *Owner        `json:"owner,omitempty"`
+	Dispatch    string        `json:"dispatch"`
+	Limits      Limits        `json:"limits"`
+	Counts      Counters      `json:"counts"`
+	Checkpoint  *Checkpoint   `json:"checkpoint,omitempty"`
+	Publication *Publication  `json:"publication,omitempty"`
+	Repair      *RepairIntent `json:"repair,omitempty"`
+	Failure     string        `json:"failure,omitempty"`
+	CreatedAt   time.Time     `json:"created_at"`
+	UpdatedAt   time.Time     `json:"updated_at"`
 }
 
 // Observation is compact machine-observed metadata, not model-generated prose.
@@ -131,10 +151,163 @@ type Observation struct {
 	RecordedAt      time.Time `json:"recorded_at"`
 }
 
+// SpecRecord is the observed, version-bound Project approval. A proposal must
+// first be seen in Spec Review; only a later, trusted Backlog status revision
+// can approve that exact canonical specification. Neither field is an actor
+// claim: Project write access is the approval boundary.
+type SpecRecord struct {
+	Repository       string    `json:"repository"`
+	IssueID          string    `json:"issue_id"`
+	Issue            int64     `json:"issue"`
+	ProjectID        string    `json:"project_id"`
+	ProjectItemID    string    `json:"project_item_id"`
+	SourceDigest     string    `json:"source_digest"`
+	SpecDigest       string    `json:"spec_digest"`
+	IssueEditedAt    time.Time `json:"issue_edited_at"`
+	CommentID        int64     `json:"comment_id"`
+	CommentAuthorID  string    `json:"comment_author_id"`
+	CommentCreatedAt time.Time `json:"comment_created_at"`
+	CommentUpdatedAt time.Time `json:"comment_updated_at"`
+	ReviewOptionID   string    `json:"review_option_id"`
+	ReviewUpdatedAt  time.Time `json:"review_updated_at"`
+	ApprovedDigest   string    `json:"approved_digest,omitempty"`
+	BacklogOptionID  string    `json:"backlog_option_id,omitempty"`
+	BacklogUpdatedAt time.Time `json:"backlog_updated_at,omitempty"`
+}
+
+type DiscoveryPhase string
+
+const (
+	DiscoveryPending  DiscoveryPhase = "pending"
+	DiscoveryRunning  DiscoveryPhase = "running"
+	DiscoveryReview   DiscoveryPhase = "spec_review"
+	DiscoveryBlocked  DiscoveryPhase = "blocked"
+	DiscoveryCanceled DiscoveryPhase = "cancelled"
+)
+
+// DiscoveryTask reserves one issue's bounded research work before a model runs.
+// Its source and Project admission revision cannot be replaced on retry.
+type DiscoveryTask struct {
+	Repository       string                `json:"repository"`
+	IssueID          string                `json:"issue_id"`
+	Issue            int64                 `json:"issue"`
+	ProjectID        string                `json:"project_id"`
+	ProjectItemID    string                `json:"project_item_id"`
+	StatusOptionID   string                `json:"status_option_id"`
+	StatusUpdatedAt  time.Time             `json:"status_updated_at"`
+	SourceDigest     string                `json:"source_digest"`
+	Phase            DiscoveryPhase        `json:"phase"`
+	Generation       int64                 `json:"generation"`
+	Owner            *Owner                `json:"owner,omitempty"`
+	ModelCalls       int64                 `json:"model_calls"`
+	MaxModelCalls    int64                 `json:"max_model_calls"`
+	Publication      *DiscoveryPublication `json:"publication,omitempty"`
+	SpecDigest       string                `json:"spec_digest,omitempty"`
+	CommentID        int64                 `json:"comment_id,omitempty"`
+	CommentAuthorID  string                `json:"comment_author_id,omitempty"`
+	CommentCreatedAt time.Time             `json:"comment_created_at,omitempty"`
+	CommentUpdatedAt time.Time             `json:"comment_updated_at,omitempty"`
+	Failure          string                `json:"failure,omitempty"`
+	CreatedAt        time.Time             `json:"created_at"`
+	UpdatedAt        time.Time             `json:"updated_at"`
+}
+
+// DiscoveryPublication is an unapproved, fenced intent to post one immutable
+// comment. It is never accepted as a specification or Backlog approval.
+type DiscoveryPublication struct {
+	Digest        string `json:"digest"`
+	Key           string `json:"key"`
+	PostAttempted bool   `json:"post_attempted"`
+	Producer      Owner  `json:"producer"`
+}
+
+func (p DiscoveryPublication) valid() bool {
+	return digestPattern.MatchString(p.Digest) && digestPattern.MatchString(p.Key) && validOwner(p.Producer)
+}
+
+// BoardProjection remembers the last accepted Project observation and, when
+// present, one fenced write intent. Unexpected manual edits are reported by
+// reconciliation rather than overwritten by the factory.
+type BoardProjection struct {
+	Repository           string    `json:"repository"`
+	IssueID              string    `json:"issue_id"`
+	ProjectID            string    `json:"project_id"`
+	ProjectItemID        string    `json:"project_item_id"`
+	Stage                string    `json:"stage"`
+	OptionID             string    `json:"option_id"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	PendingStage         string    `json:"pending_stage,omitempty"`
+	PendingOptionID      string    `json:"pending_option_id,omitempty"`
+	PendingFromOptionID  string    `json:"pending_from_option_id,omitempty"`
+	PendingFromUpdatedAt time.Time `json:"pending_from_updated_at,omitempty"`
+}
+
+type PollCursor struct {
+	LastPoll   time.Time `json:"last_poll"`
+	LastWakeID string    `json:"last_wake_id,omitempty"`
+	Generation int64     `json:"generation"`
+}
+
+func (p PollCursor) valid() bool {
+	return p.Generation >= 0 && (p.Generation == 0 && p.LastPoll.IsZero() || p.Generation > 0 && !p.LastPoll.IsZero()) && (p.LastWakeID == "" || reference(p.LastWakeID))
+}
+
+func (p BoardProjection) valid() bool {
+	if !repoPattern.MatchString(p.Repository) || !reference(p.IssueID) || !reference(p.ProjectID) || !reference(p.ProjectItemID) || !validStage(p.Stage) || !reference(p.OptionID) || p.UpdatedAt.IsZero() {
+		return false
+	}
+	if p.PendingStage == "" {
+		return p.PendingOptionID == "" && p.PendingFromOptionID == "" && p.PendingFromUpdatedAt.IsZero()
+	}
+	return validStage(p.PendingStage) && reference(p.PendingOptionID) && p.PendingFromOptionID == p.OptionID && p.PendingFromUpdatedAt.Equal(p.UpdatedAt)
+}
+
+func validStage(stage string) bool {
+	return stage != "" && len(stage) <= 100 && !strings.ContainsAny(stage, "\x00\r\n\t")
+}
+
+func (d DiscoveryTask) valid() bool {
+	if !repoPattern.MatchString(d.Repository) || !reference(d.IssueID) || d.Issue < 1 || !reference(d.ProjectID) || !reference(d.ProjectItemID) || !reference(d.StatusOptionID) || d.StatusUpdatedAt.IsZero() || !digestPattern.MatchString(d.SourceDigest) || d.Generation < 0 || d.ModelCalls < 0 || d.MaxModelCalls < 1 || d.MaxModelCalls > 20 || d.ModelCalls > d.MaxModelCalls || d.CreatedAt.IsZero() || d.UpdatedAt.Before(d.CreatedAt) {
+		return false
+	}
+	if d.Owner != nil && (!validOwner(*d.Owner) || d.Generation == 0 || d.Phase != DiscoveryRunning) {
+		return false
+	}
+	if d.Publication != nil && !d.Publication.valid() {
+		return false
+	}
+	switch d.Phase {
+	case DiscoveryPending:
+		return d.Owner == nil && d.SpecDigest == "" && d.CommentID == 0
+	case DiscoveryRunning:
+		return d.Owner != nil && d.SpecDigest == "" && d.CommentID == 0 && d.ModelCalls > 0
+	case DiscoveryReview:
+		return d.Owner == nil && d.Publication == nil && digestPattern.MatchString(d.SpecDigest) && d.CommentID > 0 && reference(d.CommentAuthorID) && !d.CommentCreatedAt.IsZero() && !d.CommentUpdatedAt.Before(d.CommentCreatedAt)
+	case DiscoveryBlocked, DiscoveryCanceled:
+		return d.Owner == nil && d.Publication == nil && d.SpecDigest == "" && d.CommentID == 0
+	default:
+		return false
+	}
+}
+
+func (r SpecRecord) valid() bool {
+	if !repoPattern.MatchString(r.Repository) || !reference(r.IssueID) || r.Issue < 1 || !reference(r.ProjectID) || !reference(r.ProjectItemID) || !digestPattern.MatchString(r.SourceDigest) || !digestPattern.MatchString(r.SpecDigest) || r.CommentID < 1 || !reference(r.CommentAuthorID) || r.CommentCreatedAt.IsZero() || r.CommentUpdatedAt.Before(r.CommentCreatedAt) || !reference(r.ReviewOptionID) || r.ReviewUpdatedAt.IsZero() {
+		return false
+	}
+	if r.ApprovedDigest == "" {
+		return r.BacklogOptionID == "" && r.BacklogUpdatedAt.IsZero()
+	}
+	return r.ApprovedDigest == r.SpecDigest && reference(r.BacklogOptionID) && r.BacklogUpdatedAt.After(r.ReviewUpdatedAt) && r.BacklogUpdatedAt.After(r.IssueEditedAt)
+}
+
 type State struct {
-	Version      int                `json:"version"`
-	Attempts     map[string]Attempt `json:"attempts"`
-	Observations []Observation      `json:"observations"`
+	Version      int                        `json:"version"`
+	Attempts     map[string]Attempt         `json:"attempts"`
+	Observations []Observation              `json:"observations"`
+	Specs        map[string]SpecRecord      `json:"specs,omitempty"`
+	Discoveries  map[string]DiscoveryTask   `json:"discoveries,omitempty"`
+	Projections  map[string]BoardProjection `json:"projections,omitempty"`
+	Poll         *PollCursor                `json:"poll,omitempty"`
 }
 
 type Snapshot struct {
@@ -152,6 +325,9 @@ func Empty() State {
 		Version:      Version,
 		Attempts:     map[string]Attempt{},
 		Observations: []Observation{},
+		Specs:        map[string]SpecRecord{},
+		Discoveries:  map[string]DiscoveryTask{},
+		Projections:  map[string]BoardProjection{},
 	}
 }
 
@@ -251,6 +427,27 @@ func (s State) Validate() error {
 		if a.Publication != nil && !a.Publication.valid() {
 			return fmt.Errorf("%w: publication", ErrInvalid)
 		}
+		if a.Repair != nil && !a.Repair.valid(a.Publication) {
+			return fmt.Errorf("%w: repair intent", ErrInvalid)
+		}
+	}
+	for id, record := range s.Specs {
+		if id != record.IssueID || !record.valid() {
+			return fmt.Errorf("%w: specification approval", ErrInvalid)
+		}
+	}
+	for id, discovery := range s.Discoveries {
+		if id != discovery.IssueID || !discovery.valid() {
+			return fmt.Errorf("%w: discovery task", ErrInvalid)
+		}
+	}
+	for id, projection := range s.Projections {
+		if id != projection.IssueID || !projection.valid() {
+			return fmt.Errorf("%w: board projection", ErrInvalid)
+		}
+	}
+	if s.Poll != nil && !s.Poll.valid() {
+		return fmt.Errorf("%w: poll cursor", ErrInvalid)
 	}
 	seen := map[string]bool{}
 	for _, o := range s.Observations {

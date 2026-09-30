@@ -21,17 +21,63 @@ import (
 const MaxBytes = 64 << 10
 
 type Config struct {
-	Version      int      `yaml:"schema_version" json:"schema_version"`
-	Repository   string   `yaml:"repository" json:"repository"`
-	RepositoryID string   `yaml:"repository_id" json:"repository_id"`
-	ProjectID    string   `yaml:"project_id" json:"project_id"`
-	OwnerID      string   `yaml:"owner_id" json:"owner_id"`
-	ReadyStatus  string   `yaml:"ready_status" json:"ready_status"`
-	AllowedPaths []string `yaml:"allowed_paths" json:"allowed_paths"`
-	Profile      Profile  `yaml:"profile" json:"profile"`
-	Limits       Limits   `yaml:"limits" json:"limits"`
-	Checks       []Check  `yaml:"checks" json:"checks"`
-	Recipe       *Recipe  `yaml:"recipe,omitempty" json:"recipe,omitempty"`
+	Version      int        `yaml:"schema_version" json:"schema_version"`
+	Repository   string     `yaml:"repository" json:"repository"`
+	RepositoryID string     `yaml:"repository_id" json:"repository_id"`
+	ProjectID    string     `yaml:"project_id" json:"project_id"`
+	OwnerID      string     `yaml:"owner_id" json:"owner_id"`
+	ReadyStatus  string     `yaml:"ready_status" json:"ready_status"`
+	AllowedPaths []string   `yaml:"allowed_paths" json:"allowed_paths"`
+	Profile      Profile    `yaml:"profile" json:"profile"`
+	Limits       Limits     `yaml:"limits" json:"limits"`
+	Checks       []Check    `yaml:"checks" json:"checks"`
+	Recipe       *Recipe    `yaml:"recipe,omitempty" json:"recipe,omitempty"`
+	Lifecycle    *Lifecycle `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
+}
+
+// Lifecycle is opt-in so existing delivery-only consumers retain their v1 policy.
+// Statuses maps canonical lifecycle names to this Project's display names.
+type Lifecycle struct {
+	Statuses          map[string]string `yaml:"statuses" json:"statuses"`
+	PollMinutes       int               `yaml:"poll_minutes,omitempty" json:"poll_minutes,omitempty"`
+	DiscoveryWIP      int               `yaml:"discovery_wip,omitempty" json:"discovery_wip,omitempty"`
+	DeliveryWIP       int               `yaml:"delivery_wip,omitempty" json:"delivery_wip,omitempty"`
+	SpecAuthorID      string            `yaml:"spec_author_id,omitempty" json:"spec_author_id,omitempty"`
+	DependenciesField string            `yaml:"dependencies_field,omitempty" json:"dependencies_field,omitempty"`
+	PriorityField     string            `yaml:"priority_field,omitempty" json:"priority_field,omitempty"`
+	Release           Release           `yaml:"release,omitempty" json:"release,omitempty"`
+}
+
+type Release struct {
+	RequiredChecks []RequiredCheck `yaml:"required_checks,omitempty" json:"required_checks,omitempty"`
+}
+
+type RequiredCheck struct {
+	Name  string `yaml:"name" json:"name"`
+	AppID int64  `yaml:"app_id" json:"app_id"`
+}
+
+var lifecycleStages = []string{"inbox", "discovery", "spec_review", "backlog", "ready", "building", "verification", "review", "release", "done"}
+
+func (l Lifecycle) EffectivePollMinutes() int {
+	if l.PollMinutes == 0 {
+		return 10
+	}
+	return l.PollMinutes
+}
+
+func (l Lifecycle) EffectiveDiscoveryWIP() int {
+	if l.DiscoveryWIP == 0 {
+		return 2
+	}
+	return l.DiscoveryWIP
+}
+
+func (l Lifecycle) EffectiveDeliveryWIP() int {
+	if l.DeliveryWIP == 0 {
+		return 1
+	}
+	return l.DeliveryWIP
 }
 
 type Profile struct {
@@ -171,6 +217,44 @@ func (c Config) Validate() error {
 			if !SafePath(p) || !strings.HasSuffix(p, ".go") || !c.Allows(p) {
 				return errors.New("recipe file is outside its configured Go-file scope")
 			}
+		}
+	}
+	if c.Lifecycle != nil {
+		l := c.Lifecycle
+		if len(l.Statuses) != len(lifecycleStages) || (l.PollMinutes != 0 && l.PollMinutes != 10 && l.PollMinutes != 60) || l.DiscoveryWIP < 0 || l.DiscoveryWIP > 20 || l.DeliveryWIP < 0 || l.DeliveryWIP > 20 {
+			return errors.New("invalid lifecycle status mapping or limits")
+		}
+		seenNames := map[string]bool{}
+		for _, stage := range lifecycleStages {
+			name := l.Statuses[stage]
+			if name == "" || len(name) > 100 || strings.ContainsAny(name, "\r\n\x00") || seenNames[name] {
+				return errors.New("lifecycle requires distinct, bounded status names")
+			}
+			seenNames[name] = true
+		}
+		if l.Statuses["ready"] != c.ReadyStatus {
+			return errors.New("lifecycle ready status must match ready_status")
+		}
+		if l.SpecAuthorID != "" && (len(l.SpecAuthorID) > 128 || strings.ContainsAny(l.SpecAuthorID, " \t\r\n\x00")) {
+			return errors.New("invalid specification author identity")
+		}
+		for _, field := range []string{l.DependenciesField, l.PriorityField} {
+			if len(field) > 100 || strings.ContainsAny(field, "\r\n\x00") || field != "" && strings.TrimSpace(field) != field {
+				return errors.New("invalid lifecycle owner field name")
+			}
+		}
+		if l.DependenciesField != "" && l.DependenciesField == l.PriorityField {
+			return errors.New("lifecycle owner fields must be distinct")
+		}
+		if len(l.Release.RequiredChecks) > 20 {
+			return errors.New("too many release checks")
+		}
+		seenChecks := map[RequiredCheck]bool{}
+		for _, check := range l.Release.RequiredChecks {
+			if check.Name == "" || len(check.Name) > 128 || strings.ContainsAny(check.Name, "\r\n\x00") || check.AppID <= 0 || seenChecks[check] {
+				return errors.New("invalid or duplicate release check")
+			}
+			seenChecks[check] = true
 		}
 	}
 	return nil

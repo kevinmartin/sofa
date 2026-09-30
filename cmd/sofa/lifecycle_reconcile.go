@@ -1,0 +1,440 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/config"
+	"github.com/kevinmartin/sofa/internal/discovery"
+	"github.com/kevinmartin/sofa/internal/github"
+	"github.com/kevinmartin/sofa/internal/lifecycle"
+	"github.com/kevinmartin/sofa/internal/release"
+	"github.com/kevinmartin/sofa/internal/state"
+)
+
+type lifecycleReconcileOptions struct {
+	configPath string
+	outPath    string
+	wakeID     string
+}
+
+type lifecycleReconcileResult struct {
+	Claimed     bool  `json:"claimed"`
+	Generation  int64 `json:"generation,omitempty"`
+	MissedTicks int64 `json:"missed_ticks,omitempty"`
+	Ready       []int `json:"ready_issue_numbers"`
+	Held        []int `json:"held_issue_numbers"`
+	Moved       []int `json:"moved_issue_numbers"`
+}
+
+func newLifecycleCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "lifecycle", Short: "Reconcile the trusted Project lifecycle"}
+	var opts lifecycleReconcileOptions
+	reconcile := newStageCommand("reconcile", "Observe and project due lifecycle work", "lifecycle reconcile requires --config and --out", func(cmd *cobra.Command, _ []string) error {
+		if opts.configPath == "" || opts.outPath == "" {
+			return errors.New("lifecycle reconcile requires --config and --out")
+		}
+		return runLifecycleReconcile(cmd.Context(), opts)
+	})
+	reconcile.Flags().StringVar(&opts.configPath, "config", "", "Trusted consumer configuration")
+	reconcile.Flags().StringVar(&opts.outPath, "out", "", "Bounded JSON result path")
+	reconcile.Flags().StringVar(&opts.wakeID, "wake-id", "", "Stable manual or event revision; empty for scheduled tick")
+	cmd.AddCommand(reconcile)
+	return cmd
+}
+
+func lifecycleStatuses(c config.Config) lifecycle.Statuses {
+	result := make(lifecycle.Statuses, len(c.Lifecycle.Statuses))
+	for name, display := range c.Lifecycle.Statuses {
+		result[lifecycle.Stage(name)] = display
+	}
+	return result
+}
+
+func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) error {
+	c, err := readConfig(opts.configPath)
+	if err != nil {
+		return err
+	}
+	if c.Lifecycle == nil {
+		return errors.New("lifecycle configuration is unavailable")
+	}
+	statuses := lifecycleStatuses(c)
+	if err := statuses.Validate(); err != nil {
+		return err
+	}
+	projects, err := clientFromEnv("SOFA_PROJECTS_TOKEN")
+	if err != nil {
+		return err
+	}
+	ledgerClient, err := clientFromEnv("SOFA_STATE_TOKEN")
+	if err != nil {
+		return err
+	}
+	store := github.StateStore{Client: ledgerClient, Repository: c.Repository}
+	engine := state.Engine{Store: store}
+	claim, err := engine.ClaimPoll(ctx, time.Now().UTC(), time.Duration(c.Lifecycle.EffectivePollMinutes())*time.Minute, opts.wakeID)
+	if err != nil {
+		return err
+	}
+	result := lifecycleReconcileResult{Claimed: claim.Claimed, Generation: claim.Generation, MissedTicks: claim.Missed, Ready: []int{}, Held: []int{}, Moved: []int{}}
+	if !claim.Claimed {
+		return writeJSON(opts.outPath, result)
+	}
+	items, err := projects.ProjectWorkItems(ctx, c)
+	if err != nil {
+		return err
+	}
+	_, options, err := projects.ProjectStatusField(ctx, c.ProjectID)
+	if err != nil {
+		return err
+	}
+	for _, stage := range lifecycle.Stages {
+		if options[statuses[stage]] == "" {
+			return errors.New("configured Project Status option unavailable")
+		}
+	}
+	policy, err := discoveryPolicy(c)
+	if err != nil {
+		return err
+	}
+	issues := make([]admission.Snapshot, 0, len(items))
+	byID := make(map[string]admission.Snapshot, len(items))
+	for _, item := range items {
+		issues = append(issues, item.Issue)
+		byID[item.Issue.IssueID] = item.Issue
+	}
+	// Approval observations are deterministic and scoped to one item. One
+	// invalid candidate must not stop unrelated Project items in the same scan.
+	for _, item := range items {
+		stage, known := statuses.StageFor(item.Issue.CurrentStatus)
+		if !known {
+			continue
+		}
+		switch stage {
+		case lifecycle.SpecReview:
+			if _, _, err := discovery.ObserveSpecReview(ctx, projects, store, policy, item.Issue); err != nil {
+				result.Held = append(result.Held, item.Issue.Number)
+			}
+		case lifecycle.Backlog:
+			if _, _, err := discovery.ObserveBacklog(ctx, projects, store, policy, item.Issue); err != nil {
+				result.Held = append(result.Held, item.Issue.Number)
+			}
+		}
+	}
+	ledger, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	// A Discovery presenter may have published and ledgered its exact spec
+	// comment before an Actions interruption prevented the Project move. Only
+	// that durable task plus a re-read matching comment can resume the move.
+	// Skip these items in this scan because the initial Project list is stale
+	// after a successful write (or a conflicting human edit).
+	recovering := make(map[string]bool)
+	for _, item := range items {
+		stage, known := statuses.StageFor(item.Issue.CurrentStatus)
+		if !known || stage != lifecycle.Discovery {
+			continue
+		}
+		task, exists := ledger.State.Discoveries[item.Issue.IssueID]
+		if !exists || task.Phase != state.DiscoveryReview {
+			continue
+		}
+		recovering[item.Issue.IssueID] = true
+		if err := recoverDiscoveryReview(ctx, projects, engine, c, policy, statuses, item.Issue, task); err != nil {
+			result.Held = append(result.Held, item.Issue.Number)
+		} else {
+			result.Moved = append(result.Moved, item.Issue.Number)
+		}
+	}
+	if len(recovering) != 0 {
+		ledger, err = store.Load(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	authority := make(map[string]bool, len(items))
+	evidence := make(map[string]lifecycle.DeliveryEvidence)
+	for _, item := range items {
+		issue := item.Issue
+		stage, known := statuses.StageFor(issue.CurrentStatus)
+		if !known {
+			continue
+		}
+		if stage == lifecycle.Ready {
+			_, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, issue)
+		} else if stage == lifecycle.Building || stage == lifecycle.Verification || stage == lifecycle.Review || stage == lifecycle.Release || stage == lifecycle.Done {
+			_, err = discovery.VerifyApprovedRevision(ctx, projects, store, policy, issue)
+		} else {
+			continue
+		}
+		if err != nil {
+			result.Held = append(result.Held, issue.Number)
+			continue
+		}
+		authority[issue.IssueID] = true
+		attempt, found, lookupErr := attemptForItem(ledger.State, c.Repository, issue)
+		if lookupErr != nil {
+			result.Held = append(result.Held, issue.Number)
+			continue
+		}
+		if !found || attempt.Publication == nil || attempt.Publication.PRNumber < 1 {
+			continue
+		}
+		pull, err := projects.Pull(ctx, c.Repository, attempt.Publication.PRNumber)
+		if err != nil {
+			result.Held = append(result.Held, issue.Number)
+			continue
+		}
+		observed := lifecycle.DeliveryEvidence{
+			PRNumber: pull.Number, PRURL: pull.URL, HeadSHA: pull.HeadSHA,
+			BaseSHA: pull.BaseSHA, Closed: pull.State == "closed", Merged: pull.Merged,
+			MergedSHA: pull.MergeCommitSHA,
+			// Milestone 04 supplies the independent required-gate plan and
+			// evidence. Until then, an empty plan must remain blocked.
+			RequiredGates: []string{},
+		}
+		if pull.Merged {
+			if err := observeRelease(ctx, projects, engine, c, attempt, pull, issue.BaseSHA, &observed); err != nil {
+				result.Held = append(result.Held, issue.Number)
+			}
+		}
+		evidence[issue.IssueID] = observed
+	}
+	scanIssues := make([]admission.Snapshot, 0, len(issues))
+	for _, issue := range issues {
+		if !recovering[issue.IssueID] {
+			scanIssues = append(scanIssues, issue)
+		}
+	}
+	effects, err := lifecycle.Scan(lifecycle.ScanInput{
+		Repository: c.Repository, ProjectID: c.ProjectID, Statuses: statuses,
+		Issues: scanIssues, Ledger: ledger.State, Authority: authority, Evidence: evidence,
+	})
+	if err != nil {
+		return err
+	}
+	for _, effect := range effects {
+		item, found := byID[effect.IssueID]
+		if !found {
+			return errors.New("Project item disappeared during scan")
+		}
+		switch effect.Kind {
+		case lifecycle.Observe:
+			if err := engine.ObserveBoard(ctx, boardFromSnapshot(c, effect.From, item)); err != nil {
+				result.Held = append(result.Held, effect.IssueNumber)
+			}
+		case lifecycle.Move:
+			if err := applyBoardMove(ctx, projects, engine, c, statuses, effect, item); err != nil {
+				result.Held = append(result.Held, effect.IssueNumber)
+			} else {
+				result.Moved = append(result.Moved, effect.IssueNumber)
+			}
+		case lifecycle.Hold:
+			if effect.BlockedReason != "" {
+				result.Held = append(result.Held, effect.IssueNumber)
+			}
+		}
+	}
+	result.Ready = readyForDelivery(c, items, ledger.State, authority, statuses, result.Held)
+	result.Held = uniqueInts(result.Held)
+	result.Moved = uniqueInts(result.Moved)
+	return writeJSON(opts.outPath, result)
+}
+
+func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, policy discovery.Policy, statuses lifecycle.Statuses, issue admission.Snapshot, task state.DiscoveryTask) error {
+	comment, err := client.IssueComment(ctx, c.Repository, int64(issue.Number), task.CommentID)
+	if err != nil {
+		return err
+	}
+	if err := discovery.ReviewCommentReadyForMove(policy, issue, comment, task); err != nil {
+		return err
+	}
+	if err := engine.ObserveBoard(ctx, boardFromSnapshot(c, lifecycle.Discovery, issue)); err != nil {
+		return err
+	}
+	effect := lifecycle.Effect{Kind: lifecycle.Move, IssueID: issue.IssueID, IssueNumber: issue.Number, From: lifecycle.Discovery, To: lifecycle.SpecReview}
+	return applyBoardMove(ctx, client, engine, c, statuses, effect, issue)
+}
+
+func attemptForItem(ledger state.State, repository string, issue admission.Snapshot) (state.Attempt, bool, error) {
+	var selected state.Attempt
+	found := false
+	for _, attempt := range ledger.Attempts {
+		if attempt.Admission.ProjectItemID != issue.ProjectItemID {
+			continue
+		}
+		if found || !strings.EqualFold(attempt.Admission.Repository, repository) || attempt.Admission.ProjectID != issue.ProjectID || attempt.Admission.Issue != int64(issue.Number) {
+			return state.Attempt{}, false, errors.New("ambiguous Project item attempt")
+		}
+		selected = attempt
+		found = true
+	}
+	return selected, found, nil
+}
+
+func boardFromSnapshot(c config.Config, stage lifecycle.Stage, item admission.Snapshot) state.BoardProjection {
+	return state.BoardProjection{
+		Repository: c.Repository, IssueID: item.IssueID, ProjectID: c.ProjectID,
+		ProjectItemID: item.ProjectItemID, Stage: string(stage), OptionID: item.StatusOptionID, UpdatedAt: item.StatusUpdatedAt,
+	}
+}
+
+func uniqueInts(values []int) []int {
+	sort.Ints(values)
+	result := values[:0]
+	for _, value := range values {
+		if len(result) == 0 || result[len(result)-1] != value {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func observeRelease(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, attempt state.Attempt, pull github.PullSnapshot, defaultHead string, observed *lifecycle.DeliveryEvidence) error {
+	onDefault, err := client.IsAncestor(ctx, c.Repository, pull.MergeCommitSHA, defaultHead)
+	if err != nil {
+		return err
+	}
+	checks, err := client.CommitChecks(ctx, c.Repository, pull.MergeCommitSHA)
+	if err != nil {
+		return err
+	}
+	required := make([]release.RequiredCheck, 0, len(c.Lifecycle.Release.RequiredChecks))
+	for _, check := range c.Lifecycle.Release.RequiredChecks {
+		required = append(required, release.RequiredCheck{Name: check.Name, AppID: check.AppID})
+	}
+	decision, err := release.Evaluate(attempt, pull, defaultHead, onDefault, required, checks)
+	if err != nil {
+		return err
+	}
+	if err := release.Record(ctx, engine, decision, time.Now().UTC()); err != nil {
+		return err
+	}
+	observed.ReleaseRequired = true
+	observed.ReleasePassed = decision.Kind == "done"
+	observed.ReleaseSHA = decision.CommitSHA
+	return nil
+}
+
+func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger state.State, authority map[string]bool, statuses lifecycle.Statuses, held []int) []int {
+	type candidate struct {
+		number int
+		rank   int
+	}
+	newWork := make([]candidate, 0)
+	recovery := make([]candidate, 0)
+	heldIssues := make(map[int]bool, len(held))
+	for _, number := range held {
+		heldIssues[number] = true
+	}
+	stageByNumber := make(map[int]lifecycle.Stage, len(items))
+	for _, item := range items {
+		stage, ok := statuses.StageFor(item.Issue.CurrentStatus)
+		if ok {
+			stageByNumber[item.Issue.Number] = stage
+		}
+	}
+	occupied := 0
+	pending := make(map[string]bool)
+	for _, attempt := range ledger.Attempts {
+		if !strings.EqualFold(attempt.Admission.Repository, c.Repository) || attempt.Admission.ProjectID != c.ProjectID || attempt.Phase == state.Draft || attempt.Phase == state.Blocked || attempt.Phase == state.Deferred {
+			continue
+		}
+		occupied++
+		if attempt.Phase == state.Pending && attempt.Owner == nil {
+			pending[attempt.Admission.ProjectItemID] = true
+		}
+	}
+	for _, item := range items {
+		stage, ok := statuses.StageFor(item.Issue.CurrentStatus)
+		if !ok || stage != lifecycle.Ready || !authority[item.Issue.IssueID] || heldIssues[item.Issue.Number] || item.MetadataError != "" || !item.DependenciesKnown || !item.PriorityKnown {
+			continue
+		}
+		if dependenciesReady, _, err := lifecycle.DependenciesReady(item.Dependencies, stageByNumber); err != nil || !dependenciesReady {
+			continue
+		}
+		attempt, found, lookupErr := attemptForItem(ledger, c.Repository, item.Issue)
+		if lookupErr != nil {
+			continue
+		}
+		if found && (attempt.Phase == state.Draft || attempt.Phase == state.Blocked || attempt.Phase == state.Deferred) {
+			continue
+		}
+		if found && attempt.Phase == state.Pending && attempt.Owner == nil && pending[item.Issue.ProjectItemID] {
+			recovery = append(recovery, candidate{number: item.Issue.Number, rank: item.PriorityRank})
+			continue
+		}
+		if found {
+			continue
+		}
+		newWork = append(newWork, candidate{number: item.Issue.Number, rank: item.PriorityRank})
+	}
+	// A configured owner field accepts P0..P4, with smaller rank first.
+	// Without that field all ranks are equal and issue number is the stable tie.
+	order := func(values []candidate) {
+		sort.Slice(values, func(i, j int) bool {
+			if values[i].rank != values[j].rank {
+				return values[i].rank < values[j].rank
+			}
+			return values[i].number < values[j].number
+		})
+	}
+	order(recovery)
+	order(newWork)
+	limit := c.Lifecycle.EffectiveDeliveryWIP()
+	// Pending work already owns a slot. Retry it before admitting new work,
+	// but never dispatch more recoveries than slots not held by active owners.
+	recoveryCapacity := max(0, limit-(occupied-len(pending)))
+	selected := make([]int, 0, limit)
+	for _, item := range recovery[:min(len(recovery), recoveryCapacity)] {
+		selected = append(selected, item.number)
+	}
+	newCapacity := max(0, limit-occupied)
+	for _, item := range newWork[:min(len(newWork), newCapacity)] {
+		selected = append(selected, item.number)
+	}
+	return selected
+}
+
+func applyBoardMove(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, statuses lifecycle.Statuses, effect lifecycle.Effect, item admission.Snapshot) error {
+	_, options, err := client.ProjectStatusField(ctx, c.ProjectID)
+	if err != nil {
+		return err
+	}
+	targetOptionID := options[statuses[effect.To]]
+	if targetOptionID == "" {
+		return errors.New("target Project status option unavailable")
+	}
+	if effect.RetryIntent {
+		pending, found, err := engine.PendingBoardMove(ctx, item.IssueID)
+		if err != nil {
+			return err
+		}
+		if !found || pending.PendingStage != string(effect.To) || pending.PendingOptionID != targetOptionID || pending.PendingFromOptionID != item.StatusOptionID || !pending.PendingFromUpdatedAt.Equal(item.StatusUpdatedAt) {
+			return errors.New("pending Project transition changed")
+		}
+	} else {
+		if err := engine.BeginBoardMove(ctx, boardFromSnapshot(c, effect.From, item), string(effect.To), targetOptionID); err != nil {
+			return err
+		}
+	}
+	if err := client.SetProjectStatusIfCurrent(ctx, item.IssueID, c.ProjectID, item.ProjectItemID, item.StatusOptionID, item.StatusUpdatedAt, statuses, effect.To); err != nil {
+		return err
+	}
+	current, err := client.Issue(ctx, c, item.Number)
+	if err != nil {
+		return err
+	}
+	if current.ProjectItemID != item.ProjectItemID || current.CurrentStatus != statuses[effect.To] || current.StatusOptionID == item.StatusOptionID || !current.StatusUpdatedAt.After(item.StatusUpdatedAt) {
+		return errors.New("Project move outcome not yet observable")
+	}
+	return engine.ObserveBoard(ctx, boardFromSnapshot(c, effect.To, current))
+}

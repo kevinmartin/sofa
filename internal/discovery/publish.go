@@ -1,0 +1,169 @@
+package discovery
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/integrity"
+	"github.com/kevinmartin/sofa/internal/state"
+)
+
+type CommentPublisher interface {
+	CommentReader
+	IssueComments(context.Context, string, int64) ([]SpecComment, error)
+	CreateIssueComment(context.Context, string, int64, string) (SpecComment, error)
+}
+
+// PublishInput is handled by a trusted controller job. Its Guard fetches the
+// current issue/Project after the untrusted worker produced DraftBody.
+type PublishInput struct {
+	Policy           Policy
+	IssueID          string
+	Fence            state.DiscoveryFence
+	DraftBody        string
+	ExpectedAuthorID string
+	ForbiddenValues  [][]byte
+	Guard            func(context.Context) (admission.Snapshot, error)
+}
+
+func publicationKey(task state.DiscoveryTask, body string) string {
+	payload, _ := json.Marshal(struct {
+		Repository, IssueID, SourceDigest, Body string
+		StatusUpdatedAt                         string
+	}{
+		Repository:      task.Repository,
+		IssueID:         task.IssueID,
+		SourceDigest:    task.SourceDigest,
+		Body:            body,
+		StatusUpdatedAt: task.StatusUpdatedAt.UTC().Format(time.RFC3339Nano),
+	})
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
+}
+
+func publicationSource(p Policy, s admission.Snapshot, task state.DiscoveryTask) bool {
+	if !p.trusted(s, p.DiscoveryStatus) || task.IssueID != s.IssueID || task.Issue != int64(s.Number) || task.ProjectItemID != s.ProjectItemID || task.ProjectID != s.ProjectID || task.StatusOptionID != s.StatusOptionID || !task.StatusUpdatedAt.Equal(s.StatusUpdatedAt) || !strings.EqualFold(task.Repository, p.Repository) {
+		return false
+	}
+	digest, err := sourceDigest(s)
+	return err == nil && digest == task.SourceDigest
+}
+
+func matchingPublishedComment(comments []SpecComment, body, key, author string) (SpecComment, bool, error) {
+	var match SpecComment
+	found := false
+	for _, comment := range comments {
+		if PublicationKey(comment.Body) != key || comment.AuthorID != author {
+			continue
+		}
+		if comment.Body != body || !comment.valid() {
+			return SpecComment{}, false, errors.New("Discovery bot comment with this key changed")
+		}
+		if found {
+			return SpecComment{}, false, errors.New("multiple Discovery bot comments share one publication key")
+		}
+		match = comment
+		found = true
+	}
+	return match, found, nil
+}
+
+// PublishSpecification persists the spec snapshot and comment intent before
+// posting. A transport-ambiguous POST cannot be repeated: recovery either
+// finds the exact bot comment or blocks for investigation.
+func PublishSpecification(ctx context.Context, engine state.Engine, store SpecStore, publisher CommentPublisher, in PublishInput) (SpecComment, error) {
+	if store == nil || publisher == nil || in.Guard == nil || in.ExpectedAuthorID == "" || in.IssueID == "" || in.Fence.IssueID != in.IssueID || !in.Policy.valid() {
+		return SpecComment{}, ErrAuthority
+	}
+	if _, err := Parse(in.DraftBody); err != nil {
+		return SpecComment{}, err
+	}
+	if err := engine.AssertDiscoveryOwner(ctx, in.Fence); err != nil {
+		return SpecComment{}, err
+	}
+	ledger, err := store.Load(ctx)
+	if err != nil {
+		return SpecComment{}, err
+	}
+	task, ok := ledger.State.Discoveries[in.IssueID]
+	if !ok || task.Phase != state.DiscoveryRunning {
+		return SpecComment{}, ErrAuthority
+	}
+	source, err := in.Guard(ctx)
+	if err != nil {
+		return SpecComment{}, err
+	}
+	if !publicationSource(in.Policy, source, task) {
+		return SpecComment{}, ErrRevision
+	}
+	key := publicationKey(task, in.DraftBody)
+	body, err := WithPublicationKey(in.DraftBody, key)
+	if err != nil {
+		return SpecComment{}, err
+	}
+	canonical, digest, err := admission.CanonicalSpec(source.Title, body)
+	if err != nil {
+		return SpecComment{}, err
+	}
+	if err := integrity.ScanSecrets([]byte(body), in.ForbiddenValues); err != nil {
+		return SpecComment{}, errors.New("Discovery specification contains sensitive material")
+	}
+	if err := store.SaveSpec(ctx, task.IssueID, digest, canonical); err != nil {
+		return SpecComment{}, err
+	}
+	if err := engine.PrepareDiscoveryPublication(ctx, in.Fence, digest, key); err != nil {
+		return SpecComment{}, err
+	}
+	comments, err := publisher.IssueComments(ctx, in.Policy.Repository, int64(source.Number))
+	if err != nil {
+		return SpecComment{}, err
+	}
+	comment, found, err := matchingPublishedComment(comments, body, key, in.ExpectedAuthorID)
+	if err != nil {
+		return SpecComment{}, err
+	}
+	if !found {
+		latest, err := store.Load(ctx)
+		if err != nil {
+			return SpecComment{}, err
+		}
+		current := latest.State.Discoveries[in.IssueID]
+		if current.Publication == nil || current.Publication.Digest != digest || current.Publication.Key != key || current.Publication.PostAttempted {
+			return SpecComment{}, errors.New("Discovery comment outcome uncertain; inspect exact publication key")
+		}
+		if err := engine.AssertDiscoveryOwner(ctx, in.Fence); err != nil {
+			return SpecComment{}, err
+		}
+		source, err = in.Guard(ctx)
+		if err != nil || !publicationSource(in.Policy, source, task) {
+			return SpecComment{}, ErrRevision
+		}
+		first, err := engine.MarkDiscoveryPostAttempt(ctx, in.Fence, digest, key)
+		if err != nil {
+			return SpecComment{}, err
+		}
+		if !first {
+			return SpecComment{}, errors.New("Discovery comment POST already attempted")
+		}
+		comment, err = publisher.CreateIssueComment(ctx, in.Policy.Repository, int64(source.Number), body)
+		if err != nil {
+			return SpecComment{}, err
+		}
+	}
+	if comment.AuthorID != in.ExpectedAuthorID || comment.Body != body || !comment.valid() {
+		return SpecComment{}, errors.New("published Discovery comment identity differs")
+	}
+	if err := engine.AssertDiscoveryOwner(ctx, in.Fence); err != nil {
+		return SpecComment{}, err
+	}
+	if err := engine.CompleteDiscovery(ctx, in.Fence, digest, comment.ID, comment.AuthorID, comment.CreatedAt, comment.UpdatedAt); err != nil {
+		return SpecComment{}, err
+	}
+	return comment, nil
+}

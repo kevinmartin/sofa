@@ -1,0 +1,602 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/config"
+	"github.com/kevinmartin/sofa/internal/github"
+	"github.com/kevinmartin/sofa/internal/integrity"
+	"github.com/kevinmartin/sofa/internal/review"
+	"github.com/kevinmartin/sofa/internal/state"
+	"github.com/kevinmartin/sofa/internal/worker"
+)
+
+type repairManifest struct {
+	Version       int                `json:"version"`
+	Admission     state.Admission    `json:"admission"`
+	Fence         state.Fence        `json:"fence"`
+	Publication   state.Publication  `json:"publication"`
+	Repair        state.RepairIntent `json:"repair"`
+	ReviewID      int64              `json:"review_id"`
+	CanonicalSpec json.RawMessage    `json:"canonical_spec"`
+	FeedbackText  string             `json:"feedback_text"`
+}
+
+func readRepairManifest(path string, c config.Config) (repairManifest, error) {
+	var m repairManifest
+	if err := readJSON(path, 256<<10, &m); err != nil {
+		return m, err
+	}
+	configDigest, err := c.Digest()
+	if err != nil {
+		return m, err
+	}
+	specHash := sha256.Sum256(m.CanonicalSpec)
+	feedbackHash := sha256.Sum256([]byte(m.FeedbackText))
+	if m.Version != 1 || m.Admission.Validate() != nil || m.Admission.Repository != strings.ToLower(c.Repository) || m.Admission.ConfigDigest != configDigest || m.Admission.SpecDigest != hex.EncodeToString(specHash[:]) || m.Fence.AttemptID != state.AttemptID(m.Admission) || m.Fence.Generation < 1 || m.Fence.Owner.RunID == "" || m.Fence.Owner.RunAttempt < 1 || m.Repair.FeedbackID == "" || m.Repair.FeedbackHash != hex.EncodeToString(feedbackHash[:]) || m.Repair.PRNumber != m.Publication.PRNumber || m.Repair.PRHeadSHA != m.Publication.HeadSHA || m.Publication.PRNumber < 1 || m.ReviewID < 1 || len(m.FeedbackText) > 64<<10 {
+		return repairManifest{}, errors.New("repair manifest identity invalid")
+	}
+	return m, nil
+}
+
+func newReviewRepairCommand() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "review-repair",
+		Short: "Admit and repair an existing PR from exact owner review feedback",
+	}
+	var admit struct {
+		configPath string
+		issue      int
+		outDir     string
+	}
+	admitCmd := newStageCommand("admit", "Reserve an owner review repair", "review-repair admit requires --config, --issue, --out-dir", func(cmd *cobra.Command, _ []string) error {
+		if admit.configPath == "" || admit.issue < 1 || admit.outDir == "" {
+			return errors.New("review-repair admit requires --config, --issue, --out-dir")
+		}
+		return runReviewRepairAdmit(cmd.Context(), admit.configPath, admit.issue, admit.outDir)
+	})
+	admitCmd.Flags().StringVar(&admit.configPath, "config", "", "Trusted consumer configuration")
+	admitCmd.Flags().IntVar(&admit.issue, "issue", 0, "Original admitted issue number")
+	admitCmd.Flags().StringVar(&admit.outDir, "out-dir", "", "Directory for bounded repair artifacts")
+	root.AddCommand(admitCmd)
+	var execute struct {
+		configPath, manifestPath, workspace, out string
+	}
+	executeCmd := newStageCommand("execute", "Produce a bounded repair candidate", "review-repair execute requires --config, --manifest, --workspace, --out", func(cmd *cobra.Command, _ []string) error {
+		if execute.configPath == "" || execute.manifestPath == "" || execute.workspace == "" || execute.out == "" {
+			return errors.New("review-repair execute requires --config, --manifest, --workspace, --out")
+		}
+		return runReviewRepairExecute(cmd.Context(), execute.configPath, execute.manifestPath, execute.workspace, execute.out)
+	})
+	executeCmd.Flags().StringVar(&execute.configPath, "config", "", "Trusted consumer configuration")
+	executeCmd.Flags().StringVar(&execute.manifestPath, "manifest", "", "Admitted repair manifest")
+	executeCmd.Flags().StringVar(&execute.workspace, "workspace", "", "Isolated candidate checkout")
+	executeCmd.Flags().StringVar(&execute.out, "out", "", "Candidate bundle output")
+	root.AddCommand(executeCmd)
+	var verify struct {
+		configPath, manifestPath, workspace, bundlePath, out string
+	}
+	verifyCmd := newStageCommand("verify", "Run secretless checks against the exact repair", "review-repair verify requires --config, --manifest, --workspace, --bundle, --out", func(cmd *cobra.Command, _ []string) error {
+		if verify.configPath == "" || verify.manifestPath == "" || verify.workspace == "" || verify.bundlePath == "" || verify.out == "" {
+			return errors.New("review-repair verify requires --config, --manifest, --workspace, --bundle, --out")
+		}
+		return runReviewRepairVerify(cmd.Context(), verify.configPath, verify.manifestPath, verify.workspace, verify.bundlePath, verify.out)
+	})
+	verifyCmd.Flags().StringVar(&verify.configPath, "config", "", "Trusted consumer configuration")
+	verifyCmd.Flags().StringVar(&verify.manifestPath, "manifest", "", "Admitted repair manifest")
+	verifyCmd.Flags().StringVar(&verify.workspace, "workspace", "", "Clean verification checkout")
+	verifyCmd.Flags().StringVar(&verify.bundlePath, "bundle", "", "Untrusted candidate bundle")
+	verifyCmd.Flags().StringVar(&verify.out, "out", "", "Trusted check evidence output")
+	root.AddCommand(verifyCmd)
+	var publish struct {
+		configPath, manifestPath, bundlePath, evidencePath, baseBranch string
+	}
+	publishCmd := newStageCommand("publish", "Update the same PR with a verified repair", "review-repair publish requires --config, --manifest, --bundle, --evidence, --base-branch", func(cmd *cobra.Command, _ []string) error {
+		if publish.configPath == "" || publish.manifestPath == "" || publish.bundlePath == "" || publish.evidencePath == "" || publish.baseBranch == "" {
+			return errors.New("review-repair publish requires --config, --manifest, --bundle, --evidence, --base-branch")
+		}
+		return runReviewRepairPublish(cmd.Context(), publish.configPath, publish.manifestPath, publish.bundlePath, publish.evidencePath, publish.baseBranch)
+	})
+	publishCmd.Flags().StringVar(&publish.configPath, "config", "", "Trusted consumer configuration")
+	publishCmd.Flags().StringVar(&publish.manifestPath, "manifest", "", "Admitted repair manifest")
+	publishCmd.Flags().StringVar(&publish.bundlePath, "bundle", "", "Verified candidate bundle")
+	publishCmd.Flags().StringVar(&publish.evidencePath, "evidence", "", "Trusted check evidence")
+	publishCmd.Flags().StringVar(&publish.baseBranch, "base-branch", "", "Original PR base branch")
+	root.AddCommand(publishCmd)
+	var fail struct {
+		configPath, manifestPath, stage string
+	}
+	failCmd := newStageCommand("fail", "Record a bounded repair-stage failure", "review-repair fail requires --config, --manifest, --stage", func(cmd *cobra.Command, _ []string) error {
+		if fail.configPath == "" || fail.manifestPath == "" || fail.stage == "" {
+			return errors.New("review-repair fail requires --config, --manifest, --stage")
+		}
+		return runReviewRepairFail(cmd.Context(), fail.configPath, fail.manifestPath, fail.stage)
+	})
+	failCmd.Flags().StringVar(&fail.configPath, "config", "", "Trusted consumer configuration")
+	failCmd.Flags().StringVar(&fail.manifestPath, "manifest", "", "Admitted repair manifest")
+	failCmd.Flags().StringVar(&fail.stage, "stage", "", "Failed stage: execute, verify, or publish")
+	root.AddCommand(failCmd)
+	return root
+}
+
+func runReviewRepairFail(ctx context.Context, configPath, manifestPath, stage string) error {
+	if stage != "execute" && stage != "verify" && stage != "publish" {
+		return errors.New("invalid bounded repair failure stage")
+	}
+	c, err := readConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if os.Getenv("SOFA_PROJECTS_TOKEN") != "" || os.Getenv("SOFA_PUBLISH_TOKEN") != "" || os.Getenv(c.Profile.SecretEnv) != "" {
+		return errors.New("unnecessary credential present in repair failure finalizer")
+	}
+	m, err := readRepairManifest(manifestPath, c)
+	if err != nil {
+		return err
+	}
+	owner, err := ownerFromEnv()
+	if err != nil || owner != m.Fence.Owner {
+		return errors.New("repair failure manifest belongs to another Actions attempt")
+	}
+	client, err := clientFromEnv("SOFA_STATE_TOKEN")
+	if err != nil {
+		return err
+	}
+	engine := state.Engine{Store: github.StateStore{Client: client, Repository: c.Repository}}
+	snapshot, err := engine.Store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	attempt, ok := snapshot.State.Attempts[m.Fence.AttemptID]
+	if !ok || attempt.Admission != m.Admission || attempt.Repair == nil || attempt.Repair.FeedbackID != m.Repair.FeedbackID || attempt.Generation != m.Fence.Generation || attempt.Owner == nil || *attempt.Owner != m.Fence.Owner {
+		return errors.New("repair failure ledger identity changed")
+	}
+	if attempt.Phase == state.Blocked && attempt.Failure == "validation" {
+		return nil
+	}
+	if err := engine.Fail(ctx, m.Fence, "validation"); err != nil {
+		return err
+	}
+	return observeOnce(ctx, engine, m.Fence.AttemptID, "review-repair-failure", stage, m.Repair.PRHeadSHA, "", fmt.Sprintf("g%d", m.Fence.Generation))
+}
+
+func runReviewRepairExecute(ctx context.Context, configPath, manifestPath, workspace, out string) error {
+	c, err := readConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if err := forbidPrivilegedEnv(c.Profile.SecretEnv, false); err != nil {
+		return err
+	}
+	m, err := readRepairManifest(manifestPath, c)
+	if err != nil {
+		return err
+	}
+	if m.Repair.CandidateSHA != "" || m.Repair.CandidateDigest != "" {
+		return errors.New("repair candidate already prepared; execute cannot repeat it")
+	}
+	if err := cleanBase(ctx, workspace, m.Repair.PRHeadSHA); err != nil {
+		return err
+	}
+	result, err := worker.Execute(ctx, worker.Input{
+		Config:         c,
+		CanonicalSpec:  m.CanonicalSpec,
+		ReviewFeedback: m.FeedbackText,
+		Directory:      workspace,
+		AttemptID:      m.Fence.AttemptID,
+		Generation:     uint64(m.Fence.Generation),
+		BaseSHA:        m.Repair.PRHeadSHA,
+		ModelToken:     os.Getenv(c.Profile.SecretEnv),
+	})
+	if err != nil {
+		return err
+	}
+	if result.NoChange {
+		return fmt.Errorf("%w: review repair made no change", errExecutionValidation)
+	}
+	if err := writeJSON(out, result.Bundle); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(filepath.Dir(out), "execution.json"), map[string]any{
+		"version":          1,
+		"used_agent":       result.UsedAgent,
+		"prompt_requests":  result.PromptRequests,
+		"candidate_digest": result.Bundle.CandidateDigest,
+	})
+}
+
+func runReviewRepairVerify(ctx context.Context, configPath, manifestPath, workspace, bundlePath, out string) error {
+	c, err := readConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if err := forbidPrivilegedEnv(c.Profile.SecretEnv, true); err != nil {
+		return err
+	}
+	m, err := readRepairManifest(manifestPath, c)
+	if err != nil {
+		return err
+	}
+	b, err := readBundle(bundlePath)
+	if err != nil {
+		return err
+	}
+	if err := cleanBase(ctx, workspace, m.Repair.PRHeadSHA); err != nil {
+		return err
+	}
+	if err := integrity.Apply(workspace, b, repairEvidenceExpected(m, b), bundlePolicy(c)); err != nil {
+		return err
+	}
+	baseline, err := candidateState(ctx, workspace, b)
+	if err != nil {
+		return err
+	}
+	checkHome, err := os.MkdirTemp("", "sofa-review-check-home-")
+	if err != nil {
+		return errors.New("cannot create isolated review check home")
+	}
+	defer os.RemoveAll(checkHome)
+	checks := make([]integrity.CheckEvidence, 0, len(c.Checks))
+	for _, check := range c.Checks {
+		checkCtx, cancel := context.WithTimeout(ctx, time.Duration(check.TimeoutSeconds)*time.Second)
+		err := runCheckProcess(checkCtx, workspace, checkHome, check.Argv)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("%w: repair check %s failed", errExecutionValidation, check.ID)
+		}
+		current, err := candidateState(ctx, workspace, b)
+		if err != nil || !baseline.matches(current) {
+			return fmt.Errorf("%w: repair check %s changed candidate workspace", errExecutionValidation, check.ID)
+		}
+		checks = append(checks, integrity.CheckEvidence{
+			Version:         integrity.Version,
+			Name:            check.ID,
+			CandidateDigest: b.CandidateDigest,
+			Passed:          true,
+		})
+	}
+	return writeJSON(out, checks)
+}
+
+func runReviewRepairPublish(ctx context.Context, configPath, manifestPath, bundlePath, evidencePath, baseBranch string) error {
+	c, err := readConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if os.Getenv(c.Profile.SecretEnv) != "" {
+		return errors.New("model credential present in review publication stage")
+	}
+	m, err := readRepairManifest(manifestPath, c)
+	if err != nil {
+		return err
+	}
+	owner, err := ownerFromEnv()
+	if err != nil || owner != m.Fence.Owner {
+		return errors.New("repair publication manifest belongs to another Actions attempt")
+	}
+	b, err := readBundle(bundlePath)
+	if err != nil {
+		return err
+	}
+	var evidence []integrity.CheckEvidence
+	if err := readJSON(evidencePath, 1<<20, &evidence); err != nil {
+		return err
+	}
+	required := make([]string, 0, len(c.Checks))
+	for _, check := range c.Checks {
+		required = append(required, check.ID)
+	}
+	policy := bundlePolicy(c, []byte(os.Getenv("SOFA_PROJECTS_TOKEN")), []byte(os.Getenv("SOFA_PUBLISH_TOKEN")))
+	if err := integrity.Validate(b, repairEvidenceExpected(m, b), policy); err != nil {
+		return err
+	}
+	if err := integrity.ValidateEvidence(b, evidence, required); err != nil {
+		return err
+	}
+	projects, err := clientFromEnv("SOFA_PROJECTS_TOKEN")
+	if err != nil {
+		return err
+	}
+	publisher, err := clientFromEnv("SOFA_PUBLISH_TOKEN")
+	if err != nil {
+		return err
+	}
+	engine := state.Engine{Store: github.StateStore{Client: publisher, Repository: c.Repository}}
+	guard := func(ctx context.Context) error {
+		a, err := requireRepairOwner(ctx, engine, m)
+		if err != nil {
+			return err
+		}
+		source, err := projects.Issue(ctx, c, int(m.Admission.Issue))
+		if err != nil {
+			return err
+		}
+		if _, err := validateRepairSource(c, source, a); err != nil {
+			return err
+		}
+		pull, err := publisher.Pull(ctx, c.Repository, m.Publication.PRNumber)
+		if err != nil {
+			return err
+		}
+		if pull.BaseRef != baseBranch {
+			return errors.New("repair PR base branch changed")
+		}
+		reviews, err := publisher.PullReviews(ctx, c.Repository, pull.Number)
+		if err != nil {
+			return err
+		}
+		return revalidateRepairReview(c, m, pull, reviews, a.Repair.CandidateSHA)
+	}
+	if err := guard(ctx); err != nil {
+		return err
+	}
+	a, err := requireRepairOwner(ctx, engine, m)
+	if err != nil {
+		return err
+	}
+	if a.Phase == state.Executing {
+		if err := engine.Advance(ctx, m.Fence, state.Validating); err != nil {
+			return err
+		}
+	} else if a.Phase != state.Validating && a.Phase != state.Publishing {
+		return errors.New("repair candidate is not ready for publication")
+	}
+	prepared := a.Repair.CandidateSHA
+	result, err := publisher.PublishRepair(ctx, github.RepairPublishInput{
+		PublishInput: github.PublishInput{
+			Bundle:         b,
+			Expected:       repairEvidenceExpected(m, b),
+			Policy:         policy,
+			Checks:         evidence,
+			RequiredChecks: required,
+			BaseBranch:     baseBranch,
+			Guard:          guard,
+		},
+		Previous:    m.Publication,
+		FeedbackID:  m.Repair.FeedbackID,
+		PreparedSHA: prepared,
+		RecordIntent: func(ctx context.Context, commitSHA string) error {
+			return engine.BeginRepairPublication(ctx, m.Fence, b.CandidateDigest, commitSHA)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	newPublication := m.Publication
+	newPublication.ExpectedHead = m.Repair.PRHeadSHA
+	newPublication.CandidateDigest = b.CandidateDigest
+	newPublication.HeadSHA = result.CommitSHA
+	if err := engine.MarkReviewRepairPublished(ctx, m.Fence, newPublication); err != nil {
+		return err
+	}
+	if err := observeOnce(ctx, engine, m.Fence.AttemptID, "review-repair", "draft", result.CommitSHA, result.URL, fmt.Sprintf("g%d", m.Fence.Generation)); err != nil {
+		return err
+	}
+	return writeJSON("repair-publication.json", result)
+}
+
+func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, outDir string) error {
+	c, err := readConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if c.Lifecycle == nil {
+		return errors.New("review repair requires lifecycle configuration")
+	}
+	owner, err := ownerFromEnv()
+	if err != nil {
+		return err
+	}
+	projects, err := clientFromEnv("SOFA_PROJECTS_TOKEN")
+	if err != nil {
+		return err
+	}
+	ledger, err := clientFromEnv("SOFA_STATE_TOKEN")
+	if err != nil {
+		return err
+	}
+	store := github.StateStore{Client: ledger, Repository: c.Repository}
+	engine := state.Engine{Store: store}
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	var attempt state.Attempt
+	for _, candidate := range snapshot.State.Attempts {
+		if candidate.Admission.Repository == strings.ToLower(c.Repository) && candidate.Admission.Issue == int64(issue) {
+			if attempt.ID != "" {
+				return errors.New("multiple attempts for repair issue")
+			}
+			attempt = candidate
+		}
+	}
+	if attempt.ID == "" || attempt.Publication == nil {
+		return errors.New("review repair requires an admitted published PR")
+	}
+	issueSnapshot, err := projects.Issue(ctx, c, issue)
+	if err != nil {
+		return err
+	}
+	spec, err := validateRepairSource(c, issueSnapshot, attempt)
+	if err != nil {
+		return err
+	}
+	pull, err := ledger.Pull(ctx, c.Repository, attempt.Publication.PRNumber)
+	if err != nil {
+		return err
+	}
+	reviews, err := ledger.PullReviews(ctx, c.Repository, pull.Number)
+	if err != nil {
+		return err
+	}
+	var selected review.Decision
+	var selectedReview github.PullReview
+	for _, submitted := range reviews {
+		decision, evalErr := review.Evaluate(attempt, pull, submitted, c.OwnerID)
+		if evalErr == nil && (selected.FeedbackID == "" || submitted.SubmittedAt.After(selectedReview.SubmittedAt) || submitted.SubmittedAt.Equal(selectedReview.SubmittedAt) && submitted.ID > selectedReview.ID) {
+			selected, selectedReview = decision, submitted
+		}
+	}
+	if selected.FeedbackID == "" {
+		return writeRepairStatus(outDir, false, "no-current-owner-review", attempt.ID)
+	}
+	if err := integrity.ScanSecrets(append(append([]byte(nil), spec...), []byte(selected.FeedbackText)...), [][]byte{[]byte(os.Getenv("SOFA_PROJECTS_TOKEN")), []byte(os.Getenv("SOFA_STATE_TOKEN"))}); err != nil {
+		return errors.New("review repair input contains sensitive material")
+	}
+	intent := state.RepairIntent{
+		FeedbackID:   selected.FeedbackID,
+		FeedbackHash: selected.FeedbackHash,
+		PRBaseSHA:    selected.PRBaseSHA,
+		PRHeadSHA:    selected.PRHeadSHA,
+		PRNumber:     selected.PRNumber,
+	}
+	reserved, err := engine.ReserveReviewRepair(ctx, attempt.ID, intent)
+	if err != nil {
+		return err
+	}
+	if !reserved {
+		return writeRepairStatus(outDir, false, "already-reserved", attempt.ID)
+	}
+	fence, err := engine.Claim(ctx, attempt.ID, owner)
+	if err != nil {
+		return err
+	}
+	// A Project move, issue edit, PR update, or dismissed review between the
+	// first read and reservation must stop before the model gets a prompt.
+	currentSource, err := projects.Issue(ctx, c, issue)
+	if err != nil {
+		return err
+	}
+	if _, err := validateRepairSource(c, currentSource, attempt); err != nil {
+		_ = engine.Fail(ctx, fence, "authority")
+		return err
+	}
+	currentPull, err := ledger.Pull(ctx, c.Repository, pull.Number)
+	if err != nil {
+		return err
+	}
+	currentReviews, err := ledger.PullReviews(ctx, c.Repository, pull.Number)
+	if err != nil {
+		return err
+	}
+	preflightManifest := repairManifest{
+		Publication:  *attempt.Publication,
+		Repair:       intent,
+		ReviewID:     selectedReview.ID,
+		FeedbackText: selected.FeedbackText,
+	}
+	if err := revalidateRepairReview(c, preflightManifest, currentPull, currentReviews, ""); err != nil {
+		_ = engine.Fail(ctx, fence, "authority")
+		return err
+	}
+	charge := state.Counters{ModelCalls: 1, RuntimeSeconds: int64(c.Limits.AttemptSeconds)}
+	if err := engine.Charge(ctx, fence, charge); err != nil {
+		_ = engine.Fail(ctx, fence, "validation")
+		return err
+	}
+	m := repairManifest{
+		Version:       1,
+		Admission:     attempt.Admission,
+		Fence:         fence,
+		Publication:   *attempt.Publication,
+		Repair:        intent,
+		ReviewID:      selectedReview.ID,
+		CanonicalSpec: spec,
+		FeedbackText:  selected.FeedbackText,
+	}
+	if err := os.MkdirAll(outDir, 0700); err != nil {
+		return errors.New("cannot create repair output directory")
+	}
+	if err := writeJSON(filepath.Join(outDir, "manifest.json"), m); err != nil {
+		return err
+	}
+	return writeRepairStatus(outDir, true, "repair-admitted", attempt.ID)
+}
+
+func writeRepairStatus(outDir string, dispatch bool, reason, attemptID string) error {
+	if err := os.MkdirAll(outDir, 0700); err != nil {
+		return errors.New("cannot create repair output directory")
+	}
+	return writeJSON(filepath.Join(outDir, "status.json"), map[string]any{
+		"dispatch":   dispatch,
+		"reason":     reason,
+		"attempt_id": attemptID,
+	})
+}
+
+func validateRepairSource(c config.Config, snapshot admission.Snapshot, attempt state.Attempt) (json.RawMessage, error) {
+	if c.Lifecycle == nil || !snapshot.Complete || !snapshot.Open || !strings.EqualFold(snapshot.Repository, c.Repository) || snapshot.RepositoryID != c.RepositoryID || snapshot.Number != int(attempt.Admission.Issue) || snapshot.ProjectID != c.ProjectID || !snapshot.ProjectPrivate || snapshot.ProjectItemID != attempt.Admission.ProjectItemID {
+		return nil, errors.New("repair issue or restricted Project identity changed")
+	}
+	status := snapshot.CurrentStatus
+	allowed := status == c.Lifecycle.Statuses["review"] || status == c.Lifecycle.Statuses["verification"] || status == c.Lifecycle.Statuses["building"]
+	if !allowed {
+		return nil, errors.New("repair issue is outside the authorized delivery lifecycle")
+	}
+	configDigest, err := c.Digest()
+	if err != nil {
+		return nil, err
+	}
+	if configDigest != attempt.Admission.ConfigDigest {
+		return nil, errors.New("repair configuration changed since admission")
+	}
+	spec, digest, err := admission.CanonicalSpec(snapshot.Title, snapshot.Body)
+	if err != nil || digest != attempt.Admission.SpecDigest {
+		return nil, errors.New("approved repair specification changed")
+	}
+	return spec, nil
+}
+
+func repairEvidenceExpected(m repairManifest, b integrity.Bundle) integrity.Expected {
+	return integrity.Expected{
+		Repository:      m.Admission.Repository,
+		AttemptID:       m.Fence.AttemptID,
+		Generation:      uint64(m.Fence.Generation),
+		BaseSHA:         m.Repair.PRHeadSHA,
+		CandidateDigest: b.CandidateDigest,
+	}
+}
+
+func revalidateRepairReview(c config.Config, m repairManifest, pull github.PullSnapshot, reviews []github.PullReview, preparedSHA string) error {
+	if pull.Number != m.Publication.PRNumber || pull.URL != m.Publication.PRURL || pull.HeadRef != m.Publication.Branch || pull.BaseSHA != m.Repair.PRBaseSHA || pull.State != "open" || pull.Merged || !strings.EqualFold(pull.HeadRepository, c.Repository) || !strings.EqualFold(pull.BaseRepository, c.Repository) || (pull.HeadSHA != m.Repair.PRHeadSHA && pull.HeadSHA != preparedSHA) {
+		return errors.New("repair PR changed since owner feedback")
+	}
+	for _, submitted := range reviews {
+		if submitted.ID != m.ReviewID {
+			continue
+		}
+		h := sha256.Sum256([]byte(submitted.Body))
+		if submitted.UserID != c.OwnerID || submitted.State != "CHANGES_REQUESTED" || submitted.CommitSHA != m.Repair.PRHeadSHA || hex.EncodeToString(h[:]) != m.Repair.FeedbackHash || submitted.Body != m.FeedbackText {
+			return errors.New("owner review changed since repair admission")
+		}
+		return nil
+	}
+	return errors.New("owner review unavailable")
+}
+
+func requireRepairOwner(ctx context.Context, engine state.Engine, m repairManifest) (state.Attempt, error) {
+	if err := engine.AssertOwner(ctx, m.Fence); err != nil {
+		return state.Attempt{}, err
+	}
+	snapshot, err := engine.Store.Load(ctx)
+	if err != nil {
+		return state.Attempt{}, err
+	}
+	a, ok := snapshot.State.Attempts[m.Fence.AttemptID]
+	if !ok || a.Admission != m.Admission || a.Publication == nil || *a.Publication != m.Publication || a.Repair == nil || a.Repair.FeedbackID != m.Repair.FeedbackID || a.Repair.FeedbackHash != m.Repair.FeedbackHash || a.Repair.PRHeadSHA != m.Repair.PRHeadSHA || a.Repair.PRBaseSHA != m.Repair.PRBaseSHA || a.Repair.PRNumber != m.Repair.PRNumber {
+		return state.Attempt{}, fmt.Errorf("%w: repair ledger identity changed", state.ErrInvalid)
+	}
+	return a, nil
+}

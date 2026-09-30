@@ -8,6 +8,25 @@ paths, and values outside static limits. Retry counts default to zero when
 omitted; `recipe` may be omitted or null. Credentials are environment variable
 references, never secret values.
 
+Milestone 02 adds an optional `lifecycle` block for consumers enabling Project
+Discovery and completion reconciliation. `statuses` maps all ten canonical
+stages to distinct names in the Project's built-in Status field. Its `ready`
+entry must equal the existing `ready_status`; existing delivery-only callers
+may omit the block. `poll_minutes` defaults to ten and accepts 60 for the hourly
+economy preset. `discovery_wip` and `delivery_wip` default to two and one.
+Optional `dependencies_field` and `priority_field` name owner-managed Project
+fields. Dependencies use `none` or strict same-repository `#N` references;
+malformed or unavailable field values block dependent work. When configured,
+priority must be an exact owner-set `P0`, `P1`, `P2`, `P3`, or `P4` value, ordered
+highest to lowest before issue number. Blank or unknown values hold that item;
+the model never assigns priority.
+`spec_author_id` pins the trusted bot that publishes versioned specification
+comments; hosted Discovery blocks when its identity is unavailable. This is a
+public node ID, never a credential.
+`release.required_checks` lists exact post-merge check names and their trusted
+GitHub App IDs; an unavailable required check blocks Done. Configuration does not grant Project write access
+or authorize moving items to Backlog or Ready.
+
 The [consumer example](../examples/consumer/.sofa.yml) starts with a
 [YAML language server](https://github.com/redhat-developer/vscode-yaml)
 association that resolves within this toolkit checkout:
@@ -40,6 +59,9 @@ and cannot be represented by this standard JSON Schema:
   no anchors or aliases, and at most 64 KiB.
 - Runtime string limits count UTF-8 bytes; JSON Schema lengths count Unicode
   characters, so non-ASCII values can reach a runtime limit sooner.
+- Lifecycle status names must be unique and `statuses.ready` must match
+  `ready_status`; the schema verifies keys and shape, while Go checks these
+  semantic relationships.
 
 Run `go test ./internal/config` from the toolkit root to compile the schema,
 validate the consumer example and invalid-policy cases, and verify these

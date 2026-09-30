@@ -37,6 +37,30 @@ func TestConfigurationSchema(t *testing.T) {
 			runtimeValid: true,
 		},
 		{
+			name:         "lifecycle omitted for legacy delivery caller",
+			text:         strings.Replace(text, text[strings.Index(text, "lifecycle:\n"):strings.Index(text, "allowed_paths:\n")], "", 1),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name: "lifecycle missing stage",
+			text: replace("    spec_review: Spec Review\n", ""),
+		},
+		{
+			name: "lifecycle invalid poll",
+			text: replace("poll_minutes: 10", "poll_minutes: 1"),
+		},
+		{
+			name: "release check requires app identity",
+			text: replace("required_checks: []", "required_checks: [{name: smoke, app_id: 0}]"),
+		},
+		{
+			name:         "release check with app identity",
+			text:         replace("required_checks: []", "required_checks: [{name: smoke, app_id: 15368}]"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
 			name:         "omitted retry limits default to zero",
 			text:         strings.ReplaceAll(replace("  repair_attempts: 0\n", ""), "  infra_retries: 1\n", ""),
 			schemaValid:  true,
