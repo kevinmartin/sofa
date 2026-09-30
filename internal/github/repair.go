@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,79 @@ import (
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/state"
 )
+
+// PullReviewComment is one inline comment belonging to an exact submitted
+// review. Its path and body are untrusted feedback, not authority.
+type PullReviewComment struct {
+	ID           int64
+	ReviewID     int64
+	UserID       string
+	CommitSHA    string
+	Path         string
+	Line         *int
+	OriginalLine *int
+	Body         string
+}
+
+// PullReviewComments reads only the comments attached to the selected review.
+// A truncated history must fail closed rather than silently omit feedback.
+func (c *Client) PullReviewComments(ctx context.Context, repository string, number, reviewID int64) ([]PullReviewComment, error) {
+	if !lifecycleRepositoryPattern.MatchString(repository) || number < 1 || reviewID < 1 {
+		return nil, errors.New("invalid pull request review identity")
+	}
+	var comments []PullReviewComment
+	var size int
+	for page := 1; page <= 20; page++ {
+		var response []struct {
+			ID           int64  `json:"id"`
+			ReviewID     int64  `json:"pull_request_review_id"`
+			InReplyToID  int64  `json:"in_reply_to_id"`
+			CommitSHA    string `json:"commit_id"`
+			Path         string `json:"path"`
+			Line         *int   `json:"line"`
+			OriginalLine *int   `json:"original_line"`
+			Body         string `json:"body"`
+			User         struct {
+				NodeID string `json:"node_id"`
+			} `json:"user"`
+		}
+		path := fmt.Sprintf("/repos/%s/pulls/%d/reviews/%d/comments?per_page=100&page=%d", repository, number, reviewID, page)
+		if err := c.Request(ctx, http.MethodGet, path, nil, &response); err != nil {
+			return nil, err
+		}
+		for _, item := range response {
+			if item.ID < 1 || item.ReviewID != reviewID {
+				return nil, errors.New("pull request review comment identity unavailable")
+			}
+			// Replies to a thread are later conversation, not the original
+			// owner review's submitted inline findings.
+			if item.InReplyToID > 0 {
+				continue
+			}
+			if item.User.NodeID == "" || len(item.Body) > 64<<10 {
+				return nil, errors.New("pull request review comment identity unavailable")
+			}
+			size += len(item.Body) + len(item.Path) + 128
+			if size > 64<<10 {
+				return nil, errors.New("pull request review comments exceed bound")
+			}
+			comments = append(comments, PullReviewComment{
+				ID:           item.ID,
+				ReviewID:     item.ReviewID,
+				UserID:       item.User.NodeID,
+				CommitSHA:    item.CommitSHA,
+				Path:         item.Path,
+				Line:         item.Line,
+				OriginalLine: item.OriginalLine,
+				Body:         item.Body,
+			})
+		}
+		if len(response) < 100 {
+			return comments, nil
+		}
+	}
+	return nil, errors.New("pull request review comments exceed bound")
+}
 
 // RepairPublishInput updates one already published PR. RecordIntent must
 // persist the exact deterministic child commit before the remote branch move.

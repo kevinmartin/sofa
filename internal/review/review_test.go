@@ -81,6 +81,45 @@ func TestEvaluateOwnerFeedbackRequiresExactPublishedPR(t *testing.T) {
 	}
 }
 
+func TestInlineFeedbackIsBoundedAndReviewBound(t *testing.T) {
+	review := github.PullReview{
+		ID:        8,
+		UserID:    "U_owner",
+		CommitSHA: strings.Repeat("a", 40),
+		Body:      "",
+		Comments: []github.PullReviewComment{
+			{
+				ID:        22,
+				ReviewID:  8,
+				UserID:    "U_owner",
+				CommitSHA: strings.Repeat("a", 40),
+				Path:      "internal/fixture.go",
+				Body:      "Handle the empty case",
+			},
+		},
+	}
+	feedback, err := FeedbackText(review)
+	if err != nil || !strings.Contains(feedback, "Handle the empty case") || !strings.Contains(feedback, "internal/fixture.go") {
+		t.Fatalf("inline comment omitted from bounded feedback: %q, %v", feedback, err)
+	}
+	changed := review
+	changed.Comments = append([]github.PullReviewComment(nil), review.Comments...)
+	changed.Comments[0].Body = "Different finding"
+	other, err := FeedbackText(changed)
+	if err != nil || other == feedback {
+		t.Fatalf("edited inline finding retained original feedback: %q, %v", other, err)
+	}
+	changed.Comments[0].ReviewID = 9
+	if _, err := FeedbackText(changed); err == nil {
+		t.Fatal("comment from another review admitted")
+	}
+	changed.Comments[0] = review.Comments[0]
+	changed.Comments[0].Body = strings.Repeat("x", 64<<10)
+	if _, err := FeedbackText(changed); err == nil {
+		t.Fatal("oversized inline feedback admitted")
+	}
+}
+
 func TestEvaluateReservedRejectsNewerFeedbackAndChangedIdentity(t *testing.T) {
 	const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

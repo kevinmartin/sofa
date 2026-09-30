@@ -106,11 +106,16 @@ func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dep
 			if item.IsArchived || item.Content == nil || item.Content.Repository == nil || item.Content.Repository.ID != policy.RepositoryID || !strings.EqualFold(item.Content.Repository.NameWithOwner, policy.Repository) {
 				continue
 			}
-			if item.ID == "" || item.Content.ID == "" || item.Content.Number <= 0 || item.Content.Repository.DefaultBranchRef == nil || item.FieldValueByName == nil || item.FieldValueByName.Name == "" || item.FieldValueByName.OptionID == "" || item.FieldValueByName.UpdatedAt.IsZero() || seen[item.Content.ID] || seenItems[item.ID] {
-				return pageInfo{}, errors.New("project issue identity or status unavailable")
+			if item.ID == "" || item.Content.ID == "" || item.Content.Number <= 0 || item.Content.Repository.DefaultBranchRef == nil || seen[item.Content.ID] || seenItems[item.ID] {
+				return pageInfo{}, errors.New("project issue identity unavailable")
 			}
 			seen[item.Content.ID] = true
 			seenItems[item.ID] = true
+			// An unset Status grants no stage or authority. Keep scanning other
+			// issues, while retaining duplicate detection for this item.
+			if item.FieldValueByName == nil || item.FieldValueByName.Name == "" || item.FieldValueByName.OptionID == "" || item.FieldValueByName.UpdatedAt.IsZero() {
+				continue
+			}
 			snapshot := admission.Snapshot{
 				Repository:      policy.Repository,
 				RepositoryID:    policy.RepositoryID,

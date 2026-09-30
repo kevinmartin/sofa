@@ -75,8 +75,23 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 				task = previous
 				return true, nil
 			}
-			approved, ok := s.Specs[task.IssueID]
-			if !ok || previous.Phase != DiscoveryReview || approved.ApprovedDigest == "" || approved.Revision != previous.Revision || approved.Repository != previous.Repository || approved.Issue != previous.Issue || approved.ProjectID != previous.ProjectID || approved.ProjectItemID != previous.ProjectItemID || approved.SourceDigest != previous.SourceDigest || approved.SpecDigest != previous.SpecDigest || approved.CommentID != previous.CommentID || approved.CommentAuthorID != previous.CommentAuthorID || !approved.CommentCreatedAt.Equal(previous.CommentCreatedAt) || !approved.CommentUpdatedAt.Equal(previous.CommentUpdatedAt) || task.SourceDigest == previous.SourceDigest || !task.StatusUpdatedAt.After(approved.BacklogUpdatedAt) || task.MaxModelCalls < previous.MaxModelCalls {
+			if previous.Phase != DiscoveryReview && previous.Phase != DiscoveryBlocked || !task.StatusUpdatedAt.After(previous.StatusUpdatedAt) || task.MaxModelCalls < previous.MaxModelCalls || previous.Publication != nil {
+				return false, ErrAdmissionChanged
+			}
+			record, hasRecord := s.Specs[task.IssueID]
+			completed := previous.Phase == DiscoveryReview && hasRecord && record.ApprovedDigest != "" && record.Revision == previous.Revision
+			if !completed && previous.ModelCalls >= task.MaxModelCalls {
+				return false, ErrLimit
+			}
+			if completed {
+				if record.Repository != previous.Repository || record.Issue != previous.Issue || record.ProjectID != previous.ProjectID || record.ProjectItemID != previous.ProjectItemID || record.SourceDigest != previous.SourceDigest || record.SpecDigest != previous.SpecDigest || record.CommentID != previous.CommentID || record.CommentAuthorID != previous.CommentAuthorID || !record.CommentCreatedAt.Equal(previous.CommentCreatedAt) || !record.CommentUpdatedAt.Equal(previous.CommentUpdatedAt) || task.SourceDigest == previous.SourceDigest || !task.StatusUpdatedAt.After(record.BacklogUpdatedAt) {
+					return false, ErrAdmissionChanged
+				}
+			} else if hasRecord && record.Revision == previous.Revision {
+				if previous.Phase != DiscoveryReview || record.ApprovedDigest != "" || record.Repository != previous.Repository || record.Issue != previous.Issue || record.ProjectID != previous.ProjectID || record.ProjectItemID != previous.ProjectItemID || record.SourceDigest != previous.SourceDigest || record.SpecDigest != previous.SpecDigest || record.CommentID != previous.CommentID || record.CommentAuthorID != previous.CommentAuthorID || !record.CommentCreatedAt.Equal(previous.CommentCreatedAt) || !record.CommentUpdatedAt.Equal(previous.CommentUpdatedAt) {
+					return false, ErrAdmissionChanged
+				}
+			} else if hasRecord && (record.ApprovedDigest == "" || record.Revision != previous.Revision-1) {
 				return false, ErrAdmissionChanged
 			}
 			active := 0
@@ -88,14 +103,14 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 			if active >= maxActive {
 				return false, ErrLimit
 			}
-			// The changed source and later owner Discovery transition start a new
-			// generation. Archive the completed task and fence any old delivery
-			// worker in the same CAS; its publication evidence stays intact.
+			// A completed, approved revision advances the approval sequence. A
+			// rejected proposal or failed task retries the same revision, retaining
+			// its model budget without treating the old proposal as approved history.
 			for id, a := range s.Attempts {
 				if a.Admission.Repository != task.Repository || a.Admission.Issue != task.Issue || !a.SupersededAt.IsZero() {
 					continue
 				}
-				if a.SpecRevision != previous.Revision || a.Admission.ProjectID != task.ProjectID || a.Admission.ProjectItemID != task.ProjectItemID || a.Admission.SpecDigest != approved.ApprovedDigest {
+				if !completed || a.SpecRevision != previous.Revision || a.Admission.ProjectID != task.ProjectID || a.Admission.ProjectItemID != task.ProjectItemID || a.Admission.SpecDigest != record.ApprovedDigest {
 					return false, ErrAdmissionChanged
 				}
 				a.Owner = nil
@@ -107,7 +122,33 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 				a.UpdatedAt = e.now()
 				s.Attempts[id] = a
 			}
-			task.Revision = previous.Revision + 1
+			task.Revision = previous.Revision
+			if completed {
+				task.Revision++
+				if s.DiscoveryHistory == nil {
+					s.DiscoveryHistory = map[string][]DiscoveryTask{}
+				}
+				s.DiscoveryHistory[task.IssueID] = append(s.DiscoveryHistory[task.IssueID], previous)
+			} else {
+				if s.DiscoveryResetHistory == nil {
+					s.DiscoveryResetHistory = map[string][]DiscoveryTask{}
+				}
+				if len(s.DiscoveryResetHistory[task.IssueID]) >= 20 {
+					return false, ErrLimit
+				}
+				s.DiscoveryResetHistory[task.IssueID] = append(s.DiscoveryResetHistory[task.IssueID], previous)
+				if hasRecord && record.Revision == previous.Revision {
+					// Remove only the unapproved proposal. Restore the previous
+					// approved revision as the current record, if one exists.
+					history := s.SpecHistory[task.IssueID]
+					if len(history) == 0 {
+						delete(s.Specs, task.IssueID)
+					} else {
+						s.Specs[task.IssueID] = history[len(history)-1]
+						s.SpecHistory[task.IssueID] = history[:len(history)-1]
+					}
+				}
+			}
 			task.Generation = previous.Generation + 1
 			task.ModelCalls = previous.ModelCalls
 			task.CreatedAt = e.now()
@@ -119,10 +160,6 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 			if !task.valid() {
 				return false, fmt.Errorf("%w: revised discovery budget", ErrInvalid)
 			}
-			if s.DiscoveryHistory == nil {
-				s.DiscoveryHistory = map[string][]DiscoveryTask{}
-			}
-			s.DiscoveryHistory[task.IssueID] = append(s.DiscoveryHistory[task.IssueID], previous)
 			s.Discoveries[task.IssueID] = task
 			created = true
 			return true, nil

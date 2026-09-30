@@ -102,6 +102,7 @@ type PullReview struct {
 	CommitSHA   string
 	Body        string
 	SubmittedAt time.Time
+	Comments    []PullReviewComment
 }
 
 func (c *Client) PullReviews(ctx context.Context, repository string, number int64) ([]PullReview, error) {
@@ -128,9 +129,9 @@ func (c *Client) PullReviews(ctx context.Context, repository string, number int6
 			if item.ID < 1 {
 				return nil, errors.New("pull request review identity unavailable")
 			}
-			// Pending reviews, deleted users and oversized feedback cannot grant
-			// repair authority; skip them without hiding later valid reviews.
-			if item.User.NodeID == "" || item.SubmittedAt.IsZero() || len(item.Body) > 64<<10 {
+			// Pending reviews and deleted users cannot grant authority. Retain
+			// oversized submitted reviews so they still supersede older requests.
+			if item.User.NodeID == "" || item.SubmittedAt.IsZero() {
 				continue
 			}
 			reviews = append(reviews, PullReview{

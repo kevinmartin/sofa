@@ -100,7 +100,18 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 			revision = approved.Revision
 		}
 		if prior != nil {
-			if prior.SupersededAt.IsZero() || approved == nil || approved.Revision != prior.SpecRevision+1 || prior.SupersededSourceDigest != approved.SourceDigest || !approved.BacklogUpdatedAt.After(prior.Admission.StatusUpdatedAt) || !limits.permits(prior.Counts) {
+			if prior.SupersededAt.IsZero() || approved == nil || approved.Revision <= prior.SpecRevision || !approved.BacklogUpdatedAt.After(prior.Admission.StatusUpdatedAt) || !limits.permits(prior.Counts) {
+				return false, ErrAdmissionChanged
+			}
+			following := *approved
+			if approved.Revision > prior.SpecRevision+1 {
+				history := s.SpecHistory[approved.IssueID]
+				if int64(len(history)) <= prior.SpecRevision+1 {
+					return false, ErrAdmissionChanged
+				}
+				following = history[prior.SpecRevision+1]
+			}
+			if !supersessionFollowsApprovedRevision(s, *prior, following) || !following.BacklogUpdatedAt.After(prior.Admission.StatusUpdatedAt) {
 				return false, ErrAdmissionChanged
 			}
 			counts = prior.Counts
@@ -125,6 +136,41 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 		created = false
 	}
 	return
+}
+
+// A rejected Discovery proposal may be reset by a later owner Project move
+// without advancing the approved revision. In that case the superseded
+// attempt is bound to the first Discovery source, while the eventual approved
+// proposal is bound to the last one. The reset ledger proves that bridge.
+func supersessionFollowsApprovedRevision(s *State, prior Attempt, following SpecRecord) bool {
+	if prior.SupersededSourceDigest == following.SourceDigest {
+		return true
+	}
+	var first, last *DiscoveryTask
+	for i := range s.DiscoveryResetHistory[following.IssueID] {
+		reset := &s.DiscoveryResetHistory[following.IssueID][i]
+		if reset.Revision != following.Revision {
+			continue
+		}
+		if first == nil {
+			first = reset
+		}
+		last = reset
+	}
+	if first == nil || first.SourceDigest != prior.SupersededSourceDigest {
+		return false
+	}
+	var completed DiscoveryTask
+	if current, ok := s.Discoveries[following.IssueID]; ok && current.Revision == following.Revision {
+		completed = current
+	} else {
+		history := s.DiscoveryHistory[following.IssueID]
+		if following.Revision < 0 || int64(len(history)) <= following.Revision {
+			return false
+		}
+		completed = history[following.Revision]
+	}
+	return completed.Phase == DiscoveryReview && completed.Revision == following.Revision && completed.Repository == following.Repository && completed.Issue == following.Issue && completed.ProjectID == following.ProjectID && completed.ProjectItemID == following.ProjectItemID && completed.SourceDigest == following.SourceDigest && completed.SpecDigest == following.SpecDigest && completed.CommentID == following.CommentID && completed.CommentAuthorID == following.CommentAuthorID && completed.CommentCreatedAt.Equal(following.CommentCreatedAt) && completed.CommentUpdatedAt.Equal(following.CommentUpdatedAt) && completed.StatusUpdatedAt.After(last.StatusUpdatedAt) && completed.ModelCalls >= last.ModelCalls
 }
 
 // MarkDispatched acknowledges an external dispatch, but grants no authority.

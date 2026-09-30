@@ -180,10 +180,18 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	}
 	authority := make(map[string]bool, len(items))
 	evidence := make(map[string]lifecycle.DeliveryEvidence)
+	// Historical Done items need correction patrols, but scanning every merge,
+	// check, comment and recent commit on every wake grows without bound. The
+	// durable poll generation rotates a fixed slice; active stages are never
+	// excluded by this budget.
+	donePatrol := doneCorrectionPatrol(items, statuses, claim.Generation, 2)
 	for _, item := range items {
 		issue := item.Issue
 		stage, known := statuses.StageFor(issue.CurrentStatus)
 		if !known {
+			continue
+		}
+		if stage == lifecycle.Done && !donePatrol[issue.IssueID] {
 			continue
 		}
 		if stage != lifecycle.Ready && stage != lifecycle.Building && stage != lifecycle.Verification && stage != lifecycle.Review && stage != lifecycle.Release && stage != lifecycle.Done {
@@ -289,6 +297,30 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	result.Held = uniqueInts(result.Held)
 	result.Moved = uniqueInts(result.Moved)
 	return writeJSON(opts.outPath, result)
+}
+
+// doneCorrectionPatrol selects a stable, round-robin slice so every Done
+// issue is revisited across successive claimed polls without a new cursor.
+func doneCorrectionPatrol(items []github.ProjectWorkItem, statuses lifecycle.Statuses, generation int64, limit int) map[string]bool {
+	selected := make(map[string]bool)
+	if generation < 1 || limit < 1 {
+		return selected
+	}
+	done := make([]admission.Snapshot, 0)
+	for _, item := range items {
+		if stage, known := statuses.StageFor(item.Issue.CurrentStatus); known && stage == lifecycle.Done {
+			done = append(done, item.Issue)
+		}
+	}
+	if len(done) == 0 {
+		return selected
+	}
+	sort.Slice(done, func(i, j int) bool { return done[i].Number < done[j].Number })
+	start := int(((generation - 1) % int64(len(done))) * int64(limit) % int64(len(done)))
+	for i := range min(limit, len(done)) {
+		selected[done[(start+i)%len(done)].IssueID] = true
+	}
+	return selected
 }
 
 func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, policy discovery.Policy, statuses lifecycle.Statuses, issue admission.Snapshot, task state.DiscoveryTask) error {
@@ -476,8 +508,13 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 			}
 			continue
 		}
-		record, approved := ledger.Specs[issue.IssueID]
-		if task.Phase == state.DiscoveryReview && approved && record.ApprovedDigest == task.SpecDigest && record.Revision == task.Revision && task.SourceDigest != admitted.SourceDigest && admitted.StatusUpdatedAt.After(record.BacklogUpdatedAt) && cap >= task.MaxModelCalls {
+		if !admitted.StatusUpdatedAt.After(task.StatusUpdatedAt) || task.Publication != nil || cap < task.MaxModelCalls || cap <= task.ModelCalls {
+			continue
+		}
+		record, hasRecord := ledger.Specs[issue.IssueID]
+		approvedCurrent := task.Phase == state.DiscoveryReview && hasRecord && record.ApprovedDigest == task.SpecDigest && record.Revision == task.Revision
+		if approvedCurrent && task.SourceDigest != admitted.SourceDigest && admitted.StatusUpdatedAt.After(record.BacklogUpdatedAt) ||
+			task.Phase == state.DiscoveryReview && !approvedCurrent || task.Phase == state.DiscoveryBlocked {
 			fresh = append(fresh, issue.Number)
 		}
 	}

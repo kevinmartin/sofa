@@ -121,6 +121,37 @@ func TestProjectIssuesPaginatesAndRejectsPartialOrAmbiguousScans(t *testing.T) {
 	}
 }
 
+func TestProjectIssuesSkipsUnsetStatusWithoutLosingOtherIssues(t *testing.T) {
+	policy := projectTestConfig(t)
+	missing := projectIssueNode(policy, 1)
+	missing["fieldValueByName"] = nil
+	valid := projectIssueNode(policy, 2)
+	client, err := New("fixture-token", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, map[string]any{
+			"data": map[string]any{
+				"node": map[string]any{
+					"id":     policy.ProjectID,
+					"public": false,
+					"items": map[string]any{
+						"nodes": []any{missing, valid},
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   nil,
+						},
+					},
+				},
+			},
+		}), nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := client.ProjectIssues(context.Background(), policy)
+	if err != nil || len(items) != 1 || items[0].Number != 2 {
+		t.Fatalf("scan after unset Status: items=%+v err=%v", items, err)
+	}
+}
+
 func TestSetProjectStatusRejectsChangedItemBeforeMutation(t *testing.T) {
 	updatedAt := time.Date(2026, 9, 23, 21, 55, 32, 0, time.UTC)
 	statuses := lifecycle.Statuses{

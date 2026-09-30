@@ -274,9 +274,6 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	// worker artifact. Its producer remains durable even if a recovering admit
 	// run was interrupted before writing a replacement manifest.
 	if task.Publication != nil {
-		if recovery != nil && *recovery != task.Publication.Producer {
-			return errors.New("discovery publication producer changed")
-		}
 		producer := task.Publication.Producer
 		recovery = &producer
 	}

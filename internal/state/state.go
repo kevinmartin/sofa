@@ -306,15 +306,16 @@ func (r SpecRecord) valid() bool {
 }
 
 type State struct {
-	Version          int                        `json:"version"`
-	Attempts         map[string]Attempt         `json:"attempts"`
-	Observations     []Observation              `json:"observations"`
-	Specs            map[string]SpecRecord      `json:"specs,omitempty"`
-	SpecHistory      map[string][]SpecRecord    `json:"spec_history,omitempty"`
-	Discoveries      map[string]DiscoveryTask   `json:"discoveries,omitempty"`
-	DiscoveryHistory map[string][]DiscoveryTask `json:"discovery_history,omitempty"`
-	Projections      map[string]BoardProjection `json:"projections,omitempty"`
-	Poll             *PollCursor                `json:"poll,omitempty"`
+	Version               int                        `json:"version"`
+	Attempts              map[string]Attempt         `json:"attempts"`
+	Observations          []Observation              `json:"observations"`
+	Specs                 map[string]SpecRecord      `json:"specs,omitempty"`
+	SpecHistory           map[string][]SpecRecord    `json:"spec_history,omitempty"`
+	Discoveries           map[string]DiscoveryTask   `json:"discoveries,omitempty"`
+	DiscoveryHistory      map[string][]DiscoveryTask `json:"discovery_history,omitempty"`
+	DiscoveryResetHistory map[string][]DiscoveryTask `json:"discovery_reset_history,omitempty"`
+	Projections           map[string]BoardProjection `json:"projections,omitempty"`
+	Poll                  *PollCursor                `json:"poll,omitempty"`
 }
 
 type Snapshot struct {
@@ -329,14 +330,15 @@ type Store interface {
 
 func Empty() State {
 	return State{
-		Version:          Version,
-		Attempts:         map[string]Attempt{},
-		Observations:     []Observation{},
-		Specs:            map[string]SpecRecord{},
-		SpecHistory:      map[string][]SpecRecord{},
-		Discoveries:      map[string]DiscoveryTask{},
-		DiscoveryHistory: map[string][]DiscoveryTask{},
-		Projections:      map[string]BoardProjection{},
+		Version:               Version,
+		Attempts:              map[string]Attempt{},
+		Observations:          []Observation{},
+		Specs:                 map[string]SpecRecord{},
+		SpecHistory:           map[string][]SpecRecord{},
+		Discoveries:           map[string]DiscoveryTask{},
+		DiscoveryHistory:      map[string][]DiscoveryTask{},
+		DiscoveryResetHistory: map[string][]DiscoveryTask{},
+		Projections:           map[string]BoardProjection{},
 	}
 }
 
@@ -508,6 +510,20 @@ func (s State) Validate() error {
 				if current.Repository != previous.Repository || current.Issue != previous.Issue || current.ProjectID != previous.ProjectID || current.ProjectItemID != previous.ProjectItemID || current.SourceDigest == previous.SourceDigest || current.CommentID > 0 && current.CommentID == previous.CommentID || current.ModelCalls < previous.ModelCalls || !current.StatusUpdatedAt.After(previous.StatusUpdatedAt) {
 					return fmt.Errorf("%w: discovery revision identity", ErrInvalid)
 				}
+			}
+		}
+	}
+	for id, history := range s.DiscoveryResetHistory {
+		current, ok := s.Discoveries[id]
+		if !ok || len(history) == 0 || len(history) > 20 {
+			return fmt.Errorf("%w: orphaned Discovery reset history", ErrInvalid)
+		}
+		for i, task := range history {
+			if id != task.IssueID || !task.valid() || task.Phase != DiscoveryReview && task.Phase != DiscoveryBlocked || task.Repository != current.Repository || task.Issue != current.Issue || task.ProjectID != current.ProjectID || task.ProjectItemID != current.ProjectItemID || task.Revision > current.Revision || !current.StatusUpdatedAt.After(task.StatusUpdatedAt) || current.ModelCalls < task.ModelCalls {
+				return fmt.Errorf("%w: Discovery reset history", ErrInvalid)
+			}
+			if i > 0 && (!task.StatusUpdatedAt.After(history[i-1].StatusUpdatedAt) || task.ModelCalls < history[i-1].ModelCalls || task.Revision < history[i-1].Revision) {
+				return fmt.Errorf("%w: Discovery reset order", ErrInvalid)
 			}
 		}
 	}

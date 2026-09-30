@@ -240,6 +240,14 @@ jobs:
           ref: ${{ inputs.toolkit_sha }}
           persist-credentials: false
           path: toolkit
+      - name: Verify verifier source identities
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_PR_HEAD_SHA: ${{ steps.head.outputs.sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_PR_HEAD_SHA"
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -254,8 +262,6 @@ jobs:
       - name: Verify repair candidate without secrets
         shell: bash
         run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
-          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.head.outputs.sha }}"
           mkdir -p evidence
           ./sofa review-repair verify --config consumer/.sofa.yml \
             --manifest transport/manifest.json --workspace "$PWD/consumer" \
@@ -321,6 +327,14 @@ jobs:
           ref: ${{ inputs.toolkit_sha }}
           persist-credentials: false
           path: toolkit
+      - name: Verify publisher source identities
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_BASE_SHA"
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -332,11 +346,6 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: go build -trimpath -o ../sofa ./cmd/sofa
-      - name: Verify publisher source identity
-        shell: bash
-        run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
-          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
       # The command re-reads the Project, approved spec, owner review, PR, and
       # ledger fence before a leased push; no model or candidate code runs here.
       - name: Publish verified repair on the same PR
@@ -384,6 +393,14 @@ jobs:
           ref: ${{ inputs.toolkit_sha }}
           persist-credentials: false
           path: toolkit
+      - name: Verify finalizer source identities
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_BASE_SHA"
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
@@ -402,8 +419,6 @@ jobs:
           SOFA_EXECUTE_RESULT: ${{ needs.execute.result }}
           SOFA_VERIFY_RESULT: ${{ needs.verify.result }}
         run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
-          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
           if [[ "$SOFA_EXECUTE_RESULT" == failure ]]; then
             stage=execute
           elif [[ "$SOFA_VERIFY_RESULT" == failure ]]; then

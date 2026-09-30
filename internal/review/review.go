@@ -7,9 +7,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -114,7 +116,11 @@ func evaluateFeedback(attempt state.Attempt, pull github.PullSnapshot, submitted
 	if ownerID == "" || submitted.UserID != ownerID || submitted.ID < 1 || submitted.State != "CHANGES_REQUESTED" || submitted.CommitSHA != pull.HeadSHA || submitted.SubmittedAt.IsZero() || len(submitted.Body) > 64<<10 {
 		return Decision{}, errors.New("review feedback is not current owner repair authorization")
 	}
-	h := sha256.Sum256([]byte(submitted.Body))
+	feedback, err := FeedbackText(submitted)
+	if err != nil {
+		return Decision{}, err
+	}
+	h := sha256.Sum256([]byte(feedback))
 	id := fmt.Sprintf("review-%d-%d-%s", pull.Number, submitted.ID, hex.EncodeToString(h[:8]))
 	return Decision{
 		AttemptID:    attempt.ID,
@@ -126,6 +132,37 @@ func evaluateFeedback(attempt state.Attempt, pull github.PullSnapshot, submitted
 		FeedbackHash: hex.EncodeToString(h[:]),
 		SubmittedAt:  submitted.SubmittedAt,
 		FeedbackRef:  fmt.Sprintf("https://github.com/%s/pull/%d#pullrequestreview-%d", repo, pull.Number, submitted.ID),
-		FeedbackText: submitted.Body,
+		FeedbackText: feedback,
 	}, nil
+}
+
+// FeedbackText includes every inline comment attached to the exact review.
+// Its deterministic encoding is hashed into the repair reservation and checked
+// again before publication. Comment text and file paths remain untrusted data.
+func FeedbackText(submitted github.PullReview) (string, error) {
+	if len(submitted.Body) > 64<<10 {
+		return "", errors.New("owner review feedback exceeds bound")
+	}
+	if len(submitted.Comments) == 0 {
+		return submitted.Body, nil
+	}
+	comments := append([]github.PullReviewComment(nil), submitted.Comments...)
+	sort.Slice(comments, func(i, j int) bool { return comments[i].ID < comments[j].ID })
+	for i, comment := range comments {
+		if comment.ID < 1 || comment.ReviewID != submitted.ID || comment.UserID != submitted.UserID || comment.CommitSHA != submitted.CommitSHA || comment.Path == "" || (i > 0 && comments[i-1].ID == comment.ID) {
+			return "", errors.New("inline review comment identity changed")
+		}
+	}
+	payload := struct {
+		Review         string                     `json:"review"`
+		InlineComments []github.PullReviewComment `json:"inline_comments"`
+	}{
+		Review:         submitted.Body,
+		InlineComments: comments,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil || len(encoded) > 64<<10 {
+		return "", errors.New("inline review feedback exceeds bound")
+	}
+	return string(encoded), nil
 }

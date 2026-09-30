@@ -103,6 +103,43 @@ func TestReadyForDeliveryHonorsApprovalDependenciesAndWIP(t *testing.T) {
 	}
 }
 
+func TestDoneCorrectionPatrolIsBoundedAndRotates(t *testing.T) {
+	statuses := lifecycle.Statuses{
+		lifecycle.Done:  "Done",
+		lifecycle.Ready: "Ready",
+	}
+	item := func(id string, number int, status string) github.ProjectWorkItem {
+		return github.ProjectWorkItem{
+			Issue: admission.Snapshot{
+				IssueID:       id,
+				Number:        number,
+				CurrentStatus: status,
+			},
+		}
+	}
+	items := []github.ProjectWorkItem{
+		item("done-5", 5, "Done"),
+		item("ready", 3, "Ready"),
+		item("done-1", 1, "Done"),
+		item("done-4", 4, "Done"),
+		item("done-2", 2, "Done"),
+		item("done-3", 3, "Done"),
+	}
+	seen := make(map[string]bool)
+	for generation := int64(1); generation <= 3; generation++ {
+		selected := doneCorrectionPatrol(items, statuses, generation, 2)
+		if len(selected) != 2 || selected["ready"] {
+			t.Fatalf("generation %d selected %v, want only two Done items", generation, selected)
+		}
+		for id := range selected {
+			seen[id] = true
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("Done rotation missed items: %v", seen)
+	}
+}
+
 func TestReadyForDeliveryUsesOwnerPriorityThenIssueNumber(t *testing.T) {
 	c := config.Config{
 		Repository: "kevinmartin/sofa-disposable",
@@ -253,6 +290,77 @@ func TestReadyForDiscoveryRespectsOwnerStatusWIPAndExistingPrompt(t *testing.T) 
 	}
 	if got := readyForDiscovery(c, items, ledger, policy, statuses, []int{2}); len(got) != 0 {
 		t.Fatalf("held pending issue was dispatched: %v", got)
+	}
+}
+
+func TestReadyForDiscoveryRequiresLaterOwnerMoveForReviewOrBlockedReset(t *testing.T) {
+	c, err := readConfig("../../examples/consumer/.sofa.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Limits.MaxAgentTurns = 2
+	policy, err := discoveryPolicy(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := lifecycleStatuses(c)
+	when := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	issue := admission.Snapshot{
+		Repository:      c.Repository,
+		RepositoryID:    c.RepositoryID,
+		IssueID:         "I_9",
+		Number:          9,
+		Title:           "Idea",
+		Body:            "Investigate greeting behavior",
+		Open:            true,
+		ProjectID:       c.ProjectID,
+		ProjectPrivate:  true,
+		ProjectItemID:   "PVTI_9",
+		CurrentStatus:   statuses[lifecycle.Discovery],
+		StatusOptionID:  "discovery",
+		StatusUpdatedAt: when,
+		Complete:        true,
+	}
+	items := []github.ProjectWorkItem{
+		{
+			Issue: issue,
+		},
+	}
+	admitted, _, err := discovery.AuthorizeDiscovery(policy, issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := state.Empty()
+	ledger.Discoveries[issue.IssueID] = state.DiscoveryTask{
+		Repository:      admitted.Repository,
+		IssueID:         admitted.IssueID,
+		Issue:           admitted.Issue,
+		ProjectID:       admitted.ProjectID,
+		ProjectItemID:   admitted.ProjectItemID,
+		StatusOptionID:  admitted.StatusOptionID,
+		StatusUpdatedAt: admitted.StatusUpdatedAt,
+		SourceDigest:    admitted.SourceDigest,
+		Phase:           state.DiscoveryReview,
+		ModelCalls:      1,
+		MaxModelCalls:   2,
+	}
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 0 {
+		t.Fatalf("unchanged Discovery review re-dispatched: %v", got)
+	}
+	items[0].Issue.StatusUpdatedAt = when.Add(time.Minute)
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != 9 {
+		t.Fatalf("later owner Discovery revision not dispatched: %v", got)
+	}
+	task := ledger.Discoveries[issue.IssueID]
+	task.Phase = state.DiscoveryBlocked
+	task.Failure = "worker"
+	ledger.Discoveries[issue.IssueID] = task
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != 9 {
+		t.Fatalf("blocked revision not dispatched after owner move: %v", got)
+	}
+	items[0].Issue.StatusUpdatedAt = when
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 0 {
+		t.Fatalf("blocked work re-dispatched without later owner move: %v", got)
 	}
 }
 

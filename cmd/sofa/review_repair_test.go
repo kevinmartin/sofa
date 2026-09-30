@@ -160,8 +160,8 @@ func TestReservedRepairAdmissionKeepsOriginalReviewAndTerminalFence(t *testing.T
 		t.Fatalf("reserved fixture feedback rejected: %v; attempt=%+v pull=%+v", err, a, pull)
 	}
 	selected, selectedReview := selectRepairReview(a, pull, []github.PullReview{reviews[0], newer}, reviews[0].UserID)
-	if selected.FeedbackID != m.Repair.FeedbackID || selectedReview.ID != reviews[0].ID {
-		t.Fatalf("newer review borrowed reservation: %+v, %+v", selected, selectedReview)
+	if selected.FeedbackID != "" || selectedReview.ID != 0 {
+		t.Fatalf("superseded review borrowed reservation: %+v, %+v", selected, selectedReview)
 	}
 	if _, err := recoverReservedReviewRepair(ctx, engine, repairProofReader{
 		err: errors.New("transient API error"),
@@ -344,6 +344,13 @@ func TestRepairManifestAndCurrentFeedbackBinding(t *testing.T) {
 		{"other actor", func(_ *github.PullSnapshot, r *[]github.PullReview) { (*r)[0].UserID = "U_other" }},
 		{"dismissed review", func(_ *github.PullSnapshot, r *[]github.PullReview) { (*r)[0].State = "DISMISSED" }},
 		{"edited review", func(_ *github.PullSnapshot, r *[]github.PullReview) { (*r)[0].Body = "new scope" }},
+		{"later approval", func(_ *github.PullSnapshot, r *[]github.PullReview) {
+			approved := (*r)[0]
+			approved.ID++
+			approved.State = "APPROVED"
+			approved.SubmittedAt = approved.SubmittedAt.Add(time.Minute)
+			*r = append(*r, approved)
+		}},
 	}
 	for _, tc := range changes {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,6 +361,76 @@ func TestRepairManifestAndCurrentFeedbackBinding(t *testing.T) {
 				t.Fatal("changed PR or feedback accepted")
 			}
 		})
+	}
+}
+
+func TestLaterOwnerReviewSupersedesRepairAdmission(t *testing.T) {
+	c, _ := testManifest(t)
+	m, pull, reviews := repairFixture(t)
+	attempt := state.Attempt{
+		ID:        m.Fence.AttemptID,
+		Admission: m.Admission,
+		Phase:     state.Draft,
+		Limits: state.Limits{
+			Repairs: 1,
+		},
+		Publication: &m.Publication,
+	}
+	if selected, _ := selectRepairReview(attempt, pull, reviews, reviews[0].UserID); selected.FeedbackID == "" {
+		t.Fatal("current owner change request was not selected")
+	}
+	for _, stateName := range []string{"APPROVED", "DISMISSED"} {
+		t.Run(stateName, func(t *testing.T) {
+			later := reviews[0]
+			later.ID++
+			later.State = stateName
+			later.SubmittedAt = later.SubmittedAt.Add(time.Minute)
+			selected, _ := selectRepairReview(attempt, pull, []github.PullReview{reviews[0], later}, reviews[0].UserID)
+			if selected.FeedbackID != "" {
+				t.Fatal("older change request survived later owner review")
+			}
+		})
+	}
+	commented := reviews[0]
+	commented.ID++
+	commented.State = "COMMENTED"
+	commented.SubmittedAt = commented.SubmittedAt.Add(time.Minute)
+	withComment := []github.PullReview{reviews[0], commented}
+	if selected, _ := selectRepairReview(attempt, pull, withComment, reviews[0].UserID); selected.FeedbackID == "" {
+		t.Fatal("informational owner comment withdrew active change request")
+	}
+	if err := revalidateRepairReview(c, m, pull, withComment, ""); err != nil {
+		t.Fatalf("informational owner comment invalidated reserved review: %v", err)
+	}
+}
+
+func TestRepairInlineFeedbackCannotChangeAfterAdmission(t *testing.T) {
+	c, _ := testManifest(t)
+	m, pull, reviews := repairFixture(t)
+	reviews[0].Comments = []github.PullReviewComment{
+		{
+			ID:        44,
+			ReviewID:  reviews[0].ID,
+			UserID:    reviews[0].UserID,
+			CommitSHA: reviews[0].CommitSHA,
+			Path:      "fixture.go",
+			Body:      "Fix the empty input case",
+		},
+	}
+	feedback, err := review.FeedbackText(reviews[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256([]byte(feedback))
+	m.FeedbackText = feedback
+	m.Repair.FeedbackHash = hex.EncodeToString(h[:])
+	m.Repair.FeedbackID = fmt.Sprintf("review-7-9-%s", hex.EncodeToString(h[:8]))
+	if err := revalidateRepairReview(c, m, pull, reviews, ""); err != nil {
+		t.Fatalf("exact inline review denied: %v", err)
+	}
+	reviews[0].Comments[0].Body = "Rewritten finding"
+	if err := revalidateRepairReview(c, m, pull, reviews, ""); err == nil {
+		t.Fatal("edited inline review inherited repair authority")
 	}
 }
 

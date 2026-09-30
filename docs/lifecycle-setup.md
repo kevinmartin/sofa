@@ -29,10 +29,12 @@ Keep the Project credential in the caller's trusted controller job, never in
 the ACP worker, product test, or artifact. The source Project must be private
 and repository, Project, issue, item, and option identities must match the
 configuration and persisted revision. The controller re-reads the Project
-before each mutation and stops on a conflicting human edit. GitHub's public
-Project field API does not expose the mover reliably, so this design relies on
-restricted Project write access rather than claiming to know which human made
-each move.
+before each mutation and stops when that read shows a conflicting edit.
+GitHub's Project field mutation has no conditional update: an owner move in the
+gap between that read and the write can still be overwritten without detection.
+Restrict Project writers and avoid simultaneous manual and automated moves;
+factory code never targets Backlog or Ready. The public API also does not
+expose the mover reliably, so Sofa does not claim to identify who made a move.
 
 One scheduled caller should invoke the reusable reconciliation workflow every
 ten minutes, or hourly using `lifecycle.poll_minutes: 60`. Manual and event

@@ -348,6 +348,9 @@ func runReviewRepairPublish(ctx context.Context, configPath, manifestPath, bundl
 		if err != nil {
 			return err
 		}
+		if err := attachRepairReviewComments(ctx, publisher, c.Repository, pull.Number, reviews, m.ReviewID); err != nil {
+			return err
+		}
 		return revalidateRepairReview(c, m, pull, reviews, a.Repair.CandidateSHA)
 	}
 	if err := guard(ctx); err != nil {
@@ -452,6 +455,11 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
+	if i := newestOwnerReview(reviews, c.OwnerID); i >= 0 && reviews[i].State == "CHANGES_REQUESTED" && reviews[i].CommitSHA == pull.HeadSHA {
+		if err := attachRepairReviewComments(ctx, ledger, c.Repository, pull.Number, reviews, reviews[i].ID); err != nil {
+			return err
+		}
+	}
 	selected, selectedReview := selectRepairReview(attempt, pull, reviews, c.OwnerID)
 	if selected.FeedbackID == "" {
 		if attempt.Repair != nil {
@@ -515,6 +523,9 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
+	if err := attachRepairReviewComments(ctx, ledger, c.Repository, pull.Number, currentReviews, selectedReview.ID); err != nil {
+		return err
+	}
 	preflightManifest := repairManifest{
 		Publication:  *attempt.Publication,
 		Repair:       intent,
@@ -545,21 +556,52 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 }
 
 func selectRepairReview(attempt state.Attempt, pull github.PullSnapshot, reviews []github.PullReview, ownerID string) (review.Decision, github.PullReview) {
-	var selected review.Decision
-	var selectedReview github.PullReview
-	for _, submitted := range reviews {
-		var decision review.Decision
-		var err error
-		if attempt.Repair != nil {
-			decision, err = review.EvaluateReserved(attempt, pull, submitted, ownerID)
-		} else {
-			decision, err = review.Evaluate(attempt, pull, submitted, ownerID)
+	i := newestOwnerReview(reviews, ownerID)
+	if i < 0 {
+		return review.Decision{}, github.PullReview{}
+	}
+	submitted := reviews[i]
+	var decision review.Decision
+	var err error
+	if attempt.Repair != nil {
+		decision, err = review.EvaluateReserved(attempt, pull, submitted, ownerID)
+	} else {
+		decision, err = review.Evaluate(attempt, pull, submitted, ownerID)
+	}
+	if err != nil {
+		return review.Decision{}, github.PullReview{}
+	}
+	return decision, submitted
+}
+
+func newestOwnerReview(reviews []github.PullReview, ownerID string) int {
+	selected := -1
+	for i, submitted := range reviews {
+		// COMMENTED is informational in GitHub's review state machine. It
+		// neither clears a prior change request nor grants a new one.
+		if submitted.UserID != ownerID || submitted.ID < 1 || submitted.SubmittedAt.IsZero() || submitted.State == "COMMENTED" {
+			continue
 		}
-		if err == nil && (selected.FeedbackID == "" || submitted.SubmittedAt.After(selectedReview.SubmittedAt) || submitted.SubmittedAt.Equal(selectedReview.SubmittedAt) && submitted.ID > selectedReview.ID) {
-			selected, selectedReview = decision, submitted
+		if selected < 0 || submitted.SubmittedAt.After(reviews[selected].SubmittedAt) || submitted.SubmittedAt.Equal(reviews[selected].SubmittedAt) && submitted.ID > reviews[selected].ID {
+			selected = i
 		}
 	}
-	return selected, selectedReview
+	return selected
+}
+
+func attachRepairReviewComments(ctx context.Context, client *github.Client, repository string, number int64, reviews []github.PullReview, reviewID int64) error {
+	for i := range reviews {
+		if reviews[i].ID != reviewID {
+			continue
+		}
+		comments, err := client.PullReviewComments(ctx, repository, number, reviewID)
+		if err != nil {
+			return err
+		}
+		reviews[i].Comments = comments
+		return nil
+	}
+	return errors.New("owner review unavailable")
 }
 
 type repairRunProofReader interface {
@@ -656,17 +698,20 @@ func revalidateRepairReview(c config.Config, m repairManifest, pull github.PullS
 	if pull.Number != m.Publication.PRNumber || pull.URL != m.Publication.PRURL || pull.HeadRef != m.Publication.Branch || pull.BaseSHA != m.Repair.PRBaseSHA || pull.State != "open" || pull.Merged || !strings.EqualFold(pull.HeadRepository, c.Repository) || !strings.EqualFold(pull.BaseRepository, c.Repository) || (pull.HeadSHA != m.Repair.PRHeadSHA && pull.HeadSHA != preparedSHA) {
 		return errors.New("repair PR changed since owner feedback")
 	}
-	for _, submitted := range reviews {
-		if submitted.ID != m.ReviewID {
-			continue
-		}
-		h := sha256.Sum256([]byte(submitted.Body))
-		if submitted.UserID != c.OwnerID || submitted.State != "CHANGES_REQUESTED" || submitted.CommitSHA != m.Repair.PRHeadSHA || hex.EncodeToString(h[:]) != m.Repair.FeedbackHash || submitted.Body != m.FeedbackText {
-			return errors.New("owner review changed since repair admission")
-		}
-		return nil
+	i := newestOwnerReview(reviews, c.OwnerID)
+	if i < 0 || reviews[i].ID != m.ReviewID {
+		return errors.New("owner review superseded since repair admission")
 	}
-	return errors.New("owner review unavailable")
+	submitted := reviews[i]
+	feedback, err := review.FeedbackText(submitted)
+	if err != nil {
+		return err
+	}
+	h := sha256.Sum256([]byte(feedback))
+	if submitted.State != "CHANGES_REQUESTED" || submitted.CommitSHA != m.Repair.PRHeadSHA || hex.EncodeToString(h[:]) != m.Repair.FeedbackHash || feedback != m.FeedbackText {
+		return errors.New("owner review changed since repair admission")
+	}
+	return nil
 }
 
 func requireRepairOwner(ctx context.Context, engine state.Engine, m repairManifest) (state.Attempt, error) {
