@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Shared conventions are discovered automatically from AGENTS.md.
+# Own this repo's review policy: ordinary Organization UI path rules previously
+# required Testify, blanket panic recovery, and configurable trust constants.
+# Do not inherit those rules. Preserve the observed assertive profile; other
+# omitted settings use vendor defaults. Organization global overrides still win.
+inheritance: false
+reviews:
+  profile: assertive
+  path_instructions:
+    - path: "**/*.go"
+      instructions: >-
+        Review concrete behavior and the root AGENTS.md conventions. Pay special
+        attention to authority checks, cancellation, ownership fences, aggregate
+        budgets, bounded GitHub requests, and sensitive data in errors. Distinguish
+        a demonstrated defect from an optional redesign; assess tests by the
+        behavior they protect.
+    - path: "{.github/workflows/**,internal/managedconfig/templates/**}"
+      instructions: >-
+        Trace candidate and trusted execution separately. Check permissions,
+        credential flow, reachable validators, failure and skipped-job propagation,
+        workflow listeners, and consistency of generated callers with templates.
+        Use the current quality-policy contract in docs/quality-and-config.md;
+        distinguish immutable action pins from release provenance guarantees.
+    - path: "{AGENTS.md,.agents/skills/**}"
+      instructions: >-
+        Check that instructions agree with current implementation and the shared
+        milestone contract. Skills should have narrow triggers and preserve task
+        authorization; prose cannot grant credentials, merge authority, or a gate
+        bypass. Flag contradictory or stale guidance with a concrete reference.
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+knowledge_base:
+  code_guidelines:
+    enabled: true

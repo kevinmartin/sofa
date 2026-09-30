@@ -20,6 +20,9 @@ Start with the [milestone plan](docs/milestones/01-delivery-slice.md),
 architecture and future milestones are in [PLAN.md](PLAN.md) and
 [the milestone index](docs/milestones/README.md).
 
+Coding agents should start with [AGENTS.md](AGENTS.md), which links the shared
+conventions, validation commands, and task-specific development skills.
+
 Sofa's shared PR quality gate and its reviewable repository-file reconciler
 are described in [shared quality and managed configuration](docs/quality-and-config.md).
 

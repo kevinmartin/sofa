@@ -1,5 +1,11 @@
-# Require the sofa owner to review changes to the factory's executable policy.
+# Request the sofa owner for executable policy and agent instruction changes.
+# CODEOWNERS does not itself enforce approval or grant merge authority.
 /.github/workflows/ @kevinmartin
 /internal/workflow/quality_policy.go @kevinmartin
 /cmd/sofa-test/bridge.go @kevinmartin
 /internal/managedconfig/templates/ @kevinmartin
+
+/AGENTS.md @kevinmartin
+/.agents/ @kevinmartin
+/.coderabbit.yaml @kevinmartin
+/.github/CODEOWNERS @kevinmartin

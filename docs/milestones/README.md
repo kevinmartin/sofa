@@ -4,6 +4,9 @@ These specifications turn [the architecture plan](../../PLAN.md) into bounded im
 
 ## How to use these files
 
+Start with the repository [agent instructions](../../AGENTS.md) for development
+conventions, validation, and the review-feedback/hosted-gate skills.
+
 Open a task in the sofa project, read the milestone, and paste its final prompt as the `/goal` objective. Each prompt points back to this shared contract and its specification, so a new task does not need the original conversation. Do not paste the whole roadmap into one goal. No goal, automation, repository, or external service is created by these documents.
 
 The four broad development stages have been divided into smaller goals, followed by release qualification. The first goal deliberately crosses the stack with one narrow example; it proves the critical integration before the factory grows.
