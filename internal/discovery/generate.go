@@ -111,7 +111,7 @@ func Generate(ctx context.Context, in GenerateInput) (GenerateResult, error) {
 	if runner == nil {
 		runner = NativeRunner{}
 	}
-	prompt := "Research the admitted idea using idea.md and the deterministic repository facts in facts.md. Fill every section of spec.md with specific evidence, goals, non-goals, dependencies, acceptance examples including negative behavior, proposed validation, risks, unknowns, and bounded delivery slices. Mark unverified claims as hypotheses. Do not change idea.md or facts.md. Do not edit repository code, publish a PR, change a Project status, or claim owner approval. Finish the ACP turn after editing spec.md."
+	prompt := "Research the admitted idea using idea.md and the deterministic repository facts in facts.md. Use file read/edit capabilities to make the actual change to spec.md; shell execution permission is unavailable. Fill every section of spec.md with specific evidence, goals, non-goals, dependencies, acceptance examples including negative behavior, proposed validation, risks, unknowns, and bounded delivery slices. Mark unverified claims as hypotheses. Do not stop at proposing a specification in chat. Do not change idea.md or facts.md. Do not edit repository code, publish a PR, change a Project status, or claim owner approval. Finish the ACP turn after editing spec.md."
 	result, err := runner.Run(ctx, config, prompt)
 	out.Telemetry = result
 	if err != nil {
@@ -136,7 +136,7 @@ func Generate(ctx context.Context, in GenerateInput) (GenerateResult, error) {
 	}
 	content, err := os.ReadFile(filepath.Join(directory, "spec.md"))
 	if err != nil || len(content) > 64<<10 || string(content) == draftTemplate {
-		return out, errors.New("discovery agent did not produce a bounded specification")
+		return out, fmt.Errorf("discovery agent did not produce a bounded specification (reads=%d edits=%d executes=%d permission_denials=%d failed_updates=%d)", result.ToolReads, result.ToolEdits, result.ToolExecutes, result.PermissionDenials, result.ToolFailedUpdates)
 	}
 	if _, err := Parse(string(content)); err != nil {
 		return out, fmt.Errorf("invalid Discovery specification: %w", err)
