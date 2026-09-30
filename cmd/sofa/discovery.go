@@ -99,12 +99,12 @@ func readDiscoveryManifest(path string, c *config.Config) (discoveryManifest, er
 		return m, err
 	}
 	if m.Version != 1 || m.Fence.IssueID == "" || m.Fence.IssueID != m.Source.IssueID || m.Fence.Generation < 1 || m.Fence.Owner.RunID == "" || m.Fence.Owner.RunAttempt < 1 || m.Source.Number < 1 || !m.Source.Complete || !m.Source.Open || m.Source.IssueID != m.Admission.IssueID || m.Source.ProjectID != m.Admission.ProjectID || m.Source.ProjectItemID != m.Admission.ProjectItemID || m.Source.StatusOptionID != m.Admission.StatusOptionID || !m.Source.StatusUpdatedAt.Equal(m.Admission.StatusUpdatedAt) || m.Source.Number != int(m.Admission.Issue) || !strings.EqualFold(m.Repository, m.Admission.Repository) || len(m.Facts) > 64<<10 || len(m.Source.Title) > 1024 || len(m.Source.Body) > 64<<10 || m.TimeoutSecs < 1 || m.TimeoutSecs > 900 || m.Recovery != nil && (m.Recovery.RunID == "" || m.Recovery.RunAttempt < 1) {
-		return discoveryManifest{}, errors.New("Discovery manifest identity invalid")
+		return discoveryManifest{}, errors.New("discovery manifest identity invalid")
 	}
 	if c != nil {
 		digest, err := c.Digest()
 		if err != nil || c.Lifecycle == nil || m.ConfigDigest != digest || !strings.EqualFold(m.Repository, c.Repository) || !strings.EqualFold(m.Source.Repository, c.Repository) || m.Source.RepositoryID != c.RepositoryID || m.Source.ProjectID != c.ProjectID || !m.Source.ProjectPrivate || m.Source.CurrentStatus != c.Lifecycle.Statuses["discovery"] || m.TimeoutSecs != min(c.Limits.AttemptSeconds, 900) {
-			return discoveryManifest{}, errors.New("Discovery manifest configuration changed")
+			return discoveryManifest{}, errors.New("discovery manifest configuration changed")
 		}
 	}
 	return m, nil
@@ -124,7 +124,7 @@ func discoveryClients(c config.Config) (*github.Client, github.StateStore, error
 
 func currentCheckoutSHA(ctx context.Context, root string) (string, error) {
 	if !filepath.IsAbs(root) {
-		return "", errors.New("Discovery workspace must be absolute")
+		return "", errors.New("discovery workspace must be absolute")
 	}
 	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "HEAD")
 	b, err := cmd.Output()
@@ -188,7 +188,7 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 		[]byte(os.Getenv("SOFA_PROJECTS_TOKEN")),
 		[]byte(os.Getenv("SOFA_STATE_TOKEN")),
 	}); err != nil {
-		return errors.New("Discovery idea contains sensitive material")
+		return errors.New("discovery idea contains sensitive material")
 	}
 	checkout, err := currentCheckoutSHA(ctx, workspace)
 	if err != nil || checkout != base.BaseSHA {
@@ -261,7 +261,7 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	// run was interrupted before writing a replacement manifest.
 	if task.Publication != nil {
 		if recovery != nil && *recovery != task.Publication.Producer {
-			return errors.New("Discovery publication producer changed")
+			return errors.New("discovery publication producer changed")
 		}
 		producer := task.Publication.Producer
 		recovery = &producer
@@ -303,7 +303,7 @@ func runDiscoveryGenerate(ctx context.Context, manifestPath, out string) error {
 		return err
 	}
 	if m.Recovery != nil {
-		return errors.New("Discovery recovery must reuse retained candidate")
+		return errors.New("discovery recovery must reuse retained candidate")
 	}
 	result, err := discovery.Generate(ctx, discovery.GenerateInput{
 		Title:      m.Source.Title,
@@ -365,7 +365,7 @@ func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidat
 		}
 		task, ok := ledger.State.Discoveries[m.Source.IssueID]
 		if !ok || task.Publication == nil || task.Publication.Producer != *m.Recovery {
-			return errors.New("Discovery recovery producer unavailable")
+			return errors.New("discovery recovery producer unavailable")
 		}
 	}
 	// Ensure the manifest itself still describes the currently admitted source.
