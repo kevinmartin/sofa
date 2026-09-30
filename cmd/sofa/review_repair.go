@@ -410,25 +410,20 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	}
 	store := github.StateStore{Client: ledger, Repository: c.Repository}
 	engine := state.Engine{Store: store}
+	issueSnapshot, err := projects.Issue(ctx, c, issue)
+	if err != nil {
+		return err
+	}
 	snapshot, err := store.Load(ctx)
 	if err != nil {
 		return err
 	}
-	var attempt state.Attempt
-	for _, candidate := range snapshot.State.Attempts {
-		if candidate.Admission.Repository == strings.ToLower(c.Repository) && candidate.Admission.Issue == int64(issue) {
-			if attempt.ID != "" {
-				return errors.New("multiple attempts for repair issue")
-			}
-			attempt = candidate
-		}
-	}
-	if attempt.ID == "" || attempt.Publication == nil {
-		return errors.New("review repair requires an admitted published PR")
-	}
-	issueSnapshot, err := projects.Issue(ctx, c, issue)
+	attempt, found, err := state.CurrentAttemptForIssue(snapshot.State, issueSnapshot.IssueID)
 	if err != nil {
 		return err
+	}
+	if !found || attempt.Publication == nil {
+		return errors.New("review repair requires an admitted published PR")
 	}
 	spec, err := approvedRepairSource(ctx, c, projects, store, issueSnapshot, attempt)
 	if err != nil {

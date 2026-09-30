@@ -1,0 +1,415 @@
+# Consumer entry point for one owner-requested repair on an already admitted PR.
+# Admission pins the exact review and PR head; only a verified bundle may reach
+# the separate publisher, which updates that same PR with an exact-head lease.
+name: Sofa / Reusable bounded review repair
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: Number of the admitted issue whose PR has owner feedback
+        required: true
+        type: number
+      toolkit_sha:
+        description: Full immutable commit SHA of the sofa toolkit
+        required: true
+        type: string
+    secrets:
+      SOFA_PROJECTS_TOKEN:
+        required: true
+      SOFA_PUBLISH_TOKEN:
+        required: true
+
+concurrency:
+  group: sofa-review-repair-${{ github.repository }}-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    name: Bind owner review to the published PR and reserve repair budget
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Only the trusted admission controller writes sofa-state.
+      actions: read # Exact terminal-run proof before recovering an interruption.
+      pull-requests: read
+    outputs:
+      dispatch: ${{ steps.status.outputs.dispatch }}
+    steps:
+      - name: Validate immutable toolkit reference
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
+      - name: Check out trusted consumer configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Verify toolkit source identity
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted admission controller
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Admit the exact owner review
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_STATE_TOKEN: ${{ github.token }}
+          SOFA_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          mkdir -p transport
+          ./sofa review-repair admit --config consumer/.sofa.yml \
+            --issue "$SOFA_ISSUE_NUMBER" --out-dir transport
+      - name: Record dispatch decision
+        id: status
+        shell: bash
+        run: |
+          if [[ -f transport/manifest.json ]] && [[ "$(jq -r '.dispatch' transport/status.json)" == true ]]; then
+            echo 'dispatch=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'dispatch=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Carry admitted review manifest
+        if: steps.status.outputs.dispatch == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport/manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+  execute:
+    name: Produce bounded repair in isolated model worker
+    needs: admit
+    if: needs.admit.outputs.dispatch == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      copilot-requests: write
+    steps:
+      - name: Download admitted review manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Read exact published PR head
+        id: head
+        shell: bash
+        run: |
+          sha="$(jq -er '.repair.pr_head_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid repair PR head' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out published PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.head.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Verify source identities
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_PR_HEAD_SHA: ${{ steps.head.outputs.sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+          test "$(git -C consumer rev-parse HEAD)" = "$SOFA_PR_HEAD_SHA"
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted worker
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sofa-cli"
+          go build -trimpath -o "$RUNNER_TEMP/sofa-cli/sofa" ./cmd/sofa
+      - name: Fetch pinned Copilot ACP package
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/copilot-package"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/github-copilot-linux-x64.tgz" \
+            https://github.com/github/copilot-cli/releases/download/v1.0.86/github-copilot-1.0.86-linux-x64.tgz
+          echo '53284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112  '"$RUNNER_TEMP/github-copilot-linux-x64.tgz" | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/github-copilot-linux-x64.tgz" -C "$RUNNER_TEMP/copilot-package"
+          test -f "$RUNNER_TEMP/copilot-package/package/index.js"
+      # Only the model token enters this container. Review text, manifest,
+      # toolkit, and harness are read-only; the candidate checkout is writable.
+      - name: Run isolated review-repair worker
+        shell: bash
+        env:
+          SOFA_MODEL_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p candidate
+          docker run --rm --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop ALL --security-opt no-new-privileges --read-only \
+            --pids-limit 128 --memory 3g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --tmpfs /home/sofa:rw,nosuid,nodev,size=64m \
+            --mount "type=bind,src=$PWD/consumer,dst=/workspace" \
+            --mount "type=bind,src=$PWD/transport,dst=/transport,readonly" \
+            --mount "type=bind,src=$PWD/candidate,dst=/candidate" \
+            --mount "type=bind,src=$RUNNER_TEMP/sofa-cli,dst=/toolkit,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/copilot-package,dst=/copilot-package,readonly" \
+            --env SOFA_MODEL_TOKEN \
+            --env HOME=/home/sofa \
+            --env PATH=/toolkit:/usr/local/bin:/usr/bin:/bin \
+            node:24-bookworm@sha256:b977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3 \
+            /toolkit/sofa review-repair execute --config /workspace/.sofa.yml \
+              --manifest /transport/manifest.json --workspace /workspace \
+              --out /candidate/bundle.json
+      - name: Carry repair bundle to secretless verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-review-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            candidate/bundle.json
+            candidate/execution.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    name: Verify exact repair with secretless consumer checks
+    needs: execute
+    if: always() && needs.execute.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Download admitted review manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Download untrusted repair bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
+      - name: Read exact published PR head
+        id: head
+        shell: bash
+        run: |
+          sha="$(jq -er '.repair.pr_head_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid repair PR head' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out published PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.head.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted verifier
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Verify repair candidate without secrets
+        shell: bash
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
+          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.head.outputs.sha }}"
+          mkdir -p evidence
+          ./sofa review-repair verify --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --workspace "$PWD/consumer" \
+            --bundle candidate/bundle.json --out evidence/checks.json
+      - name: Carry trusted check evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-review-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/checks.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Carry verified repair bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-review-verified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/bundle.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Revalidate authority and update the same draft PR
+    needs: verify
+    if: always() && needs.verify.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Download admitted review manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Download verified repair bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-verified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
+      - name: Download trusted check evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Read admitted configuration commit
+        id: base
+        shell: bash
+        run: |
+          sha="$(jq -er '.admission.base_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid admitted configuration commit' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out admitted configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted publisher
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Verify publisher source identity
+        shell: bash
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
+          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
+      # The command re-reads the Project, approved spec, owner review, PR, and
+      # ledger fence before a leased push; no model or candidate code runs here.
+      - name: Publish verified repair on the same PR
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_PUBLISH_TOKEN: ${{ secrets.SOFA_PUBLISH_TOKEN }}
+          SOFA_BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ./sofa review-repair publish --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --bundle candidate/bundle.json \
+            --evidence evidence/checks.json --base-branch "$SOFA_BASE_BRANCH"
+
+  finalize-failure:
+    name: Record bounded repair failure without model or publisher credentials
+    needs: [admit, execute, verify, publish]
+    if: always() && needs.admit.result == 'success' && (needs.execute.result == 'failure' || needs.verify.result == 'failure' || needs.publish.result == 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Only the trusted finalizer writes sofa-state.
+    steps:
+      - name: Download admitted review manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Read admitted configuration commit
+        id: base
+        shell: bash
+        run: |
+          sha="$(jq -er '.admission.base_sha' transport/manifest.json)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid admitted configuration commit' >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Check out admitted configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          persist-credentials: false
+          path: consumer
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build trusted finalizer
+        shell: bash
+        working-directory: toolkit
+        env:
+          CGO_ENABLED: '0'
+        run: go build -trimpath -o ../sofa ./cmd/sofa
+      - name: Record bounded repair-stage failure
+        shell: bash
+        env:
+          SOFA_STATE_TOKEN: ${{ github.token }}
+          SOFA_EXECUTE_RESULT: ${{ needs.execute.result }}
+          SOFA_VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
+          test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
+          if [[ "$SOFA_EXECUTE_RESULT" == failure ]]; then
+            stage=execute
+          elif [[ "$SOFA_VERIFY_RESULT" == failure ]]; then
+            stage=verify
+          else
+            stage=publish
+          fi
+          ./sofa review-repair fail --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --stage "$stage"

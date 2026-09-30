@@ -244,3 +244,157 @@ func TestReviewCommentMoveRecoveryRequiresExactSourceAndComment(t *testing.T) {
 		t.Fatalf("changed source allowed to move Project: %v", err)
 	}
 }
+
+func TestMaterialRevisionRequiresNewDiscoveryCommentAndOwnerGesture(t *testing.T) {
+	p := fixturePolicy()
+	s := fixtureSnapshot()
+	firstComment := fixtureComment(t)
+	firstTask := fixtureTask(t, s, firstComment)
+	first, _, changed, err := CaptureReview(p, s, firstComment, firstTask, nil)
+	if err != nil || !changed {
+		t.Fatalf("v1 Spec Review: %v", err)
+	}
+	s.CurrentStatus = "Backlog"
+	s.StatusOptionID = "backlog-option"
+	s.StatusUpdatedAt = s.StatusUpdatedAt.Add(time.Minute)
+	first, _, err = ApproveBacklog(p, s, firstComment, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.CurrentStatus = "Spec Review"
+	s.StatusOptionID = first.ReviewOptionID
+	s.StatusUpdatedAt = first.ReviewUpdatedAt
+	if replay, _, changed, err := CaptureReview(p, s, firstComment, firstTask, &first); err != nil || changed || replay != first {
+		t.Fatalf("replayed v1 review cleared approval: %+v, changed=%v, err=%v", replay, changed, err)
+	}
+	s.Body = "Please also handle a missing greeting argument."
+	s.IssueLastEditedAt = first.BacklogUpdatedAt.Add(time.Minute)
+	s.StatusUpdatedAt = first.BacklogUpdatedAt.Add(2 * time.Minute)
+	if err := ReadyApproved(p, s, firstComment, first); err == nil {
+		t.Fatal("material edit inherited v1 Ready approval")
+	}
+	secondComment := firstComment
+	secondComment.ID = 43
+	secondComment.CreatedAt = first.BacklogUpdatedAt.Add(3 * time.Minute)
+	secondComment.UpdatedAt = secondComment.CreatedAt
+	revisedSpec := fixtureSpec()
+	revisedSpec.Acceptance = "Given a missing argument, output Hello, friend. Given Ada, output Hello, Ada."
+	secondComment.Body, err = revisedSpec.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTask := fixtureTask(t, s, secondComment)
+	secondTask.Revision = 1
+	secondTask.StatusUpdatedAt = first.BacklogUpdatedAt.Add(2 * time.Minute)
+	secondTask.StatusOptionID = "discovery-option"
+	s.StatusUpdatedAt = first.BacklogUpdatedAt.Add(4 * time.Minute)
+	if _, _, _, err := CaptureReview(p, s, secondComment, firstTask, &first); !errors.Is(err, ErrAuthority) && !errors.Is(err, ErrRevision) {
+		t.Fatalf("stale v1 task accepted v2 comment: %v", err)
+	}
+	borrowed := secondComment
+	borrowed.ID = firstComment.ID
+	borrowedTask := secondTask
+	borrowedTask.CommentID = borrowed.ID
+	if _, _, _, err := CaptureReview(p, s, borrowed, borrowedTask, &first); !errors.Is(err, ErrRevision) {
+		t.Fatalf("edited v1 comment reused as v2 evidence: %v", err)
+	}
+	second, _, changed, err := CaptureReview(p, s, secondComment, secondTask, &first)
+	if err != nil || !changed || second.Revision != 1 || second.ApprovedDigest != "" || second.CommentID != secondComment.ID {
+		t.Fatalf("v2 Spec Review: %+v, changed=%v, err=%v", second, changed, err)
+	}
+	s.CurrentStatus = "Backlog"
+	s.StatusOptionID = "backlog-option"
+	s.StatusUpdatedAt = s.StatusUpdatedAt.Add(time.Minute)
+	if err := ReadyApproved(p, s, secondComment, second); err == nil {
+		t.Fatal("unapproved v2 entered Ready")
+	}
+	second, changed, err = ApproveBacklog(p, s, secondComment, second)
+	if err != nil || !changed || second.ApprovedDigest != second.SpecDigest {
+		t.Fatalf("v2 owner approval: %+v, changed=%v, err=%v", second, changed, err)
+	}
+	s.CurrentStatus = "Ready"
+	s.StatusOptionID = "ready-option"
+	s.StatusUpdatedAt = s.StatusUpdatedAt.Add(time.Minute)
+	if err := ReadyApproved(p, s, secondComment, second); err != nil {
+		t.Fatalf("v2 Ready rejected: %v", err)
+	}
+	if err := ReadyApproved(p, s, firstComment, first); !errors.Is(err, ErrRevision) {
+		t.Fatalf("v1 comment borrowed v2 Ready: %v", err)
+	}
+}
+
+func TestObservedRevisionArchivesPriorApprovalOnce(t *testing.T) {
+	ctx := context.Background()
+	p := fixturePolicy()
+	s := fixtureSnapshot()
+	firstComment := fixtureComment(t)
+	firstTask := fixtureTask(t, s, firstComment)
+	firstTask.StatusOptionID = "discovery-option"
+	firstTask.StatusUpdatedAt = firstComment.CreatedAt.Add(-30 * time.Second)
+	firstTask.MaxModelCalls = 2
+	firstTask.ModelCalls = 1
+	firstTask.Generation = 1
+	firstTask.CreatedAt = firstTask.StatusUpdatedAt
+	firstTask.UpdatedAt = firstComment.CreatedAt
+	first, _, _, err := CaptureReview(p, s, firstComment, firstTask, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.CurrentStatus = "Backlog"
+	s.StatusOptionID = "backlog-option"
+	s.StatusUpdatedAt = s.StatusUpdatedAt.Add(time.Minute)
+	first, _, err = ApproveBacklog(p, s, firstComment, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Body = "Please also handle a missing greeting argument."
+	s.IssueLastEditedAt = first.BacklogUpdatedAt.Add(time.Minute)
+	s.CurrentStatus = "Spec Review"
+	s.StatusOptionID = "review-option"
+	s.StatusUpdatedAt = first.BacklogUpdatedAt.Add(4 * time.Minute)
+	secondComment := firstComment
+	secondComment.ID = 43
+	secondComment.CreatedAt = first.BacklogUpdatedAt.Add(3 * time.Minute)
+	secondComment.UpdatedAt = secondComment.CreatedAt
+	revisedSpec := fixtureSpec()
+	revisedSpec.Acceptance = "Given a missing argument, output Hello, friend. Given Ada, output Hello, Ada."
+	secondComment.Body, err = revisedSpec.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTask := fixtureTask(t, s, secondComment)
+	secondTask.Revision = 1
+	secondTask.StatusOptionID = "discovery-option"
+	secondTask.StatusUpdatedAt = first.BacklogUpdatedAt.Add(2 * time.Minute)
+	secondTask.MaxModelCalls = 2
+	secondTask.ModelCalls = 2
+	secondTask.Generation = 2
+	secondTask.CreatedAt = secondTask.StatusUpdatedAt
+	secondTask.UpdatedAt = secondComment.CreatedAt
+	store := &memorySpecStore{}
+	loaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.State.Specs = map[string]state.SpecRecord{s.IssueID: first}
+	loaded.State.Discoveries = map[string]state.DiscoveryTask{s.IssueID: secondTask}
+	loaded.State.DiscoveryHistory = map[string][]state.DiscoveryTask{s.IssueID: {firstTask}}
+	if err := store.CompareAndSwap(ctx, loaded.Revision, loaded.State); err != nil {
+		t.Fatal(err)
+	}
+	reader := &fakeCommentPublisher{comments: []SpecComment{firstComment, secondComment}}
+	second, changed, err := ObserveSpecReview(ctx, reader, store, p, s)
+	if err != nil || !changed || second.Revision != 1 || second.ApprovedDigest != "" {
+		t.Fatalf("observed v2 review: %+v, changed=%v, err=%v", second, changed, err)
+	}
+	if _, changed, err := ObserveSpecReview(ctx, reader, store, p, s); err != nil || changed {
+		t.Fatalf("v2 review replay: changed=%v, err=%v", changed, err)
+	}
+	loaded, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history := loaded.State.SpecHistory[s.IssueID]; len(history) != 1 || history[0] != first || loaded.State.Specs[s.IssueID] != second {
+		t.Fatalf("prior approval overwritten or duplicated: %+v", history)
+	}
+}

@@ -37,7 +37,13 @@ each move.
 One scheduled caller should invoke the reusable reconciliation workflow every
 ten minutes, or hourly using `lifecycle.poll_minutes: 60`. Manual and event
 wakeups use the same ledger and coalesce missed ticks. A poll reads metadata
-only; no model is started for unchanged items. Active Discovery defaults to two
+only; no model is started for unchanged items. Its bounded output dispatches
+the caller-owned Discovery workflow for owner-admitted Discovery items and the
+delivery workflow for approved Ready items. The Discovery caller passes an
+exact `toolkit_sha` and targeted `issue_number` to
+`discovery.reusable.yml`; when its trusted publisher uses `github.token` for
+issue comments, pin `spec_author_id` to the public node ID of
+`github-actions[bot]`. Active Discovery defaults to two
 items and code-writing delivery to one per repository; changing either cap is
 a trusted configuration change. Child work and repair must reuse the parent's cumulative
 budget and PR identity.
@@ -63,6 +69,9 @@ The delegated disposable Project is
 [sofa disposable canary](https://github.com/users/kevinmartin/projects/2).
 Its ten Status options were installed for milestone 02 while retaining the
 existing option IDs. Its private visibility and owner node ID were verified
-through GitHub GraphQL. The Project API exposes enabled automation names but
-not their destination options; inspect those destinations in Project settings
-before accepting a live Backlog approval as authority.
+through GitHub GraphQL. The signed-in Project settings showed no collaborators.
+The built-in automations for issue close, item close, PR linked, and PR merged
+were disabled because they had moved or closed items outside Sofa's verified
+handoffs. New items still enter Inbox, and sub-issues can still be added to the
+Project. Audit those settings and Project access again if either changes before
+relying on a live Backlog approval.

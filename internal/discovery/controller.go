@@ -105,6 +105,12 @@ func ObserveSpecReview(ctx context.Context, reader CommentReader, store SpecStor
 		if ledger.State.Specs == nil {
 			ledger.State.Specs = map[string]state.SpecRecord{}
 		}
+		if previous != nil {
+			if ledger.State.SpecHistory == nil {
+				ledger.State.SpecHistory = map[string][]state.SpecRecord{}
+			}
+			ledger.State.SpecHistory[source.IssueID] = append(ledger.State.SpecHistory[source.IssueID], *previous)
+		}
 		ledger.State.Specs[source.IssueID] = record
 		err = store.CompareAndSwap(ctx, ledger.Revision, ledger.State)
 		if errors.Is(err, state.ErrConflict) {

@@ -121,6 +121,20 @@ func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.Dis
 	if prior != nil && !p.matches(s, *prior) {
 		return state.SpecRecord{}, nil, false, ErrAuthority
 	}
+	if prior == nil && task.Revision != 0 {
+		return state.SpecRecord{}, nil, false, ErrRevision
+	}
+	if prior != nil {
+		if task.Revision == prior.Revision && task.CommentID == prior.CommentID && task.SourceDigest == prior.SourceDigest && task.SpecDigest == prior.SpecDigest && s.StatusOptionID == prior.ReviewOptionID && s.StatusUpdatedAt.Equal(prior.ReviewUpdatedAt) {
+			if !currentRevision(s, c, *prior) {
+				return state.SpecRecord{}, nil, false, ErrRevision
+			}
+			return *prior, nil, false, nil
+		}
+		if prior.ApprovedDigest == "" || task.Revision != prior.Revision+1 || task.SourceDigest == prior.SourceDigest || c.ID == prior.CommentID || !task.StatusUpdatedAt.After(prior.BacklogUpdatedAt) || !c.CreatedAt.After(prior.BacklogUpdatedAt) || !s.StatusUpdatedAt.After(prior.BacklogUpdatedAt) {
+			return state.SpecRecord{}, nil, false, ErrRevision
+		}
+	}
 	source, err := sourceDigest(s)
 	if err != nil || source != task.SourceDigest || (!s.IssueLastEditedAt.IsZero() && s.IssueLastEditedAt.After(c.CreatedAt)) {
 		return state.SpecRecord{}, nil, false, ErrRevision
@@ -130,6 +144,7 @@ func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.Dis
 		return state.SpecRecord{}, nil, false, ErrRevision
 	}
 	record := state.SpecRecord{
+		Revision:         task.Revision,
 		Repository:       strings.ToLower(p.Repository),
 		IssueID:          s.IssueID,
 		Issue:            int64(s.Number),

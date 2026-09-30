@@ -5,6 +5,12 @@ paths:
   .github/workflows/work.reusable.yml:
     ignore:
       - 'unknown permission scope "copilot-requests"'
+  .github/workflows/discovery.reusable.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"'
+  .github/workflows/review.reusable.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"'
   # SC2129 only asks for a single redirect around these three output lines.
   .github/workflows/reconcile.reusable.yml:
     ignore:

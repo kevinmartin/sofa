@@ -17,6 +17,9 @@ func (e Engine) ClaimReviewRepair(ctx context.Context, id string, owner Owner, c
 		if !ok {
 			return false, ErrNotFound
 		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
+		}
 		if a.Repair == nil || a.Publication == nil || a.Repair.CandidateSHA != "" || a.Repair.CandidateDigest != "" || a.Counts.Repairs < 1 {
 			return false, fmt.Errorf("%w: repair reservation unavailable", ErrInvalid)
 		}
@@ -57,6 +60,9 @@ func (e Engine) ReserveReviewRepair(ctx context.Context, id string, intent Repai
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
 		}
 		if !intent.valid(a.Publication) || intent.CandidateSHA != "" || intent.CandidateDigest != "" {
 			return false, fmt.Errorf("%w: review repair identity", ErrInvalid)

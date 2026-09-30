@@ -70,6 +70,9 @@ func Scan(input ScanInput) ([]Effect, error) {
 	attempts := make(map[string]state.Attempt)
 	ambiguousItems := make(map[string]bool)
 	for _, attempt := range input.Ledger.Attempts {
+		if !attempt.SupersededAt.IsZero() {
+			continue
+		}
 		key := attempt.Admission.ProjectItemID
 		if _, exists := attempts[key]; exists {
 			ambiguousItems[key] = true
@@ -147,7 +150,7 @@ func Scan(input ScanInput) ([]Effect, error) {
 			continue
 		}
 		record, recordExists := input.Ledger.Specs[issue.IssueID]
-		if !input.Authority[issue.IssueID] || !recordExists || record.ApprovedDigest == "" || record.Issue != int64(issue.Number) || record.ProjectItemID != issue.ProjectItemID || record.ProjectID != issue.ProjectID || !strings.EqualFold(record.Repository, input.Repository) || attempt.Admission.SpecDigest != record.ApprovedDigest || attempt.Admission.ProjectItemID != issue.ProjectItemID || attempt.Admission.ProjectID != issue.ProjectID {
+		if !input.Authority[issue.IssueID] || !recordExists || record.ApprovedDigest == "" || record.Issue != int64(issue.Number) || record.ProjectItemID != issue.ProjectItemID || record.ProjectID != issue.ProjectID || !strings.EqualFold(record.Repository, input.Repository) || attempt.Admission.SpecDigest != record.ApprovedDigest || attempt.SpecRevision != record.Revision || !attempt.Admission.StatusUpdatedAt.After(record.BacklogUpdatedAt) || attempt.Admission.ProjectItemID != issue.ProjectItemID || attempt.Admission.ProjectID != issue.ProjectID {
 			effect.BlockedReason = "approved scope unavailable or changed"
 			effects = append(effects, effect)
 			continue

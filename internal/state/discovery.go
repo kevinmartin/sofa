@@ -47,11 +47,85 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 	err = e.update(ctx, func(s *State) (bool, error) {
 		created = false
 		if previous, ok := s.Discoveries[task.IssueID]; ok {
-			if previous.Repository != task.Repository || previous.Issue != task.Issue || previous.ProjectID != task.ProjectID || previous.ProjectItemID != task.ProjectItemID || previous.StatusOptionID != task.StatusOptionID || !previous.StatusUpdatedAt.Equal(task.StatusUpdatedAt) || previous.SourceDigest != task.SourceDigest || previous.MaxModelCalls != task.MaxModelCalls {
+			if previous.Repository != task.Repository || previous.Issue != task.Issue || previous.ProjectID != task.ProjectID || previous.ProjectItemID != task.ProjectItemID {
 				return false, ErrAdmissionChanged
 			}
-			task = previous
-			return false, nil
+			if previous.StatusOptionID == task.StatusOptionID && previous.StatusUpdatedAt.Equal(task.StatusUpdatedAt) && previous.SourceDigest == task.SourceDigest {
+				if previous.MaxModelCalls == task.MaxModelCalls {
+					task = previous
+					return false, nil
+				}
+				if task.MaxModelCalls <= previous.MaxModelCalls || previous.Phase != DiscoveryBlocked || previous.Failure != "budget" {
+					return false, ErrAdmissionChanged
+				}
+				active := 0
+				for _, other := range s.Discoveries {
+					if other.Repository == task.Repository && (other.Phase == DiscoveryPending || other.Phase == DiscoveryRunning) {
+						active++
+					}
+				}
+				if active >= maxActive {
+					return false, ErrLimit
+				}
+				previous.MaxModelCalls = task.MaxModelCalls
+				previous.Phase = DiscoveryPending
+				previous.Failure = ""
+				previous.UpdatedAt = e.now()
+				s.Discoveries[task.IssueID] = previous
+				task = previous
+				return true, nil
+			}
+			approved, ok := s.Specs[task.IssueID]
+			if !ok || previous.Phase != DiscoveryReview || approved.ApprovedDigest == "" || approved.Revision != previous.Revision || approved.Repository != previous.Repository || approved.Issue != previous.Issue || approved.ProjectID != previous.ProjectID || approved.ProjectItemID != previous.ProjectItemID || approved.SourceDigest != previous.SourceDigest || approved.SpecDigest != previous.SpecDigest || approved.CommentID != previous.CommentID || approved.CommentAuthorID != previous.CommentAuthorID || !approved.CommentCreatedAt.Equal(previous.CommentCreatedAt) || !approved.CommentUpdatedAt.Equal(previous.CommentUpdatedAt) || task.SourceDigest == previous.SourceDigest || !task.StatusUpdatedAt.After(approved.BacklogUpdatedAt) || task.MaxModelCalls < previous.MaxModelCalls {
+				return false, ErrAdmissionChanged
+			}
+			active := 0
+			for _, other := range s.Discoveries {
+				if other.Repository == task.Repository && (other.Phase == DiscoveryPending || other.Phase == DiscoveryRunning) {
+					active++
+				}
+			}
+			if active >= maxActive {
+				return false, ErrLimit
+			}
+			// The changed source and later owner Discovery transition start a new
+			// generation. Archive the completed task and fence any old delivery
+			// worker in the same CAS; its publication evidence stays intact.
+			for id, a := range s.Attempts {
+				if a.Admission.Repository != task.Repository || a.Admission.Issue != task.Issue || !a.SupersededAt.IsZero() {
+					continue
+				}
+				if a.SpecRevision != previous.Revision || a.Admission.ProjectID != task.ProjectID || a.Admission.ProjectItemID != task.ProjectItemID || a.Admission.SpecDigest != approved.ApprovedDigest {
+					return false, ErrAdmissionChanged
+				}
+				a.Owner = nil
+				a.Generation++
+				a.Phase = Blocked
+				a.Failure = "human-change"
+				a.SupersededAt = e.now()
+				a.SupersededSourceDigest = task.SourceDigest
+				a.UpdatedAt = e.now()
+				s.Attempts[id] = a
+			}
+			task.Revision = previous.Revision + 1
+			task.Generation = previous.Generation + 1
+			task.ModelCalls = previous.ModelCalls
+			task.CreatedAt = e.now()
+			task.UpdatedAt = e.now()
+			if task.ModelCalls >= task.MaxModelCalls {
+				task.Phase = DiscoveryBlocked
+				task.Failure = "budget"
+			}
+			if !task.valid() {
+				return false, fmt.Errorf("%w: revised discovery budget", ErrInvalid)
+			}
+			if s.DiscoveryHistory == nil {
+				s.DiscoveryHistory = map[string][]DiscoveryTask{}
+			}
+			s.DiscoveryHistory[task.IssueID] = append(s.DiscoveryHistory[task.IssueID], previous)
+			s.Discoveries[task.IssueID] = task
+			created = true
+			return true, nil
 		}
 		active := 0
 		for _, other := range s.Discoveries {

@@ -77,21 +77,70 @@ func TestReadyForDeliveryUsesOwnerPriorityThenIssueNumber(t *testing.T) {
 	}
 }
 
+func TestReadyForDiscoveryRespectsOwnerStatusWIPAndExistingPrompt(t *testing.T) {
+	c, err := readConfig("../../examples/consumer/.sofa.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := discoveryPolicy(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := lifecycleStatuses(c)
+	when := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	items := make([]github.ProjectWorkItem, 0, 4)
+	for number := 1; number <= 4; number++ {
+		status := statuses[lifecycle.Discovery]
+		if number == 4 {
+			status = statuses[lifecycle.Inbox]
+		}
+		items = append(items, github.ProjectWorkItem{Issue: admission.Snapshot{
+			Repository: c.Repository, RepositoryID: c.RepositoryID, IssueID: "I_" + string(rune('0'+number)), Number: number,
+			Title: "Idea", Body: "Investigate greeting behavior", Open: true, ProjectID: c.ProjectID, ProjectPrivate: true,
+			ProjectItemID: "PVTI_" + string(rune('0'+number)), CurrentStatus: status, StatusOptionID: "option", StatusUpdatedAt: when, Complete: true,
+		}})
+	}
+	ledger := state.Empty()
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("owner Discovery admission and WIP selection = %v", got)
+	}
+	first, _, err := discovery.AuthorizeDiscovery(policy, items[0].Issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := discovery.AuthorizeDiscovery(policy, items[1].Issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.Discoveries[first.IssueID] = state.DiscoveryTask{Repository: first.Repository, IssueID: first.IssueID, Issue: first.Issue, ProjectID: first.ProjectID, ProjectItemID: first.ProjectItemID, StatusOptionID: first.StatusOptionID, StatusUpdatedAt: first.StatusUpdatedAt, SourceDigest: first.SourceDigest, Phase: state.DiscoveryRunning, Owner: &state.Owner{RunID: "1", RunAttempt: 1}, ModelCalls: 1, MaxModelCalls: 1}
+	ledger.Discoveries[second.IssueID] = state.DiscoveryTask{Repository: second.Repository, IssueID: second.IssueID, Issue: second.Issue, ProjectID: second.ProjectID, ProjectItemID: second.ProjectItemID, StatusOptionID: second.StatusOptionID, StatusUpdatedAt: second.StatusUpdatedAt, SourceDigest: second.SourceDigest, Phase: state.DiscoveryPending, MaxModelCalls: 1}
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("pending reservation should retry without dispatching a new prompt: %v", got)
+	}
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, []int{2}); len(got) != 0 {
+		t.Fatalf("held pending issue was dispatched: %v", got)
+	}
+}
+
 func TestReadyForDeliveryPreservesPendingWIPBeforeNewPriority(t *testing.T) {
 	c := config.Config{Repository: "owner/repo", ProjectID: "P_1", Lifecycle: &config.Lifecycle{PriorityField: "Priority", DeliveryWIP: 1}}
+	when := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	digest := strings.Repeat("a", 64)
 	statuses := lifecycle.Statuses{lifecycle.Ready: "Ready"}
 	items := []github.ProjectWorkItem{
 		{Issue: admission.Snapshot{IssueID: "pending", Number: 9, ProjectID: "P_1", ProjectItemID: "item-9", CurrentStatus: "Ready"}, Priority: "P4", PriorityRank: 4, PriorityKnown: true, DependenciesKnown: true},
 		{Issue: admission.Snapshot{IssueID: "new", Number: 2, ProjectID: "P_1", ProjectItemID: "item-2", CurrentStatus: "Ready"}, Priority: "P0", PriorityRank: 0, PriorityKnown: true, DependenciesKnown: true},
 	}
 	ledger := state.Empty()
-	ledger.Attempts["pending"] = state.Attempt{Admission: state.Admission{Repository: c.Repository, ProjectID: c.ProjectID, ProjectItemID: "item-9", Issue: 9}, Phase: state.Pending}
+	ledger.Specs["pending"] = state.SpecRecord{Repository: c.Repository, IssueID: "pending", Issue: 9, ProjectID: c.ProjectID, ProjectItemID: "item-9", Revision: 1, ApprovedDigest: digest, BacklogUpdatedAt: when}
+	admissionRecord := state.Admission{Repository: c.Repository, ProjectID: c.ProjectID, ProjectItemID: "item-9", Issue: 9, SpecDigest: digest, StatusUpdatedAt: when.Add(time.Minute)}
+	ledger.Attempts["pending"] = state.Attempt{Admission: admissionRecord, SpecRevision: 1, Phase: state.Pending}
 	authority := map[string]bool{"pending": true, "new": true}
 	got := readyForDelivery(c, items, ledger, authority, statuses, nil)
 	if len(got) != 1 || got[0] != 9 {
 		t.Fatalf("new high-priority item displaced occupied WIP slot: %v", got)
 	}
-	ledger.Attempts["pending"] = state.Attempt{Admission: state.Admission{Repository: c.Repository, ProjectID: c.ProjectID, ProjectItemID: "item-9", Issue: 9}, Phase: state.Executing, Owner: &state.Owner{RunID: "10", RunAttempt: 1}}
+	ledger.Attempts["pending"] = state.Attempt{Admission: admissionRecord, SpecRevision: 1, Phase: state.Executing, Owner: &state.Owner{RunID: "10", RunAttempt: 1}}
 	got = readyForDelivery(c, items, ledger, authority, statuses, nil)
 	if len(got) != 0 {
 		t.Fatalf("active worker did not hold WIP: %v", got)
@@ -111,17 +160,28 @@ func TestBoardSnapshotPreservesProjectIdentity(t *testing.T) {
 }
 
 func TestAttemptForItemFailsClosedOnAmbiguousOrWrongIdentity(t *testing.T) {
-	issue := admission.Snapshot{ProjectID: "P_1", ProjectItemID: "item-1", Number: 7}
+	when := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	digest := strings.Repeat("a", 64)
+	issue := admission.Snapshot{IssueID: "I_7", ProjectID: "P_1", ProjectItemID: "item-1", Number: 7}
 	ledger := state.Empty()
-	ledger.Attempts["first"] = state.Attempt{Admission: state.Admission{Repository: "owner/repo", ProjectID: "P_1", ProjectItemID: "item-1", Issue: 7}}
+	ledger.Specs[issue.IssueID] = state.SpecRecord{Repository: "owner/repo", IssueID: issue.IssueID, Issue: 7, ProjectID: issue.ProjectID, ProjectItemID: issue.ProjectItemID, Revision: 1, ApprovedDigest: digest, BacklogUpdatedAt: when}
+	first := state.Attempt{Admission: state.Admission{Repository: "owner/repo", ProjectID: "P_1", ProjectItemID: "item-1", Issue: 7, SpecDigest: digest, StatusUpdatedAt: when.Add(time.Minute)}, SpecRevision: 1}
+	ledger.Attempts["first"] = first
 	if _, found, err := attemptForItem(ledger, "owner/repo", issue); err != nil || !found {
 		t.Fatalf("exact attempt unavailable: found=%t err=%v", found, err)
 	}
-	ledger.Attempts["second"] = state.Attempt{Admission: state.Admission{Repository: "owner/repo", ProjectID: "P_1", ProjectItemID: "item-1", Issue: 7}}
+	ledger.Attempts["second"] = first
 	if _, found, err := attemptForItem(ledger, "owner/repo", issue); err == nil || found {
 		t.Fatalf("ambiguous attempt selected: found=%t err=%v", found, err)
 	}
+	prior := first
+	prior.SupersededAt = when.Add(2 * time.Minute)
+	ledger.Attempts["first"] = prior
+	if _, found, err := attemptForItem(ledger, "owner/repo", issue); err != nil || !found {
+		t.Fatalf("superseded historical attempt hid current one: found=%t err=%v", found, err)
+	}
 	delete(ledger.Attempts, "second")
+	ledger.Attempts["first"] = first
 	issue.Number = 8
 	if _, found, err := attemptForItem(ledger, "owner/repo", issue); err == nil || found {
 		t.Fatalf("wrong issue attempt selected: found=%t err=%v", found, err)

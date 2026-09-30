@@ -29,6 +29,7 @@ type lifecycleReconcileResult struct {
 	Claimed     bool  `json:"claimed"`
 	Generation  int64 `json:"generation,omitempty"`
 	MissedTicks int64 `json:"missed_ticks,omitempty"`
+	Discovery   []int `json:"discovery_issue_numbers"`
 	Ready       []int `json:"ready_issue_numbers"`
 	Held        []int `json:"held_issue_numbers"`
 	Moved       []int `json:"moved_issue_numbers"`
@@ -84,7 +85,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	if err != nil {
 		return err
 	}
-	result := lifecycleReconcileResult{Claimed: claim.Claimed, Generation: claim.Generation, MissedTicks: claim.Missed, Ready: []int{}, Held: []int{}, Moved: []int{}}
+	result := lifecycleReconcileResult{Claimed: claim.Claimed, Generation: claim.Generation, MissedTicks: claim.Missed, Discovery: []int{}, Ready: []int{}, Held: []int{}, Moved: []int{}}
 	if !claim.Claimed {
 		return writeJSON(opts.outPath, result)
 	}
@@ -250,6 +251,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			}
 		}
 	}
+	result.Discovery = readyForDiscovery(c, items, ledger.State, policy, statuses, result.Held)
 	result.Ready = readyForDelivery(c, items, ledger.State, authority, statuses, result.Held)
 	result.Held = uniqueInts(result.Held)
 	result.Moved = uniqueInts(result.Moved)
@@ -272,19 +274,23 @@ func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine s
 }
 
 func attemptForItem(ledger state.State, repository string, issue admission.Snapshot) (state.Attempt, bool, error) {
-	var selected state.Attempt
-	found := false
+	selected, found, err := state.CurrentAttemptForIssue(ledger, issue.IssueID)
+	if err != nil {
+		return state.Attempt{}, false, err
+	}
+	if found {
+		if !strings.EqualFold(selected.Admission.Repository, repository) || selected.Admission.ProjectID != issue.ProjectID || selected.Admission.ProjectItemID != issue.ProjectItemID || selected.Admission.Issue != int64(issue.Number) {
+			return state.Attempt{}, false, errors.New("current attempt Project identity changed")
+		}
+		return selected, true, nil
+	}
 	for _, attempt := range ledger.Attempts {
-		if attempt.Admission.ProjectItemID != issue.ProjectItemID {
+		if !attempt.SupersededAt.IsZero() || attempt.Admission.ProjectItemID != issue.ProjectItemID {
 			continue
 		}
-		if found || !strings.EqualFold(attempt.Admission.Repository, repository) || attempt.Admission.ProjectID != issue.ProjectID || attempt.Admission.Issue != int64(issue.Number) {
-			return state.Attempt{}, false, errors.New("ambiguous Project item attempt")
-		}
-		selected = attempt
-		found = true
+		return state.Attempt{}, false, errors.New("unmatched current Project item attempt")
 	}
-	return selected, found, nil
+	return state.Attempt{}, false, nil
 }
 
 func boardFromSnapshot(c config.Config, stage lifecycle.Stage, item admission.Snapshot) state.BoardProjection {
@@ -375,6 +381,79 @@ func revertMessageReferences(message, mergedSHA string) bool {
 	return strings.Contains(strings.ToLower(message), "this reverts commit "+strings.ToLower(mergedSHA))
 }
 
+// readyForDiscovery queues only owner-admitted Project items with an available
+// WIP slot. A pending reservation is retried before new work; a running or
+// already presented task never creates a second model prompt on a poll.
+func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger state.State, policy discovery.Policy, statuses lifecycle.Statuses, held []int) []int {
+	if c.Lifecycle == nil {
+		return nil
+	}
+	cap := int64(min(c.Limits.MaxAgentTurns, 20))
+	wip := c.Lifecycle.EffectiveDiscoveryWIP()
+	active := 0
+	for _, task := range ledger.Discoveries {
+		if strings.EqualFold(task.Repository, c.Repository) && (task.Phase == state.DiscoveryPending || task.Phase == state.DiscoveryRunning) {
+			active++
+		}
+	}
+	heldNumbers := make(map[int]bool, len(held))
+	for _, number := range held {
+		heldNumbers[number] = true
+	}
+	pending := make([]int, 0)
+	fresh := make([]int, 0)
+	for _, item := range items {
+		issue := item.Issue
+		stage, known := statuses.StageFor(issue.CurrentStatus)
+		if !known || stage != lifecycle.Discovery || heldNumbers[issue.Number] {
+			continue
+		}
+		admitted, _, err := discovery.AuthorizeDiscovery(policy, issue)
+		if err != nil {
+			continue
+		}
+		task, exists := ledger.Discoveries[issue.IssueID]
+		if !exists {
+			fresh = append(fresh, issue.Number)
+			continue
+		}
+		if !strings.EqualFold(task.Repository, admitted.Repository) || task.Issue != admitted.Issue || task.ProjectID != admitted.ProjectID || task.ProjectItemID != admitted.ProjectItemID {
+			continue
+		}
+		sameSource := task.SourceDigest == admitted.SourceDigest && task.StatusOptionID == admitted.StatusOptionID && task.StatusUpdatedAt.Equal(admitted.StatusUpdatedAt)
+		if sameSource {
+			if task.Phase == state.DiscoveryPending && task.Owner == nil && task.Publication == nil && task.ModelCalls < cap && task.MaxModelCalls == cap {
+				pending = append(pending, issue.Number)
+			} else if task.Phase == state.DiscoveryBlocked && task.Failure == "budget" && cap > task.MaxModelCalls {
+				fresh = append(fresh, issue.Number)
+			}
+			continue
+		}
+		record, approved := ledger.Specs[issue.IssueID]
+		if task.Phase == state.DiscoveryReview && approved && record.ApprovedDigest == task.SpecDigest && record.Revision == task.Revision && task.SourceDigest != admitted.SourceDigest && admitted.StatusUpdatedAt.After(record.BacklogUpdatedAt) && cap >= task.MaxModelCalls {
+			fresh = append(fresh, issue.Number)
+		}
+	}
+	sort.Ints(pending)
+	sort.Ints(fresh)
+	result := make([]int, 0, wip)
+	for _, number := range pending {
+		if len(result) >= wip || len(result) >= 20 {
+			break
+		}
+		result = append(result, number)
+	}
+	freshSlots := max(wip-active, 0)
+	for _, number := range fresh {
+		if len(result) >= 20 || freshSlots == 0 {
+			break
+		}
+		result = append(result, number)
+		freshSlots--
+	}
+	return result
+}
+
 func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger state.State, authority map[string]bool, statuses lifecycle.Statuses, held []int) []int {
 	type candidate struct {
 		number int
@@ -396,7 +475,7 @@ func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger st
 	occupied := 0
 	pending := make(map[string]bool)
 	for _, attempt := range ledger.Attempts {
-		if !strings.EqualFold(attempt.Admission.Repository, c.Repository) || attempt.Admission.ProjectID != c.ProjectID || attempt.Phase == state.Draft || attempt.Phase == state.Blocked || attempt.Phase == state.Deferred {
+		if !attempt.SupersededAt.IsZero() || !strings.EqualFold(attempt.Admission.Repository, c.Repository) || attempt.Admission.ProjectID != c.ProjectID || attempt.Phase == state.Draft || attempt.Phase == state.Blocked || attempt.Phase == state.Deferred {
 			continue
 		}
 		occupied++

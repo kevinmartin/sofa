@@ -50,8 +50,8 @@ func (e Engine) update(ctx context.Context, f func(*State) (bool, error)) error 
 }
 
 // Admit persists dispatch intent before any external dispatch. Same-authority
-// replay returns the original attempt; changed snapshots cannot mint new work.
-// Superseding an issue's existing authorization is intentionally not automatic.
+// replay returns the original attempt. A later attempt requires a separately
+// approved Discovery revision and an atomically superseded predecessor.
 func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (attempt Attempt, created bool, err error) {
 	if err = admission.Validate(); err != nil {
 		return
@@ -65,25 +65,57 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 		created = false
 		if a, ok := s.Attempts[id]; ok {
 			attempt = a
-			if a.Admission != admission || a.Limits != limits {
+			if a.Admission != admission || a.Limits != limits || !a.SupersededAt.IsZero() {
 				return false, ErrAdmissionChanged
 			}
 			return false, nil
 		}
+		var prior *Attempt
 		for _, a := range s.Attempts {
 			if a.Admission.Repository == admission.Repository && a.Admission.Issue == admission.Issue {
+				if prior == nil || a.SpecRevision > prior.SpecRevision {
+					copy := a
+					prior = &copy
+				} else if a.SpecRevision == prior.SpecRevision {
+					return false, ErrAdmissionChanged
+				}
+			}
+		}
+		counts := Counters{}
+		revision := int64(0)
+		var approved *SpecRecord
+		for _, record := range s.Specs {
+			if record.Repository == admission.Repository && record.Issue == admission.Issue {
+				if approved != nil {
+					return false, ErrAdmissionChanged
+				}
+				copy := record
+				approved = &copy
+			}
+		}
+		if approved != nil {
+			if approved.ApprovedDigest != admission.SpecDigest || approved.ProjectID != admission.ProjectID || approved.ProjectItemID != admission.ProjectItemID || !admission.StatusUpdatedAt.After(approved.BacklogUpdatedAt) {
 				return false, ErrAdmissionChanged
 			}
+			revision = approved.Revision
+		}
+		if prior != nil {
+			if prior.SupersededAt.IsZero() || approved == nil || approved.Revision != prior.SpecRevision+1 || prior.SupersededSourceDigest != approved.SourceDigest || !approved.BacklogUpdatedAt.After(prior.Admission.StatusUpdatedAt) || !limits.permits(prior.Counts) {
+				return false, ErrAdmissionChanged
+			}
+			counts = prior.Counts
 		}
 		now := e.now()
 		attempt = Attempt{
-			ID:        id,
-			Admission: admission,
-			Phase:     Pending,
-			Dispatch:  "pending",
-			Limits:    limits,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:           id,
+			Admission:    admission,
+			SpecRevision: revision,
+			Phase:        Pending,
+			Dispatch:     "pending",
+			Limits:       limits,
+			Counts:       counts,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		}
 		s.Attempts[id] = attempt
 		created = true
@@ -102,6 +134,9 @@ func (e Engine) MarkDispatched(ctx context.Context, id string) error {
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
 		}
 		if a.Dispatch != "pending" {
 			return false, nil
@@ -150,6 +185,9 @@ func owned(s *State, f Fence) (Attempt, error) {
 	a, ok := s.Attempts[f.AttemptID]
 	if !ok {
 		return a, ErrNotFound
+	}
+	if !a.SupersededAt.IsZero() {
+		return a, ErrStale
 	}
 	if a.Owner == nil || *a.Owner != f.Owner || a.Generation != f.Generation {
 		return a, ErrStale
@@ -257,6 +295,9 @@ func (e Engine) DiscardUnavailableCheckpoint(ctx context.Context, id string, exp
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
 		}
 		if a.Phase != Pending || a.Owner != nil || a.Publication != nil {
 			return false, ErrClaimed
@@ -377,6 +418,9 @@ func (e Engine) Recover(ctx context.Context, id string, proof RunProof) error {
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
 		}
 		if a.Owner == nil || *a.Owner != proof.Owner {
 			return false, ErrStale

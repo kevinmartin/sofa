@@ -120,20 +120,23 @@ func (r RepairIntent) valid(p *Publication) bool {
 }
 
 type Attempt struct {
-	ID          string        `json:"id"`
-	Admission   Admission     `json:"admission"`
-	Phase       Phase         `json:"phase"`
-	Generation  int64         `json:"generation"`
-	Owner       *Owner        `json:"owner,omitempty"`
-	Dispatch    string        `json:"dispatch"`
-	Limits      Limits        `json:"limits"`
-	Counts      Counters      `json:"counts"`
-	Checkpoint  *Checkpoint   `json:"checkpoint,omitempty"`
-	Publication *Publication  `json:"publication,omitempty"`
-	Repair      *RepairIntent `json:"repair,omitempty"`
-	Failure     string        `json:"failure,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	ID                     string        `json:"id"`
+	Admission              Admission     `json:"admission"`
+	SpecRevision           int64         `json:"spec_revision,omitempty"`
+	SupersededAt           time.Time     `json:"superseded_at,omitempty"`
+	SupersededSourceDigest string        `json:"superseded_source_digest,omitempty"`
+	Phase                  Phase         `json:"phase"`
+	Generation             int64         `json:"generation"`
+	Owner                  *Owner        `json:"owner,omitempty"`
+	Dispatch               string        `json:"dispatch"`
+	Limits                 Limits        `json:"limits"`
+	Counts                 Counters      `json:"counts"`
+	Checkpoint             *Checkpoint   `json:"checkpoint,omitempty"`
+	Publication            *Publication  `json:"publication,omitempty"`
+	Repair                 *RepairIntent `json:"repair,omitempty"`
+	Failure                string        `json:"failure,omitempty"`
+	CreatedAt              time.Time     `json:"created_at"`
+	UpdatedAt              time.Time     `json:"updated_at"`
 }
 
 // Observation is compact machine-observed metadata, not model-generated prose.
@@ -156,6 +159,7 @@ type Observation struct {
 // can approve that exact canonical specification. Neither field is an actor
 // claim: Project write access is the approval boundary.
 type SpecRecord struct {
+	Revision         int64     `json:"revision,omitempty"`
 	Repository       string    `json:"repository"`
 	IssueID          string    `json:"issue_id"`
 	Issue            int64     `json:"issue"`
@@ -188,6 +192,7 @@ const (
 // DiscoveryTask reserves one issue's bounded research work before a model runs.
 // Its source and Project admission revision cannot be replaced on retry.
 type DiscoveryTask struct {
+	Revision         int64                 `json:"revision,omitempty"`
 	Repository       string                `json:"repository"`
 	IssueID          string                `json:"issue_id"`
 	Issue            int64                 `json:"issue"`
@@ -267,7 +272,7 @@ func validStage(stage string) bool {
 }
 
 func (d DiscoveryTask) valid() bool {
-	if !repoPattern.MatchString(d.Repository) || !reference(d.IssueID) || d.Issue < 1 || !reference(d.ProjectID) || !reference(d.ProjectItemID) || !reference(d.StatusOptionID) || d.StatusUpdatedAt.IsZero() || !digestPattern.MatchString(d.SourceDigest) || d.Generation < 0 || d.ModelCalls < 0 || d.MaxModelCalls < 1 || d.MaxModelCalls > 20 || d.ModelCalls > d.MaxModelCalls || d.CreatedAt.IsZero() || d.UpdatedAt.Before(d.CreatedAt) {
+	if !repoPattern.MatchString(d.Repository) || !reference(d.IssueID) || d.Issue < 1 || !reference(d.ProjectID) || !reference(d.ProjectItemID) || !reference(d.StatusOptionID) || d.StatusUpdatedAt.IsZero() || !digestPattern.MatchString(d.SourceDigest) || d.Revision < 0 || d.Generation < 0 || d.ModelCalls < 0 || d.MaxModelCalls < 1 || d.MaxModelCalls > 20 || d.ModelCalls > d.MaxModelCalls || d.CreatedAt.IsZero() || d.UpdatedAt.Before(d.CreatedAt) {
 		return false
 	}
 	if d.Owner != nil && (!validOwner(*d.Owner) || d.Generation == 0 || d.Phase != DiscoveryRunning) {
@@ -291,7 +296,7 @@ func (d DiscoveryTask) valid() bool {
 }
 
 func (r SpecRecord) valid() bool {
-	if !repoPattern.MatchString(r.Repository) || !reference(r.IssueID) || r.Issue < 1 || !reference(r.ProjectID) || !reference(r.ProjectItemID) || !digestPattern.MatchString(r.SourceDigest) || !digestPattern.MatchString(r.SpecDigest) || r.CommentID < 1 || !reference(r.CommentAuthorID) || r.CommentCreatedAt.IsZero() || r.CommentUpdatedAt.Before(r.CommentCreatedAt) || !reference(r.ReviewOptionID) || r.ReviewUpdatedAt.IsZero() {
+	if r.Revision < 0 || !repoPattern.MatchString(r.Repository) || !reference(r.IssueID) || r.Issue < 1 || !reference(r.ProjectID) || !reference(r.ProjectItemID) || !digestPattern.MatchString(r.SourceDigest) || !digestPattern.MatchString(r.SpecDigest) || r.CommentID < 1 || !reference(r.CommentAuthorID) || r.CommentCreatedAt.IsZero() || r.CommentUpdatedAt.Before(r.CommentCreatedAt) || !reference(r.ReviewOptionID) || r.ReviewUpdatedAt.IsZero() {
 		return false
 	}
 	if r.ApprovedDigest == "" {
@@ -301,13 +306,15 @@ func (r SpecRecord) valid() bool {
 }
 
 type State struct {
-	Version      int                        `json:"version"`
-	Attempts     map[string]Attempt         `json:"attempts"`
-	Observations []Observation              `json:"observations"`
-	Specs        map[string]SpecRecord      `json:"specs,omitempty"`
-	Discoveries  map[string]DiscoveryTask   `json:"discoveries,omitempty"`
-	Projections  map[string]BoardProjection `json:"projections,omitempty"`
-	Poll         *PollCursor                `json:"poll,omitempty"`
+	Version          int                        `json:"version"`
+	Attempts         map[string]Attempt         `json:"attempts"`
+	Observations     []Observation              `json:"observations"`
+	Specs            map[string]SpecRecord      `json:"specs,omitempty"`
+	SpecHistory      map[string][]SpecRecord    `json:"spec_history,omitempty"`
+	Discoveries      map[string]DiscoveryTask   `json:"discoveries,omitempty"`
+	DiscoveryHistory map[string][]DiscoveryTask `json:"discovery_history,omitempty"`
+	Projections      map[string]BoardProjection `json:"projections,omitempty"`
+	Poll             *PollCursor                `json:"poll,omitempty"`
 }
 
 type Snapshot struct {
@@ -322,12 +329,14 @@ type Store interface {
 
 func Empty() State {
 	return State{
-		Version:      Version,
-		Attempts:     map[string]Attempt{},
-		Observations: []Observation{},
-		Specs:        map[string]SpecRecord{},
-		Discoveries:  map[string]DiscoveryTask{},
-		Projections:  map[string]BoardProjection{},
+		Version:          Version,
+		Attempts:         map[string]Attempt{},
+		Observations:     []Observation{},
+		Specs:            map[string]SpecRecord{},
+		SpecHistory:      map[string][]SpecRecord{},
+		Discoveries:      map[string]DiscoveryTask{},
+		DiscoveryHistory: map[string][]DiscoveryTask{},
+		Projections:      map[string]BoardProjection{},
 	}
 }
 
@@ -410,8 +419,11 @@ func (s State) Validate() error {
 		return fmt.Errorf("%w: ledger version or attempts", ErrInvalid)
 	}
 	for id, a := range s.Attempts {
-		if id != a.ID || id != AttemptID(a.Admission) || a.Admission.Validate() != nil || !a.Limits.valid() || !a.Limits.permits(a.Counts) || a.Generation < 0 || (a.Owner != nil && (!validOwner(*a.Owner) || a.Generation == 0)) || a.CreatedAt.IsZero() || a.UpdatedAt.Before(a.CreatedAt) {
+		if id != a.ID || id != AttemptID(a.Admission) || a.Admission.Validate() != nil || !a.Limits.valid() || !a.Limits.permits(a.Counts) || a.SpecRevision < 0 || a.Generation < 0 || (a.Owner != nil && (!validOwner(*a.Owner) || a.Generation == 0)) || a.CreatedAt.IsZero() || a.UpdatedAt.Before(a.CreatedAt) {
 			return fmt.Errorf("%w: attempt metadata", ErrInvalid)
+		}
+		if a.SupersededAt.IsZero() != (a.SupersededSourceDigest == "") || !a.SupersededAt.IsZero() && (!digestPattern.MatchString(a.SupersededSourceDigest) || a.Owner != nil || a.Phase != Blocked || a.Failure != "human-change") {
+			return fmt.Errorf("%w: superseded attempt", ErrInvalid)
 		}
 		switch a.Phase {
 		case Pending, Executing, Validating, Publishing, Draft, Blocked, Deferred:
@@ -432,13 +444,71 @@ func (s State) Validate() error {
 		}
 	}
 	for id, record := range s.Specs {
-		if id != record.IssueID || !record.valid() {
+		if id != record.IssueID || !record.valid() || record.Revision != int64(len(s.SpecHistory[id])) {
 			return fmt.Errorf("%w: specification approval", ErrInvalid)
 		}
 	}
+	for id, history := range s.SpecHistory {
+		if len(history) > 0 {
+			if _, ok := s.Specs[id]; !ok {
+				return fmt.Errorf("%w: orphaned specification history", ErrInvalid)
+			}
+		}
+		for i, record := range history {
+			if id != record.IssueID || !record.valid() || record.ApprovedDigest == "" || record.Revision != int64(i) {
+				return fmt.Errorf("%w: specification history", ErrInvalid)
+			}
+			if i > 0 {
+				previous := history[i-1]
+				if record.Repository != previous.Repository || record.Issue != previous.Issue || record.ProjectID != previous.ProjectID || record.ProjectItemID != previous.ProjectItemID || record.SourceDigest == previous.SourceDigest || record.CommentID == previous.CommentID || !record.ReviewUpdatedAt.After(previous.BacklogUpdatedAt) {
+					return fmt.Errorf("%w: specification history identity", ErrInvalid)
+				}
+			}
+		}
+		if current, ok := s.Specs[id]; ok {
+			if current.Revision != int64(len(history)) {
+				return fmt.Errorf("%w: specification revision", ErrInvalid)
+			}
+			if len(history) > 0 {
+				previous := history[len(history)-1]
+				if current.Repository != previous.Repository || current.Issue != previous.Issue || current.ProjectID != previous.ProjectID || current.ProjectItemID != previous.ProjectItemID || current.SourceDigest == previous.SourceDigest || current.CommentID == previous.CommentID || !current.ReviewUpdatedAt.After(previous.BacklogUpdatedAt) {
+					return fmt.Errorf("%w: specification revision identity", ErrInvalid)
+				}
+			}
+		}
+	}
 	for id, discovery := range s.Discoveries {
-		if id != discovery.IssueID || !discovery.valid() {
+		if id != discovery.IssueID || !discovery.valid() || discovery.Revision != int64(len(s.DiscoveryHistory[id])) {
 			return fmt.Errorf("%w: discovery task", ErrInvalid)
+		}
+	}
+	for id, history := range s.DiscoveryHistory {
+		if len(history) > 0 {
+			if _, ok := s.Discoveries[id]; !ok {
+				return fmt.Errorf("%w: orphaned discovery history", ErrInvalid)
+			}
+		}
+		for i, task := range history {
+			if id != task.IssueID || !task.valid() || task.Phase != DiscoveryReview || task.Revision != int64(i) {
+				return fmt.Errorf("%w: discovery history", ErrInvalid)
+			}
+			if i > 0 {
+				previous := history[i-1]
+				if task.Repository != previous.Repository || task.Issue != previous.Issue || task.ProjectID != previous.ProjectID || task.ProjectItemID != previous.ProjectItemID || task.SourceDigest == previous.SourceDigest || task.CommentID == previous.CommentID || task.ModelCalls < previous.ModelCalls || !task.StatusUpdatedAt.After(previous.StatusUpdatedAt) {
+					return fmt.Errorf("%w: discovery history identity", ErrInvalid)
+				}
+			}
+		}
+		if current, ok := s.Discoveries[id]; ok {
+			if current.Revision != int64(len(history)) {
+				return fmt.Errorf("%w: discovery revision", ErrInvalid)
+			}
+			if len(history) > 0 {
+				previous := history[len(history)-1]
+				if current.Repository != previous.Repository || current.Issue != previous.Issue || current.ProjectID != previous.ProjectID || current.ProjectItemID != previous.ProjectItemID || current.SourceDigest == previous.SourceDigest || current.CommentID > 0 && current.CommentID == previous.CommentID || current.ModelCalls < previous.ModelCalls || !current.StatusUpdatedAt.After(previous.StatusUpdatedAt) {
+					return fmt.Errorf("%w: discovery revision identity", ErrInvalid)
+				}
+			}
 		}
 	}
 	for id, projection := range s.Projections {
