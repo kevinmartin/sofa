@@ -15,6 +15,7 @@ type RepositoryFacts struct {
 	TestFiles     int      `json:"test_files"`
 	SourceFiles   int      `json:"source_files"`
 	RelatedIssues []int64  `json:"related_issue_numbers"`
+	Truncated     bool     `json:"truncated"`
 }
 
 // GatherFacts walks only a checkout's names and modes. It does not execute or
@@ -37,6 +38,15 @@ func GatherFacts(root string, related []int64) (string, error) {
 	}
 	sort.Slice(facts.RelatedIssues, func(i, j int) bool { return facts.RelatedIssues[i] < facts.RelatedIssues[j] })
 	seen := 0
+	pathBytes := 0
+	addPath := func(paths *[]string, path string) {
+		if len(*paths) >= 100 || pathBytes+len(path) > 32<<10 {
+			facts.Truncated = true
+			return
+		}
+		*paths = append(*paths, path)
+		pathBytes += len(path)
+	}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -49,7 +59,8 @@ func GatherFacts(root string, related []int64) (string, error) {
 		}
 		seen++
 		if seen > 10000 {
-			return errors.New("repository fact scan exceeds bound")
+			facts.Truncated = true
+			return filepath.SkipAll
 		}
 		if entry.IsDir() {
 			return nil
@@ -60,11 +71,11 @@ func GatherFacts(root string, related []int64) (string, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		if strings.HasPrefix(rel, ".github/workflows/") && (strings.HasSuffix(rel, ".yml") || strings.HasSuffix(rel, ".yaml")) {
-			facts.WorkflowPaths = append(facts.WorkflowPaths, rel)
+			addPath(&facts.WorkflowPaths, rel)
 		}
 		switch entry.Name() {
 		case "go.mod", "package.json", "pyproject.toml", "Cargo.toml", "pom.xml", "build.gradle", "requirements.txt":
-			facts.ManifestPaths = append(facts.ManifestPaths, rel)
+			addPath(&facts.ManifestPaths, rel)
 		}
 		if strings.HasSuffix(rel, "_test.go") || strings.HasSuffix(rel, ".test.ts") || strings.HasSuffix(rel, ".spec.ts") || strings.HasSuffix(rel, ".test.js") || strings.HasSuffix(rel, ".spec.js") {
 			facts.TestFiles++

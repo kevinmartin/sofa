@@ -268,7 +268,7 @@ jobs:
   finalize-failure:
     name: Bound a failed Discovery turn
     needs: [admit, generate, publish]
-    if: always() && needs.admit.outputs.dispatch == 'true' && (needs.generate.result == 'failure' || needs.publish.result == 'failure')
+    if: always() && needs.admit.outputs.dispatch == 'true' && (contains(fromJSON('["failure","cancelled"]'), needs.generate.result) || contains(fromJSON('["failure","cancelled"]'), needs.publish.result))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

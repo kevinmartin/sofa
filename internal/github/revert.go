@@ -32,8 +32,11 @@ func (c *Client) VerifiedRevert(ctx context.Context, repository, mergedSHA, reve
 	if err != nil {
 		return false, err
 	}
-	if len(merged.Parents) < 1 || len(revert.Parents) != 1 || merged.Tree.SHA == "" || revert.Tree.SHA == "" {
+	if len(merged.Parents) < 1 || merged.Tree.SHA == "" || revert.Tree.SHA == "" {
 		return false, errors.New("revert commit ancestry unavailable")
+	}
+	if len(revert.Parents) != 1 {
+		return false, nil
 	}
 	mergedParent, err := c.commit(ctx, repository, merged.Parents[0].SHA)
 	if err != nil {

@@ -50,3 +50,18 @@ func TestPollClaimCoalescesOverlappingAndMissedRuns(t *testing.T) {
 		t.Fatalf("missed windows did not coalesce: %+v, %v", missed, err)
 	}
 }
+
+func TestPollClaimClampsSmallRunnerSkewButRejectsLargeJump(t *testing.T) {
+	engine := Engine{Store: &MemoryStore{}}
+	base := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	if _, err := engine.ClaimPoll(context.Background(), base, 10*time.Minute, ""); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := engine.ClaimPoll(context.Background(), base.Add(-10*time.Second), 10*time.Minute, "")
+	if err != nil || claim.Claimed || claim.Generation != 1 || claim.Next != base.Add(10*time.Minute) {
+		t.Fatalf("small skew did not coalesce: %+v, %v", claim, err)
+	}
+	if _, err := engine.ClaimPoll(context.Background(), base.Add(-2*time.Minute), 10*time.Minute, ""); err == nil {
+		t.Fatalf("large backward jump accepted: %v", err)
+	}
+}

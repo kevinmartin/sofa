@@ -32,7 +32,11 @@ func (e Engine) ClaimPoll(ctx context.Context, now time.Time, interval time.Dura
 			cursor = *s.Poll
 		}
 		if !cursor.LastPoll.IsZero() && now.Before(cursor.LastPoll) {
-			return false, errors.New("poll clock moved backward")
+			if cursor.LastPoll.Sub(now) > time.Minute {
+				return false, errors.New("poll clock moved backward")
+			}
+			// Coalesce small runner clock skew without moving the cursor back.
+			now = cursor.LastPoll
 		}
 		timeDue := cursor.LastPoll.IsZero() || !now.Before(cursor.LastPoll.Add(interval))
 		wakeDue := wakeID != "" && wakeID != cursor.LastWakeID

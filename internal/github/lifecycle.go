@@ -223,7 +223,9 @@ func (c *Client) IsAncestor(ctx context.Context, repository, ancestor, descendan
 	var comparison struct {
 		Status string `json:"status"`
 	}
-	path := "/repos/" + repository + "/compare/" + url.PathEscape(ancestor) + "..." + url.PathEscape(descendant)
+	// GitHub returns changed files (and potentially large patches) only on the
+	// first comparison page. The status remains available on later pages.
+	path := "/repos/" + repository + "/compare/" + url.PathEscape(ancestor) + "..." + url.PathEscape(descendant) + "?per_page=1&page=2"
 	if err := c.Request(ctx, http.MethodGet, path, nil, &comparison); err != nil {
 		return false, err
 	}

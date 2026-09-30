@@ -150,6 +150,16 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	if err != nil {
 		return err
 	}
+	// Reconcile terminal Discovery owners even when their workflow could not
+	// finalize. Only the exact Actions attempt can release its durable claim.
+	recovered, recoveryHeld := recoverStoppedDiscoveries(ctx, ledgerClient, engine, c, items, ledger.State, statuses)
+	result.Held = append(result.Held, recoveryHeld...)
+	if recovered {
+		ledger, err = store.Load(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	// A Discovery presenter may have published and ledgered its exact spec
 	// comment before an Actions interruption prevented the Project move. Only
 	// that durable task plus a re-read matching comment can resume the move.
@@ -451,6 +461,9 @@ func observeCompletionCorrections(ctx context.Context, reader completionReader, 
 			continue
 		}
 		if err := release.ObserveRevert(ctx, reader, engine, attempt, pull, commit.SHA, defaultHead, time.Now().UTC()); err != nil {
+			if errors.Is(err, release.ErrUnverifiedRevert) {
+				continue
+			}
 			return err
 		}
 	}
@@ -459,6 +472,43 @@ func observeCompletionCorrections(ctx context.Context, reader completionReader, 
 
 func revertMessageReferences(message, mergedSHA string) bool {
 	return strings.Contains(strings.ToLower(message), "this reverts commit "+strings.ToLower(mergedSHA))
+}
+
+type discoveryRunProofReader interface {
+	RunProof(context.Context, string, state.Owner) (state.RunProof, error)
+}
+
+// Recover only terminal claims for current Discovery items. API failures hold
+// their own item; a live owner never yields a second prompt or a WIP slot.
+func recoverStoppedDiscoveries(ctx context.Context, reader discoveryRunProofReader, engine state.Engine, c config.Config, items []github.ProjectWorkItem, ledger state.State, statuses lifecycle.Statuses) (bool, []int) {
+	recovered := false
+	held := make([]int, 0)
+	for _, item := range items {
+		issue := item.Issue
+		stage, known := statuses.StageFor(issue.CurrentStatus)
+		if !known || stage != lifecycle.Discovery {
+			continue
+		}
+		task, exists := ledger.Discoveries[issue.IssueID]
+		if !exists || task.Phase != state.DiscoveryRunning || task.Owner == nil {
+			continue
+		}
+		if !strings.EqualFold(task.Repository, c.Repository) || task.Issue != int64(issue.Number) || task.ProjectID != c.ProjectID || task.ProjectItemID != issue.ProjectItemID {
+			held = append(held, issue.Number)
+			continue
+		}
+		proof, err := reader.RunProof(ctx, c.Repository, *task.Owner)
+		if err != nil {
+			held = append(held, issue.Number)
+			continue
+		}
+		if err := engine.RecoverDiscovery(ctx, issue.IssueID, proof); err == nil {
+			recovered = true
+		} else if !errors.Is(err, state.ErrActive) {
+			held = append(held, issue.Number)
+		}
+	}
+	return recovered, held
 }
 
 // readyForDiscovery queues only owner-admitted Project items with an available
@@ -502,7 +552,7 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 		}
 		sameSource := task.SourceDigest == admitted.SourceDigest && task.StatusOptionID == admitted.StatusOptionID && task.StatusUpdatedAt.Equal(admitted.StatusUpdatedAt)
 		if sameSource {
-			if task.Phase == state.DiscoveryPending && task.Owner == nil && task.Publication == nil && task.ModelCalls < cap && task.MaxModelCalls == cap {
+			if task.Phase == state.DiscoveryPending && task.Owner == nil && (task.Publication != nil || task.ModelCalls < cap) && task.MaxModelCalls == cap {
 				pending = append(pending, issue.Number)
 			} else if task.Phase == state.DiscoveryBlocked && task.Failure == "budget" && cap > task.MaxModelCalls {
 				fresh = append(fresh, issue.Number)

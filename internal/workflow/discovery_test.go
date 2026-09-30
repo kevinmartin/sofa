@@ -24,7 +24,8 @@ func TestDiscoveryWorkflowSeparatesModelAndPublicationAuthority(t *testing.T) {
 	if len(w.Jobs) != 4 || w.Jobs["generate"].Needs != "admit" || !reflect.DeepEqual(w.Jobs["publish"].Needs, []any{"admit", "generate"}) || !reflect.DeepEqual(w.Jobs["finalize-failure"].Needs, []any{"admit", "generate", "publish"}) {
 		t.Fatal("Discovery job graph lost admission, generation, publication, or failure fencing")
 	}
-	if !strings.Contains(w.Jobs["admit"].If, "github.event.repository.default_branch") || !strings.Contains(w.Jobs["generate"].If, "recovery_run_id == ''") || !strings.Contains(w.Jobs["publish"].If, "needs.admit.outputs.recovery_run_id != ''") || !strings.Contains(w.Jobs["finalize-failure"].If, "needs.publish.result == 'failure'") {
+	finalizer := w.Jobs["finalize-failure"].If
+	if !strings.Contains(w.Jobs["admit"].If, "github.event.repository.default_branch") || !strings.Contains(w.Jobs["generate"].If, "recovery_run_id == ''") || !strings.Contains(w.Jobs["publish"].If, "needs.admit.outputs.recovery_run_id != ''") || !strings.Contains(finalizer, "always()") || !strings.Contains(finalizer, "needs.generate.result") || !strings.Contains(finalizer, "needs.publish.result") || !strings.Contains(finalizer, `"failure"`) || !strings.Contains(finalizer, `"cancelled"`) {
 		t.Fatal("Discovery execution or terminal recovery condition changed")
 	}
 	if w.Jobs["generate"].Permissions["copilot-requests"] != "write" || w.Jobs["generate"].Permissions["contents"] != "read" || w.Jobs["admit"].Permissions["copilot-requests"] != "" || w.Jobs["publish"].Permissions["copilot-requests"] != "" || w.Jobs["finalize-failure"].Permissions["copilot-requests"] != "" {

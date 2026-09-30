@@ -19,6 +19,8 @@ import (
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+var ErrUnverifiedRevert = errors.New("revert evidence does not prove exact inverse")
+
 type RequiredCheck struct {
 	Name  string
 	AppID int64
@@ -49,7 +51,7 @@ func ObserveRevert(ctx context.Context, verifier RevertVerifier, engine state.En
 		return err
 	}
 	if !verified {
-		return errors.New("revert evidence does not prove exact inverse")
+		return ErrUnverifiedRevert
 	}
 	h := sha256.Sum256([]byte(attempt.ID))
 	return Record(ctx, engine, Decision{

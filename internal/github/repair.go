@@ -25,7 +25,6 @@ type PullReviewComment struct {
 	UserID       string
 	CommitSHA    string
 	Path         string
-	Line         *int
 	OriginalLine *int
 	Body         string
 }
@@ -43,9 +42,8 @@ func (c *Client) PullReviewComments(ctx context.Context, repository string, numb
 			ID           int64  `json:"id"`
 			ReviewID     int64  `json:"pull_request_review_id"`
 			InReplyToID  int64  `json:"in_reply_to_id"`
-			CommitSHA    string `json:"commit_id"`
+			CommitSHA    string `json:"original_commit_id"`
 			Path         string `json:"path"`
-			Line         *int   `json:"line"`
 			OriginalLine *int   `json:"original_line"`
 			Body         string `json:"body"`
 			User         struct {
@@ -78,7 +76,6 @@ func (c *Client) PullReviewComments(ctx context.Context, repository string, numb
 				UserID:       item.User.NodeID,
 				CommitSHA:    item.CommitSHA,
 				Path:         item.Path,
-				Line:         item.Line,
 				OriginalLine: item.OriginalLine,
 				Body:         item.Body,
 			})
@@ -169,9 +166,6 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 	}
 	if pr.Number != p.PRNumber || pr.URL != p.PRURL || pr.HeadSHA != commitSHA || pr.HeadRef != p.Branch || pr.BaseRef != in.BaseBranch || pr.State != "open" || pr.Merged || !strings.EqualFold(pr.HeadRepository, b.Repository) || !strings.EqualFold(pr.BaseRepository, b.Repository) {
 		return empty, errors.New("review repair PR changed after push")
-	}
-	if err := in.Guard(ctx); err != nil {
-		return empty, err
 	}
 	return DraftPR{
 		Number:    pr.Number,

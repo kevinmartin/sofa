@@ -2,6 +2,7 @@ package release
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -226,7 +227,7 @@ func TestRevertCorrectionRequiresVerifiedExactInverse(t *testing.T) {
 		MergeCommitSHA: strings.Repeat("f", 40),
 	}
 	revert := strings.Repeat("1", 40)
-	if err := ObserveRevert(ctx, fixtureRevertVerifier{false}, engine, a, pull, revert, revert, time.Now().UTC()); err == nil {
+	if err := ObserveRevert(ctx, fixtureRevertVerifier{false}, engine, a, pull, revert, revert, time.Now().UTC()); !errors.Is(err, ErrUnverifiedRevert) {
 		t.Fatal("unverified inverse recorded as revert")
 	}
 	if err := ObserveRevert(ctx, fixtureRevertVerifier{true}, engine, a, pull, revert, revert, time.Now().UTC()); err != nil {

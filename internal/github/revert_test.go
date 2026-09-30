@@ -20,6 +20,7 @@ func TestVerifiedRevertRequiresExactInverseOnDefault(t *testing.T) {
 	oldBlob := strings.Repeat("5", 40)
 	newBlob := strings.Repeat("6", 40)
 	partial := false
+	multiParent := false
 	client, err := New("fixture", roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		path := r.URL.Path
 		if strings.Contains(path, "/compare/") {
@@ -34,6 +35,9 @@ func TestVerifiedRevertRequiresExactInverseOnDefault(t *testing.T) {
 				tree, parents = treeAfter, []map[string]string{{"sha": mergeParent}}
 			case revert:
 				tree, parents = treeRevertAfter, []map[string]string{{"sha": revertParent}}
+				if multiParent {
+					parents = append(parents, map[string]string{"sha": merge})
+				}
 			case mergeParent:
 				tree = treeBefore
 			case revertParent:
@@ -72,5 +76,10 @@ func TestVerifiedRevertRequiresExactInverseOnDefault(t *testing.T) {
 	verified, err = client.VerifiedRevert(context.Background(), "owner/repo", merge, revert, defaultHead)
 	if err != nil || verified {
 		t.Fatalf("partial revert accepted: %t, %v", verified, err)
+	}
+	multiParent = true
+	verified, err = client.VerifiedRevert(context.Background(), "owner/repo", merge, revert, defaultHead)
+	if err != nil || verified {
+		t.Fatalf("multi-parent revert accepted or aborted scan: %t, %v", verified, err)
 	}
 }

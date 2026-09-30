@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -19,6 +20,12 @@ import (
 )
 
 type lifecycleRoundTrip func(*http.Request) (*http.Response, error)
+
+type discoveryProofFunc func(context.Context, string, state.Owner) (state.RunProof, error)
+
+func (f discoveryProofFunc) RunProof(ctx context.Context, repo string, owner state.Owner) (state.RunProof, error) {
+	return f(ctx, repo, owner)
+}
 
 func (f lifecycleRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
@@ -290,6 +297,219 @@ func TestReadyForDiscoveryRespectsOwnerStatusWIPAndExistingPrompt(t *testing.T) 
 	}
 	if got := readyForDiscovery(c, items, ledger, policy, statuses, []int{2}); len(got) != 0 {
 		t.Fatalf("held pending issue was dispatched: %v", got)
+	}
+}
+
+func TestTerminalDiscoveryClaimReleasesWIPForAnotherIssue(t *testing.T) {
+	c, err := readConfig("../../examples/consumer/.sofa.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Lifecycle.DiscoveryWIP = 1
+	c.Limits.MaxAgentTurns = 1
+	policy, err := discoveryPolicy(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := lifecycleStatuses(c)
+	when := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	items := make([]github.ProjectWorkItem, 2)
+	for i := range items {
+		items[i].Issue = admission.Snapshot{
+			Repository:      c.Repository,
+			RepositoryID:    c.RepositoryID,
+			IssueID:         "I_" + string(rune('1'+i)),
+			Number:          i + 1,
+			Title:           "Idea",
+			Body:            "Investigate greeting behavior",
+			Open:            true,
+			ProjectID:       c.ProjectID,
+			ProjectPrivate:  true,
+			ProjectItemID:   "PVTI_" + string(rune('1'+i)),
+			CurrentStatus:   statuses[lifecycle.Discovery],
+			StatusOptionID:  "discovery",
+			StatusUpdatedAt: when,
+			Complete:        true,
+		}
+	}
+	admitted, _, err := discovery.AuthorizeDiscovery(policy, items[0].Issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	engine := state.Engine{Store: &state.MemoryStore{}}
+	if _, _, err := engine.AdmitDiscovery(ctx, admitted, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	owner := state.Owner{RunID: "123", RunAttempt: 1}
+	if _, err := engine.ClaimDiscovery(ctx, admitted.IssueID, owner); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readyForDiscovery(c, items, loaded.State, policy, statuses, nil); len(got) != 0 {
+		t.Fatalf("live claim did not retain WIP: %v", got)
+	}
+	active := discoveryProofFunc(func(_ context.Context, repo string, requested state.Owner) (state.RunProof, error) {
+		if repo != c.Repository || requested != owner {
+			t.Fatalf("wrong Actions owner queried: %s %+v", repo, requested)
+		}
+		return state.RunProof{Owner: owner, Status: "in_progress", ObservedAt: time.Now().UTC()}, nil
+	})
+	if recovered, held := recoverStoppedDiscoveries(ctx, active, engine, c, items, loaded.State, statuses); recovered || len(held) != 0 {
+		t.Fatalf("live claim recovered: %t %v", recovered, held)
+	}
+	failedProof := discoveryProofFunc(func(_ context.Context, _ string, _ state.Owner) (state.RunProof, error) {
+		return state.RunProof{}, errors.New("GitHub unavailable")
+	})
+	if recovered, held := recoverStoppedDiscoveries(ctx, failedProof, engine, c, items, loaded.State, statuses); recovered || len(held) != 1 || held[0] != 1 {
+		t.Fatalf("unproven claim released or held the wrong issue: %t %v", recovered, held)
+	}
+	terminal := discoveryProofFunc(func(_ context.Context, _ string, _ state.Owner) (state.RunProof, error) {
+		return state.RunProof{Owner: owner, Status: "completed", Conclusion: "cancelled", ObservedAt: time.Now().UTC()}, nil
+	})
+	if recovered, held := recoverStoppedDiscoveries(ctx, terminal, engine, c, items, loaded.State, statuses); !recovered || len(held) != 0 {
+		t.Fatalf("terminal claim not recovered: %t %v", recovered, held)
+	}
+	loaded, err = engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task := loaded.State.Discoveries[admitted.IssueID]; task.Phase != state.DiscoveryBlocked || task.Owner != nil || task.ModelCalls != 1 {
+		t.Fatalf("terminal prompt did not retain spent budget: %+v", task)
+	}
+	if got := readyForDiscovery(c, items, loaded.State, policy, statuses, nil); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("terminal claim did not free WIP for another issue: %v", got)
+	}
+	// A terminal publisher with durable intent must resume that exact intent
+	// even though its one model call has already been spent.
+	resume := state.Engine{Store: &state.MemoryStore{}}
+	if _, _, err := resume.AdmitDiscovery(ctx, admitted, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	fence, err := resume.ClaimDiscovery(ctx, admitted.IssueID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resume.PrepareDiscoveryPublication(ctx, fence, strings.Repeat("a", 64), strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := resume.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered, held := recoverStoppedDiscoveries(ctx, terminal, resume, c, items, before.State, statuses); !recovered || len(held) != 0 {
+		t.Fatalf("terminal publication intent not recovered: %t %v", recovered, held)
+	}
+	after, err := resume.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readyForDiscovery(c, items, after.State, policy, statuses, nil); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("durable publication intent was stranded: %v", got)
+	}
+}
+
+type correctionFixture struct {
+	commits []github.DefaultCommit
+	verdict map[string]bool
+	failure map[string]error
+	seen    []string
+}
+
+func (f *correctionFixture) IssueComments(context.Context, string, int64) ([]discovery.SpecComment, error) {
+	return nil, nil
+}
+
+func (f *correctionFixture) RecentDefaultCommits(context.Context, string, string) ([]github.DefaultCommit, error) {
+	return f.commits, nil
+}
+
+func (f *correctionFixture) VerifiedRevert(_ context.Context, _, _, revertSHA, _ string) (bool, error) {
+	f.seen = append(f.seen, revertSHA)
+	return f.verdict[revertSHA], f.failure[revertSHA]
+}
+
+func TestCompletionCorrectionSkipsPartialRevertButKeepsAPIFailureFatal(t *testing.T) {
+	ctx := context.Background()
+	engine := state.Engine{Store: &state.MemoryStore{}}
+	attempt, _, err := engine.Admit(ctx, state.Admission{
+		Repository:      "owner/repo",
+		Issue:           1,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       "project",
+		ProjectItemID:   "item",
+		StatusOptionID:  "ready",
+		StatusUpdatedAt: time.Now().UTC(),
+	}, state.Limits{RuntimeSeconds: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence, err := engine.Claim(ctx, attempt.ID, state.Owner{RunID: "1", RunAttempt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Advance(ctx, fence, state.Validating); err != nil {
+		t.Fatal(err)
+	}
+	publication := state.Publication{
+		Branch:          "sofa/task",
+		ExpectedHead:    strings.Repeat("c", 40),
+		CandidateDigest: strings.Repeat("d", 64),
+	}
+	if err := engine.BeginPublication(ctx, fence, publication); err != nil {
+		t.Fatal(err)
+	}
+	publication.HeadSHA = strings.Repeat("e", 40)
+	publication.PRNumber = 7
+	publication.PRURL = "https://github.com/owner/repo/pull/7"
+	if err := engine.MarkPublished(ctx, fence, publication); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt = loaded.State.Attempts[attempt.ID]
+	merged := strings.Repeat("f", 40)
+	partial := strings.Repeat("1", 40)
+	exact := strings.Repeat("2", 40)
+	pull := github.PullSnapshot{
+		Number:         7,
+		URL:            publication.PRURL,
+		State:          "closed",
+		Merged:         true,
+		MergedAt:       time.Now().UTC().Add(-time.Minute),
+		HeadSHA:        publication.HeadSHA,
+		HeadRef:        publication.Branch,
+		HeadRepository: "owner/repo",
+		BaseRepository: "owner/repo",
+		MergeCommitSHA: merged,
+	}
+	fixture := &correctionFixture{
+		commits: []github.DefaultCommit{
+			{SHA: partial, Message: "This reverts commit " + merged},
+			{SHA: exact, Message: "This reverts commit " + merged},
+		},
+		verdict: map[string]bool{exact: true},
+		failure: map[string]error{},
+	}
+	if err := observeCompletionCorrections(ctx, fixture, engine, attempt, pull, exact); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = engine.Store.Load(ctx)
+	if err != nil || len(fixture.seen) != 2 || len(loaded.State.Observations) != 1 || loaded.State.Observations[0].Revision != exact {
+		t.Fatalf("later exact revert was lost: seen=%v observations=%+v err=%v", fixture.seen, loaded.State.Observations, err)
+	}
+	apiFailure := errors.New("transient GitHub failure")
+	fixture.seen = nil
+	fixture.failure[partial] = apiFailure
+	if err := observeCompletionCorrections(ctx, fixture, engine, attempt, pull, exact); !errors.Is(err, apiFailure) || len(fixture.seen) != 1 {
+		t.Fatalf("transport failure was skipped: seen=%v err=%v", fixture.seen, err)
 	}
 }
 

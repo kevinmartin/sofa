@@ -15,9 +15,11 @@ func TestPullReviewCommentsBindsSelectedReview(t *testing.T) {
 			{
 				"id":                     44,
 				"pull_request_review_id": 9,
-				"commit_id":              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"commit_id":              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				"original_commit_id":     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"path":                   "fixture.go",
-				"line":                   12,
+				"line":                   15,
+				"original_line":          12,
 				"body":                   "Fix the empty case",
 				"user": map[string]any{
 					"node_id": "U_owner",
@@ -27,7 +29,7 @@ func TestPullReviewCommentsBindsSelectedReview(t *testing.T) {
 				"id":                     45,
 				"pull_request_review_id": 9,
 				"in_reply_to_id":         44,
-				"commit_id":              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"original_commit_id":     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"path":                   "fixture.go",
 				"body":                   "Unrelated later reply",
 				"user": map[string]any{
@@ -40,7 +42,7 @@ func TestPullReviewCommentsBindsSelectedReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	comments, err := client.PullReviewComments(context.Background(), "owner/repo", 7, 9)
-	if err != nil || len(comments) != 1 || comments[0].ReviewID != 9 || comments[0].Line == nil || *comments[0].Line != 12 {
+	if err != nil || len(comments) != 1 || comments[0].ReviewID != 9 || comments[0].CommitSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || comments[0].OriginalLine == nil || *comments[0].OriginalLine != 12 {
 		t.Fatalf("selected review comments unavailable: %+v, %v", comments, err)
 	}
 }
@@ -51,7 +53,7 @@ func TestPullReviewCommentsRejectsCrossReviewResponse(t *testing.T) {
 			{
 				"id":                     44,
 				"pull_request_review_id": 10,
-				"commit_id":              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"original_commit_id":     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				"path":                   "fixture.go",
 				"body":                   "Other review",
 				"user": map[string]any{
