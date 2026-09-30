@@ -155,7 +155,12 @@ func runReviewRepairFail(ctx context.Context, configPath, manifestPath, stage st
 	if err != nil {
 		return err
 	}
-	engine := state.Engine{Store: github.StateStore{Client: client, Repository: c.Repository}}
+	engine := state.Engine{
+		Store: github.StateStore{
+			Client:     client,
+			Repository: c.Repository,
+		},
+	}
 	snapshot, err := engine.Store.Load(ctx)
 	if err != nil {
 		return err
@@ -314,7 +319,12 @@ func runReviewRepairPublish(ctx context.Context, configPath, manifestPath, bundl
 	if err != nil {
 		return err
 	}
-	engine := state.Engine{Store: github.StateStore{Client: publisher, Repository: c.Repository}}
+	engine := state.Engine{
+		Store: github.StateStore{
+			Client:     publisher,
+			Repository: c.Repository,
+		},
+	}
 	guard := func(ctx context.Context) error {
 		a, err := requireRepairOwner(ctx, engine, m)
 		if err != nil {
@@ -408,8 +418,13 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
-	store := github.StateStore{Client: ledger, Repository: c.Repository}
-	engine := state.Engine{Store: store}
+	store := github.StateStore{
+		Client:     ledger,
+		Repository: c.Repository,
+	}
+	engine := state.Engine{
+		Store: store,
+	}
 	issueSnapshot, err := projects.Issue(ctx, c, issue)
 	if err != nil {
 		return err
@@ -474,7 +489,10 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 			return err
 		}
 	}
-	charge := state.Counters{ModelCalls: 1, RuntimeSeconds: int64(c.Limits.AttemptSeconds)}
+	charge := state.Counters{
+		ModelCalls:     1,
+		RuntimeSeconds: int64(c.Limits.AttemptSeconds),
+	}
 	fence, err := engine.ClaimReviewRepair(ctx, attempt.ID, owner, charge)
 	if err != nil {
 		return err

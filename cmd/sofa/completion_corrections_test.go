@@ -52,14 +52,26 @@ func completionAttempt(t *testing.T, engine state.Engine, issue int64, head stri
 	t.Helper()
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	publication := state.Publication{
-		Branch: fmt.Sprintf("sofa/task-%d", issue), ExpectedHead: strings.Repeat("1", 40), CandidateDigest: strings.Repeat("2", 64),
-		HeadSHA: head, PRNumber: issue, PRURL: fmt.Sprintf("https://github.com/owner/repo/pull/%d", issue),
+		Branch:          fmt.Sprintf("sofa/task-%d", issue),
+		ExpectedHead:    strings.Repeat("1", 40),
+		CandidateDigest: strings.Repeat("2", 64),
+		HeadSHA:         head,
+		PRNumber:        issue,
+		PRURL:           fmt.Sprintf("https://github.com/owner/repo/pull/%d", issue),
 	}
 	a, _, err := engine.Admit(context.Background(), state.Admission{
-		Repository: "owner/repo", Issue: issue, SpecDigest: strings.Repeat("3", 64), ConfigDigest: strings.Repeat("4", 64),
-		BaseSHA: strings.Repeat("1", 40), ProjectID: "project", ProjectItemID: fmt.Sprintf("item-%d", issue),
-		StatusOptionID: "ready", StatusUpdatedAt: now,
-	}, state.Limits{RuntimeSeconds: 600})
+		Repository:      "owner/repo",
+		Issue:           issue,
+		SpecDigest:      strings.Repeat("3", 64),
+		ConfigDigest:    strings.Repeat("4", 64),
+		BaseSHA:         strings.Repeat("1", 40),
+		ProjectID:       "project",
+		ProjectItemID:   fmt.Sprintf("item-%d", issue),
+		StatusOptionID:  "ready",
+		StatusUpdatedAt: now,
+	}, state.Limits{
+		RuntimeSeconds: 600,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,16 +86,24 @@ func completionAttempt(t *testing.T, engine state.Engine, issue int64, head stri
 		t.Fatal(err)
 	}
 	pull := github.PullSnapshot{
-		Number: issue, URL: publication.PRURL, State: "closed", Merged: true,
-		MergedAt: now.Add(time.Hour), HeadSHA: head, HeadRef: publication.Branch,
-		HeadRepository: "owner/repo", BaseRepository: "owner/repo",
+		Number:         issue,
+		URL:            publication.PRURL,
+		State:          "closed",
+		Merged:         true,
+		MergedAt:       now.Add(time.Hour),
+		HeadSHA:        head,
+		HeadRef:        publication.Branch,
+		HeadRepository: "owner/repo",
+		BaseRepository: "owner/repo",
 	}
 	return a, pull
 }
 
 func TestCompletionCorrectionsIsolateItemsAndKeepPriorDone(t *testing.T) {
 	ctx := context.Background()
-	engine := state.Engine{Store: &state.MemoryStore{}}
+	engine := state.Engine{
+		Store: &state.MemoryStore{},
+	}
 	first, firstPull := completionAttempt(t, engine, 7, strings.Repeat("a", 40))
 	second, secondPull := completionAttempt(t, engine, 8, strings.Repeat("b", 40))
 	firstPull.MergeCommitSHA = strings.Repeat("c", 40)
@@ -92,21 +112,48 @@ func TestCompletionCorrectionsIsolateItemsAndKeepPriorDone(t *testing.T) {
 	revertSHA := strings.Repeat("f", 40)
 	mergeTime := firstPull.MergedAt
 	reader := completionFixtureReader{
-		repository: "owner/repo", defaultSHA: defaultHead, mergedSHA: firstPull.MergeCommitSHA, revertSHA: revertSHA,
+		repository: "owner/repo",
+		defaultSHA: defaultHead,
+		mergedSHA:  firstPull.MergeCommitSHA,
+		revertSHA:  revertSHA,
 		comments: map[int64][]discovery.SpecComment{
-			7: {{ID: 70, Body: "TOP_SECRET later report", CreatedAt: mergeTime.Add(time.Minute), UpdatedAt: mergeTime.Add(time.Minute)}},
-			8: {{ID: 80, Body: "Second PR feedback", CreatedAt: mergeTime.Add(time.Minute), UpdatedAt: mergeTime.Add(time.Minute)}},
+			7: {{
+				ID:        70,
+				Body:      "TOP_SECRET later report",
+				CreatedAt: mergeTime.Add(time.Minute),
+				UpdatedAt: mergeTime.Add(time.Minute),
+			}},
+			8: {{
+				ID:        80,
+				Body:      "Second PR feedback",
+				CreatedAt: mergeTime.Add(time.Minute),
+				UpdatedAt: mergeTime.Add(time.Minute),
+			}},
 		},
 		commentErr: map[int64]error{7: errors.New("temporary GitHub failure")},
 		commits: []github.DefaultCommit{
-			{SHA: defaultHead, Message: "ordinary commit"},
-			{SHA: revertSHA, Message: "Revert fix\n\nThis reverts commit " + firstPull.MergeCommitSHA + "."},
+			{
+				SHA:     defaultHead,
+				Message: "ordinary commit",
+			},
+			{
+				SHA:     revertSHA,
+				Message: "Revert fix\n\nThis reverts commit " + firstPull.MergeCommitSHA + ".",
+			},
 		},
 		verified: true,
 	}
 	// A transient read on one completed PR must not consume the other PR's
 	// comments or revert identity. Nor can it remove an earlier Done event.
-	if err := engine.Observe(ctx, state.Observation{Version: state.Version, ID: "done-first", AttemptID: first.ID, Stage: "release", Outcome: "done", Revision: firstPull.MergeCommitSHA, RecordedAt: mergeTime}); err != nil {
+	if err := engine.Observe(ctx, state.Observation{
+		Version:    state.Version,
+		ID:         "done-first",
+		AttemptID:  first.ID,
+		Stage:      "release",
+		Outcome:    "done",
+		Revision:   firstPull.MergeCommitSHA,
+		RecordedAt: mergeTime,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := observeCompletionCorrections(ctx, reader, engine, first, firstPull, defaultHead); err == nil {

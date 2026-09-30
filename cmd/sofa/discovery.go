@@ -42,7 +42,10 @@ type discoveryStatus struct {
 }
 
 func newDiscoveryCommand() *cobra.Command {
-	root := &cobra.Command{Use: "discovery", Short: "Research an admitted idea and present an unapproved specification"}
+	root := &cobra.Command{
+		Use:   "discovery",
+		Short: "Research an admitted idea and present an unapproved specification",
+	}
 	var admit struct {
 		config, workspace, outDir string
 		issue                     int
@@ -119,7 +122,10 @@ func discoveryClients(c config.Config) (*github.Client, github.StateStore, error
 	if err != nil {
 		return nil, github.StateStore{}, err
 	}
-	return projects, github.StateStore{Client: ledgerClient, Repository: c.Repository}, nil
+	return projects, github.StateStore{
+		Client:     ledgerClient,
+		Repository: c.Repository,
+	}, nil
 }
 
 func currentCheckoutSHA(ctx context.Context, root string) (string, error) {
@@ -221,7 +227,9 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	if err != nil || currentAdmission != admitted || current.BaseSHA != checkout {
 		return discovery.ErrRevision
 	}
-	engine := state.Engine{Store: store}
+	engine := state.Engine{
+		Store: store,
+	}
 	task, _, err := engine.AdmitDiscovery(ctx, admitted, c.Lifecycle.EffectiveDiscoveryWIP(), int64(min(c.Limits.MaxAgentTurns, 20)))
 	if err != nil {
 		return err
@@ -231,12 +239,16 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	}
 	statusPath := filepath.Join(outDir, "status.json")
 	if task.Phase == state.DiscoveryReview || task.Phase == state.DiscoveryBlocked || task.Phase == state.DiscoveryCanceled {
-		return writeJSON(statusPath, discoveryStatus{Reason: string(task.Phase)})
+		return writeJSON(statusPath, discoveryStatus{
+			Reason: string(task.Phase),
+		})
 	}
 	var recovery *state.Owner
 	if task.Owner != nil {
 		if *task.Owner == owner {
-			return writeJSON(statusPath, discoveryStatus{Reason: "already-active"})
+			return writeJSON(statusPath, discoveryStatus{
+				Reason: "already-active",
+			})
 		}
 		proof, err := store.Client.RunProof(ctx, c.Repository, *task.Owner)
 		if err != nil {
@@ -253,7 +265,9 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 		}
 		task = loaded.State.Discoveries[task.IssueID]
 		if task.Phase != state.DiscoveryPending {
-			return writeJSON(statusPath, discoveryStatus{Reason: string(task.Phase)})
+			return writeJSON(statusPath, discoveryStatus{
+				Reason: string(task.Phase),
+			})
 		}
 	}
 	// A persisted publication intent can only resume from the exact prior
@@ -286,7 +300,9 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	if err := writeJSON(filepath.Join(outDir, "manifest.json"), m); err != nil {
 		return err
 	}
-	status := discoveryStatus{Dispatch: true}
+	status := discoveryStatus{
+		Dispatch: true,
+	}
 	if m.Recovery != nil {
 		status.RecoveryRunID = m.Recovery.RunID
 		status.RecoveryAttempt = m.Recovery.RunAttempt
@@ -321,7 +337,10 @@ func runDiscoveryGenerate(ctx context.Context, manifestPath, out string) error {
 	return writeJSON(out, struct {
 		Version int    `json:"version"`
 		Body    string `json:"body"`
-	}{Version: 1, Body: result.Body})
+	}{
+		Version: 1,
+		Body:    result.Body,
+	})
 }
 
 func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidatePath string) error {
@@ -380,8 +399,13 @@ func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidat
 		}
 		return current, nil
 	}
-	_, err = discovery.PublishSpecification(ctx, state.Engine{Store: store}, store, commenter, discovery.PublishInput{
-		Policy: policy, IssueID: m.Source.IssueID, Fence: m.Fence, DraftBody: candidate.Body,
+	_, err = discovery.PublishSpecification(ctx, state.Engine{
+		Store: store,
+	}, store, commenter, discovery.PublishInput{
+		Policy:           policy,
+		IssueID:          m.Source.IssueID,
+		Fence:            m.Fence,
+		DraftBody:        candidate.Body,
 		ExpectedAuthorID: c.Lifecycle.SpecAuthorID,
 		ForbiddenValues:  [][]byte{[]byte(os.Getenv("SOFA_PROJECTS_TOKEN")), []byte(os.Getenv("SOFA_STATE_TOKEN")), []byte(os.Getenv("SOFA_COMMENT_TOKEN"))},
 		Guard:            guard,
@@ -402,6 +426,11 @@ func runDiscoveryFail(ctx context.Context, configPath, manifestPath, kind string
 	if err != nil {
 		return err
 	}
-	store := github.StateStore{Client: ledgerClient, Repository: c.Repository}
-	return (state.Engine{Store: store}).FailDiscovery(ctx, m.Fence, kind)
+	store := github.StateStore{
+		Client:     ledgerClient,
+		Repository: c.Repository,
+	}
+	return (state.Engine{
+		Store: store,
+	}).FailDiscovery(ctx, m.Fence, kind)
 }

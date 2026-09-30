@@ -42,7 +42,11 @@ func (e Engine) ClaimReviewRepair(ctx context.Context, id string, owner Owner, c
 		a.Dispatch = "claimed"
 		a.UpdatedAt = e.now()
 		s.Attempts[id] = a
-		fence = Fence{AttemptID: id, Generation: a.Generation, Owner: owner}
+		fence = Fence{
+			AttemptID:  id,
+			Generation: a.Generation,
+			Owner:      owner,
+		}
 		return true, nil
 	})
 	return

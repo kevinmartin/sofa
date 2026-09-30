@@ -25,7 +25,10 @@ func TestDiscoveryWIPReplayAndTerminalRecovery(t *testing.T) {
 	ctx := context.Background()
 	store := &MemoryStore{}
 	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
-	engine := Engine{Store: store, Now: func() time.Time { return now }}
+	engine := Engine{
+		Store: store,
+		Now:   func() time.Time { return now },
+	}
 	first := discoveryAdmission("I_1", 1)
 	task, created, err := engine.AdmitDiscovery(ctx, first, 2, 2)
 	if err != nil || !created || task.Phase != DiscoveryPending {
@@ -40,7 +43,10 @@ func TestDiscoveryWIPReplayAndTerminalRecovery(t *testing.T) {
 	if _, _, err := engine.AdmitDiscovery(ctx, discoveryAdmission("I_3", 3), 2, 2); !errors.Is(err, ErrLimit) {
 		t.Fatalf("third active Discovery bypassed WIP: %v", err)
 	}
-	owner := Owner{RunID: "123", RunAttempt: 1}
+	owner := Owner{
+		RunID:      "123",
+		RunAttempt: 1,
+	}
 	fence, err := engine.ClaimDiscovery(ctx, "I_1", owner)
 	if err != nil {
 		t.Fatal(err)
@@ -48,22 +54,39 @@ func TestDiscoveryWIPReplayAndTerminalRecovery(t *testing.T) {
 	if _, err := engine.ClaimDiscovery(ctx, "I_1", owner); !errors.Is(err, ErrClaimed) {
 		t.Fatalf("duplicate claim: %v", err)
 	}
-	if err := engine.RecoverDiscovery(ctx, "I_1", RunProof{Owner: owner, Status: "in_progress", ObservedAt: now}); !errors.Is(err, ErrActive) {
+	if err := engine.RecoverDiscovery(ctx, "I_1", RunProof{
+		Owner:      owner,
+		Status:     "in_progress",
+		ObservedAt: now,
+	}); !errors.Is(err, ErrActive) {
 		t.Fatalf("active run incorrectly reclaimed: %v", err)
 	}
-	proof := RunProof{Owner: owner, Status: "completed", Conclusion: "cancelled", ObservedAt: now}
+	proof := RunProof{
+		Owner:      owner,
+		Status:     "completed",
+		Conclusion: "cancelled",
+		ObservedAt: now,
+	}
 	if err := engine.RecoverDiscovery(ctx, "I_1", proof); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.AssertDiscoveryOwner(ctx, fence); !errors.Is(err, ErrStale) {
 		t.Fatalf("stale worker retained ownership: %v", err)
 	}
-	secondOwner := Owner{RunID: "124", RunAttempt: 1}
+	secondOwner := Owner{
+		RunID:      "124",
+		RunAttempt: 1,
+	}
 	secondFence, err := engine.ClaimDiscovery(ctx, "I_1", secondOwner)
 	if err != nil || secondFence.Generation <= fence.Generation {
 		t.Fatalf("reclaim: %+v, %v", secondFence, err)
 	}
-	if err := engine.RecoverDiscovery(ctx, "I_1", RunProof{Owner: secondOwner, Status: "completed", Conclusion: "failure", ObservedAt: now}); err != nil {
+	if err := engine.RecoverDiscovery(ctx, "I_1", RunProof{
+		Owner:      secondOwner,
+		Status:     "completed",
+		Conclusion: "failure",
+		ObservedAt: now,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := store.Load(ctx)
@@ -85,11 +108,17 @@ func TestDiscoveryWIPReplayAndTerminalRecovery(t *testing.T) {
 func TestDiscoverySpecCompletionReleasesWIPAndFencesWorker(t *testing.T) {
 	ctx := context.Background()
 	store := &MemoryStore{}
-	engine := Engine{Store: store, Now: func() time.Time { return time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC) }}
+	engine := Engine{
+		Store: store,
+		Now:   func() time.Time { return time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC) },
+	}
 	if _, _, err := engine.AdmitDiscovery(ctx, discoveryAdmission("I_1", 1), 2, 1); err != nil {
 		t.Fatal(err)
 	}
-	fence, err := engine.ClaimDiscovery(ctx, "I_1", Owner{RunID: "1", RunAttempt: 1})
+	fence, err := engine.ClaimDiscovery(ctx, "I_1", Owner{
+		RunID:      "1",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,8 +44,17 @@ func TestEvaluateMergeAndReleaseExactCommit(t *testing.T) {
 		HeadRepository: "owner/repo",
 		BaseRepository: "owner/repo",
 	}
-	required := []RequiredCheck{{Name: "release / smoke", AppID: 77}}
-	pass := github.CommitCheck{Name: "release / smoke", AppID: 77, SourceID: 10, State: "success", UpdatedAt: now}
+	required := []RequiredCheck{{
+		Name:  "release / smoke",
+		AppID: 77,
+	}}
+	pass := github.CommitCheck{
+		Name:      "release / smoke",
+		AppID:     77,
+		SourceID:  10,
+		State:     "success",
+		UpdatedAt: now,
+	}
 	cases := []struct {
 		name      string
 		onDefault bool
@@ -54,12 +63,42 @@ func TestEvaluateMergeAndReleaseExactCommit(t *testing.T) {
 	}{
 		{"merge not on default", false, []github.CommitCheck{pass}, "release-blocked"},
 		{"missing check", true, nil, "release-blocked"},
-		{"wrong app", true, []github.CommitCheck{{Name: pass.Name, AppID: 88, SourceID: 11, State: "success", UpdatedAt: now}}, "release-blocked"},
-		{"pending", true, []github.CommitCheck{{Name: pass.Name, AppID: 77, SourceID: 11, State: "in_progress", UpdatedAt: now}}, "release-blocked"},
-		{"failed", true, []github.CommitCheck{{Name: pass.Name, AppID: 77, SourceID: 11, State: "failure", UpdatedAt: now}}, "release-failed"},
+		{"wrong app", true, []github.CommitCheck{{
+			Name:      pass.Name,
+			AppID:     88,
+			SourceID:  11,
+			State:     "success",
+			UpdatedAt: now,
+		}}, "release-blocked"},
+		{"pending", true, []github.CommitCheck{{
+			Name:      pass.Name,
+			AppID:     77,
+			SourceID:  11,
+			State:     "in_progress",
+			UpdatedAt: now,
+		}}, "release-blocked"},
+		{"failed", true, []github.CommitCheck{{
+			Name:      pass.Name,
+			AppID:     77,
+			SourceID:  11,
+			State:     "failure",
+			UpdatedAt: now,
+		}}, "release-failed"},
 		{"passed", true, []github.CommitCheck{pass}, "done"},
-		{"latest failure overrides old pass", true, []github.CommitCheck{pass, {Name: pass.Name, AppID: 77, SourceID: 11, State: "failure", UpdatedAt: now.Add(time.Minute)}}, "release-failed"},
-		{"latest success corrects failure", true, []github.CommitCheck{{Name: pass.Name, AppID: 77, SourceID: 9, State: "failure", UpdatedAt: now.Add(-time.Minute)}, pass}, "done"},
+		{"latest failure overrides old pass", true, []github.CommitCheck{pass, {
+			Name:      pass.Name,
+			AppID:     77,
+			SourceID:  11,
+			State:     "failure",
+			UpdatedAt: now.Add(time.Minute),
+		}}, "release-failed"},
+		{"latest success corrects failure", true, []github.CommitCheck{{
+			Name:      pass.Name,
+			AppID:     77,
+			SourceID:  9,
+			State:     "failure",
+			UpdatedAt: now.Add(-time.Minute),
+		}, pass}, "done"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,7 +124,9 @@ func TestEvaluateMergeAndReleaseExactCommit(t *testing.T) {
 
 func TestRecordAppendsLaterCorrectionWithoutRewritingOutcome(t *testing.T) {
 	ctx := context.Background()
-	engine := state.Engine{Store: &state.MemoryStore{}}
+	engine := state.Engine{
+		Store: &state.MemoryStore{},
+	}
 	attempt, _, err := engine.Admit(ctx, state.Admission{
 		Repository:      "owner/repo",
 		Issue:           1,
@@ -96,7 +137,9 @@ func TestRecordAppendsLaterCorrectionWithoutRewritingOutcome(t *testing.T) {
 		ProjectItemID:   "item",
 		StatusOptionID:  "ready",
 		StatusUpdatedAt: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC),
-	}, state.Limits{RuntimeSeconds: 10})
+	}, state.Limits{
+		RuntimeSeconds: 10,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,23 +170,40 @@ func TestRecordAppendsLaterCorrectionWithoutRewritingOutcome(t *testing.T) {
 
 func TestRevertCorrectionRequiresVerifiedExactInverse(t *testing.T) {
 	ctx := context.Background()
-	engine := state.Engine{Store: &state.MemoryStore{}}
+	engine := state.Engine{
+		Store: &state.MemoryStore{},
+	}
 	a, _, err := engine.Admit(ctx, state.Admission{
-		Repository: "owner/repo", Issue: 1,
-		SpecDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), BaseSHA: strings.Repeat("c", 40),
-		ProjectID: "project", ProjectItemID: "item", StatusOptionID: "ready", StatusUpdatedAt: time.Now().UTC(),
-	}, state.Limits{RuntimeSeconds: 10})
+		Repository:      "owner/repo",
+		Issue:           1,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       "project",
+		ProjectItemID:   "item",
+		StatusOptionID:  "ready",
+		StatusUpdatedAt: time.Now().UTC(),
+	}, state.Limits{
+		RuntimeSeconds: 10,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fence, err := engine.Claim(ctx, a.ID, state.Owner{RunID: "1", RunAttempt: 1})
+	fence, err := engine.Claim(ctx, a.ID, state.Owner{
+		RunID:      "1",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.Advance(ctx, fence, state.Validating); err != nil {
 		t.Fatal(err)
 	}
-	p := state.Publication{Branch: "sofa/task", ExpectedHead: strings.Repeat("c", 40), CandidateDigest: strings.Repeat("d", 64)}
+	p := state.Publication{
+		Branch:          "sofa/task",
+		ExpectedHead:    strings.Repeat("c", 40),
+		CandidateDigest: strings.Repeat("d", 64),
+	}
 	if err := engine.BeginPublication(ctx, fence, p); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +218,13 @@ func TestRevertCorrectionRequiresVerifiedExactInverse(t *testing.T) {
 		t.Fatal(err)
 	}
 	a = snapshot.State.Attempts[a.ID]
-	pull := github.PullSnapshot{Number: 7, URL: p.PRURL, Merged: true, HeadSHA: p.HeadSHA, MergeCommitSHA: strings.Repeat("f", 40)}
+	pull := github.PullSnapshot{
+		Number:         7,
+		URL:            p.PRURL,
+		Merged:         true,
+		HeadSHA:        p.HeadSHA,
+		MergeCommitSHA: strings.Repeat("f", 40),
+	}
 	revert := strings.Repeat("1", 40)
 	if err := ObserveRevert(ctx, fixtureRevertVerifier{false}, engine, a, pull, revert, revert, time.Now().UTC()); err == nil {
 		t.Fatal("unverified inverse recorded as revert")
@@ -188,8 +254,17 @@ func TestDesignatedCanaryCannotInventMergeOrGate(t *testing.T) {
 		HeadRepository: "owner/repo",
 		BaseRepository: "owner/repo",
 	}
-	required := []RequiredCheck{{Name: "release / smoke", AppID: 77}}
-	if _, err := EvaluateDesignated("owner/repo", pull, head, merge, true, required, []github.CommitCheck{{Name: required[0].Name, AppID: 77, SourceID: 1, State: "success", UpdatedAt: time.Now()}}); err == nil {
+	required := []RequiredCheck{{
+		Name:  "release / smoke",
+		AppID: 77,
+	}}
+	if _, err := EvaluateDesignated("owner/repo", pull, head, merge, true, required, []github.CommitCheck{{
+		Name:      required[0].Name,
+		AppID:     77,
+		SourceID:  1,
+		State:     "success",
+		UpdatedAt: time.Now(),
+	}}); err == nil {
 		t.Fatal("accepted a fabricated merge SHA")
 	}
 	d, err := EvaluateDesignated("owner/repo", pull, merge, merge, true, required, nil)

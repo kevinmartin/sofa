@@ -41,14 +41,23 @@ func scanFixture(t *testing.T) ScanInput {
 		id := state.AttemptID(admissionRecord)
 		url := "https://github.com/owner/repo/pull/" + string(rune('0'+number))
 		ledger.Attempts[id] = state.Attempt{
-			ID:          id,
-			Admission:   admissionRecord,
-			Phase:       state.Draft,
-			Dispatch:    "claimed",
-			Limits:      state.Limits{RuntimeSeconds: 600},
-			Publication: &state.Publication{Branch: "sofa/issue-" + string(rune('0'+number)), ExpectedHead: baseSHA, CandidateDigest: approved, HeadSHA: head, PRNumber: int64(number), PRURL: url},
-			CreatedAt:   when,
-			UpdatedAt:   when,
+			ID:        id,
+			Admission: admissionRecord,
+			Phase:     state.Draft,
+			Dispatch:  "claimed",
+			Limits: state.Limits{
+				RuntimeSeconds: 600,
+			},
+			Publication: &state.Publication{
+				Branch:          "sofa/issue-" + string(rune('0'+number)),
+				ExpectedHead:    baseSHA,
+				CandidateDigest: approved,
+				HeadSHA:         head,
+				PRNumber:        int64(number),
+				PRURL:           url,
+			},
+			CreatedAt: when,
+			UpdatedAt: when,
 		}
 		ledger.Specs[issueID] = state.SpecRecord{
 			Repository:       "owner/repo",
@@ -68,15 +77,43 @@ func scanFixture(t *testing.T) ScanInput {
 			BacklogOptionID:  "backlog-option",
 			BacklogUpdatedAt: when.Add(-2 * time.Minute),
 		}
-		ledger.Projections[issueID] = state.BoardProjection{Repository: "owner/repo", IssueID: issueID, ProjectID: "P_1", ProjectItemID: itemID, Stage: "verification", OptionID: "verification-option", UpdatedAt: when.Add(2 * time.Minute)}
-		issues = append(issues, admission.Snapshot{Repository: "owner/repo", RepositoryID: "R_1", IssueID: issueID, Number: number, Title: "Idea", Body: "Investigate behavior", Open: true, ProjectID: "P_1", ProjectPrivate: true, ProjectItemID: itemID, CurrentStatus: "Verification", StatusOptionID: "verification-option", StatusUpdatedAt: when.Add(2 * time.Minute), Complete: true})
+		ledger.Projections[issueID] = state.BoardProjection{
+			Repository:    "owner/repo",
+			IssueID:       issueID,
+			ProjectID:     "P_1",
+			ProjectItemID: itemID,
+			Stage:         "verification",
+			OptionID:      "verification-option",
+			UpdatedAt:     when.Add(2 * time.Minute),
+		}
+		issues = append(issues, admission.Snapshot{
+			Repository:      "owner/repo",
+			RepositoryID:    "R_1",
+			IssueID:         issueID,
+			Number:          number,
+			Title:           "Idea",
+			Body:            "Investigate behavior",
+			Open:            true,
+			ProjectID:       "P_1",
+			ProjectPrivate:  true,
+			ProjectItemID:   itemID,
+			CurrentStatus:   "Verification",
+			StatusOptionID:  "verification-option",
+			StatusUpdatedAt: when.Add(2 * time.Minute),
+			Complete:        true,
+		})
 		evidence[issueID] = DeliveryEvidence{
 			PRNumber:      int64(number),
 			PRURL:         url,
 			HeadSHA:       head,
 			BaseSHA:       baseSHA,
 			RequiredGates: []string{"quality"},
-			Gates:         []GateEvidence{{ID: "quality", CandidateSHA: head, BaseSHA: baseSHA, Outcome: GatePassed}},
+			Gates: []GateEvidence{{
+				ID:           "quality",
+				CandidateSHA: head,
+				BaseSHA:      baseSHA,
+				Outcome:      GatePassed,
+			}},
 		}
 		authority[issueID] = true
 	}
@@ -87,7 +124,16 @@ func scanFixture(t *testing.T) ScanInput {
 		Repository: "owner/repo",
 		ProjectID:  "P_1",
 		Statuses: Statuses{
-			Inbox: "Inbox", Discovery: "Discovery", SpecReview: "Spec Review", Backlog: "Backlog", Ready: "Ready", Building: "Building", Verification: "Verification", Review: "Review", Release: "Release", Done: "Done",
+			Inbox:        "Inbox",
+			Discovery:    "Discovery",
+			SpecReview:   "Spec Review",
+			Backlog:      "Backlog",
+			Ready:        "Ready",
+			Building:     "Building",
+			Verification: "Verification",
+			Review:       "Review",
+			Release:      "Release",
+			Done:         "Done",
 		},
 		Issues:    issues,
 		Ledger:    ledger,

@@ -56,7 +56,10 @@ func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
 	if _, err := e.ReserveReviewRepair(ctx, a.ID, wrong); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("other PR head borrowed reservation: %v", err)
 	}
-	repairFence, err := e.Claim(ctx, a.ID, Owner{RunID: "43", RunAttempt: 1})
+	repairFence, err := e.Claim(ctx, a.ID, Owner{
+		RunID:      "43",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,13 @@ func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
 	if err := e.BeginRepairPublication(ctx, repairFence, newDigest, newHead); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.ClaimReviewRepair(ctx, a.ID, Owner{RunID: "44", RunAttempt: 1}, Counters{ModelCalls: 1, RuntimeSeconds: 600}); !errors.Is(err, ErrInvalid) {
+	if _, err := e.ClaimReviewRepair(ctx, a.ID, Owner{
+		RunID:      "44",
+		RunAttempt: 1,
+	}, Counters{
+		ModelCalls:     1,
+		RuntimeSeconds: 600,
+	}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("prepared candidate was sent to a new model run: %v", err)
 	}
 	if err := e.BeginRepairPublication(ctx, repairFence, newDigest, newHead); err != nil {
@@ -101,7 +110,11 @@ func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
 	if err := e.Advance(ctx, f, Validating); err != nil {
 		t.Fatal(err)
 	}
-	p := Publication{Branch: "sofa/task", ExpectedHead: a.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}
+	p := Publication{
+		Branch:          "sofa/task",
+		ExpectedHead:    a.Admission.BaseSHA,
+		CandidateDigest: strings.Repeat("d", 64),
+	}
 	if err := e.BeginPublication(ctx, f, p); err != nil {
 		t.Fatal(err)
 	}
@@ -109,12 +122,24 @@ func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
 	if err := e.MarkPublished(ctx, f, p); err != nil {
 		t.Fatal(err)
 	}
-	intent := RepairIntent{FeedbackID: "review-7-8-abcd", FeedbackHash: strings.Repeat("f", 64), PRBaseSHA: strings.Repeat("b", 40), PRHeadSHA: p.HeadSHA, PRNumber: p.PRNumber}
+	intent := RepairIntent{
+		FeedbackID:   "review-7-8-abcd",
+		FeedbackHash: strings.Repeat("f", 64),
+		PRBaseSHA:    strings.Repeat("b", 40),
+		PRHeadSHA:    p.HeadSHA,
+		PRNumber:     p.PRNumber,
+	}
 	if ok, err := e.ReserveReviewRepair(ctx, a.ID, intent); err != nil || !ok {
 		t.Fatalf("reserve: %v, %v", ok, err)
 	}
-	first := Owner{RunID: "43", RunAttempt: 1}
-	charge := Counters{ModelCalls: 1, RuntimeSeconds: 600}
+	first := Owner{
+		RunID:      "43",
+		RunAttempt: 1,
+	}
+	charge := Counters{
+		ModelCalls:     1,
+		RuntimeSeconds: 600,
+	}
 	firstFence, err := e.ClaimReviewRepair(ctx, a.ID, first, charge)
 	if err != nil {
 		t.Fatal(err)
@@ -122,10 +147,17 @@ func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
 	if _, err := e.ClaimReviewRepair(ctx, a.ID, first, charge); !errors.Is(err, ErrClaimed) {
 		t.Fatalf("same run charged twice: %v", err)
 	}
-	if err := e.Recover(ctx, a.ID, RunProof{Owner: first, Status: "in_progress", ObservedAt: testNow}); !errors.Is(err, ErrActive) {
+	if err := e.Recover(ctx, a.ID, RunProof{
+		Owner:      first,
+		Status:     "in_progress",
+		ObservedAt: testNow,
+	}); !errors.Is(err, ErrActive) {
 		t.Fatalf("active run released: %v", err)
 	}
-	if err := e.Recover(ctx, a.ID, proof(Owner{RunID: "different", RunAttempt: 1})); !errors.Is(err, ErrStale) {
+	if err := e.Recover(ctx, a.ID, proof(Owner{
+		RunID:      "different",
+		RunAttempt: 1,
+	})); !errors.Is(err, ErrStale) {
 		t.Fatalf("other run released repair: %v", err)
 	}
 	if err := e.Recover(ctx, a.ID, proof(first)); err != nil {
@@ -135,7 +167,10 @@ func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
 	if recovered.Phase != Pending || recovered.Owner != nil || recovered.Repair == nil || *recovered.Repair != intent || recovered.Publication == nil || *recovered.Publication != p || recovered.Counts.Repairs != 1 || recovered.Counts.ModelCalls != 1 || recovered.Counts.RuntimeSeconds != 600 || recovered.Counts.InfrastructureRetries != 1 {
 		t.Fatalf("terminal recovery lost durable repair identity or counters: %+v", recovered)
 	}
-	second := Owner{RunID: "44", RunAttempt: 1}
+	second := Owner{
+		RunID:      "44",
+		RunAttempt: 1,
+	}
 	secondFence, err := e.ClaimReviewRepair(ctx, a.ID, second, charge)
 	if err != nil {
 		t.Fatal(err)

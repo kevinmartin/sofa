@@ -36,7 +36,10 @@ type lifecycleReconcileResult struct {
 }
 
 func newLifecycleCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "lifecycle", Short: "Reconcile the trusted Project lifecycle"}
+	cmd := &cobra.Command{
+		Use:   "lifecycle",
+		Short: "Reconcile the trusted Project lifecycle",
+	}
 	var opts lifecycleReconcileOptions
 	reconcile := newStageCommand("reconcile", "Observe and project due lifecycle work", "lifecycle reconcile requires --config and --out", func(cmd *cobra.Command, _ []string) error {
 		if opts.configPath == "" || opts.outPath == "" {
@@ -79,13 +82,26 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	if err != nil {
 		return err
 	}
-	store := github.StateStore{Client: ledgerClient, Repository: c.Repository}
-	engine := state.Engine{Store: store}
+	store := github.StateStore{
+		Client:     ledgerClient,
+		Repository: c.Repository,
+	}
+	engine := state.Engine{
+		Store: store,
+	}
 	claim, err := engine.ClaimPoll(ctx, time.Now().UTC(), time.Duration(c.Lifecycle.EffectivePollMinutes())*time.Minute, opts.wakeID)
 	if err != nil {
 		return err
 	}
-	result := lifecycleReconcileResult{Claimed: claim.Claimed, Generation: claim.Generation, MissedTicks: claim.Missed, Discovery: []int{}, Ready: []int{}, Held: []int{}, Moved: []int{}}
+	result := lifecycleReconcileResult{
+		Claimed:     claim.Claimed,
+		Generation:  claim.Generation,
+		MissedTicks: claim.Missed,
+		Discovery:   []int{},
+		Ready:       []int{},
+		Held:        []int{},
+		Moved:       []int{},
+	}
 	if !claim.Claimed {
 		return writeJSON(opts.outPath, result)
 	}
@@ -204,8 +220,12 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			continue
 		}
 		observed := lifecycle.DeliveryEvidence{
-			PRNumber: pull.Number, PRURL: pull.URL, HeadSHA: pull.HeadSHA,
-			BaseSHA: pull.BaseSHA, Closed: pull.State == "closed", Merged: pull.Merged,
+			PRNumber:  pull.Number,
+			PRURL:     pull.URL,
+			HeadSHA:   pull.HeadSHA,
+			BaseSHA:   pull.BaseSHA,
+			Closed:    pull.State == "closed",
+			Merged:    pull.Merged,
 			MergedSHA: pull.MergeCommitSHA,
 			// Milestone 04 supplies the independent required-gate plan and
 			// evidence. Until then, an empty plan must remain blocked.
@@ -231,8 +251,13 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		}
 	}
 	effects, err := lifecycle.Scan(lifecycle.ScanInput{
-		Repository: c.Repository, ProjectID: c.ProjectID, Statuses: statuses,
-		Issues: scanIssues, Ledger: ledger.State, Authority: authority, Evidence: evidence,
+		Repository: c.Repository,
+		ProjectID:  c.ProjectID,
+		Statuses:   statuses,
+		Issues:     scanIssues,
+		Ledger:     ledger.State,
+		Authority:  authority,
+		Evidence:   evidence,
 	})
 	if err != nil {
 		return err
@@ -277,7 +302,13 @@ func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine s
 	if err := engine.ObserveBoard(ctx, boardFromSnapshot(c, lifecycle.Discovery, issue)); err != nil {
 		return err
 	}
-	effect := lifecycle.Effect{Kind: lifecycle.Move, IssueID: issue.IssueID, IssueNumber: issue.Number, From: lifecycle.Discovery, To: lifecycle.SpecReview}
+	effect := lifecycle.Effect{
+		Kind:        lifecycle.Move,
+		IssueID:     issue.IssueID,
+		IssueNumber: issue.Number,
+		From:        lifecycle.Discovery,
+		To:          lifecycle.SpecReview,
+	}
 	return applyBoardMove(ctx, client, engine, c, statuses, effect, issue)
 }
 
@@ -303,8 +334,13 @@ func attemptForItem(ledger state.State, repository string, issue admission.Snaps
 
 func boardFromSnapshot(c config.Config, stage lifecycle.Stage, item admission.Snapshot) state.BoardProjection {
 	return state.BoardProjection{
-		Repository: c.Repository, IssueID: item.IssueID, ProjectID: c.ProjectID,
-		ProjectItemID: item.ProjectItemID, Stage: string(stage), OptionID: item.StatusOptionID, UpdatedAt: item.StatusUpdatedAt,
+		Repository:    c.Repository,
+		IssueID:       item.IssueID,
+		ProjectID:     c.ProjectID,
+		ProjectItemID: item.ProjectItemID,
+		Stage:         string(stage),
+		OptionID:      item.StatusOptionID,
+		UpdatedAt:     item.StatusUpdatedAt,
 	}
 }
 
@@ -330,7 +366,10 @@ func observeRelease(ctx context.Context, client *github.Client, engine state.Eng
 	}
 	required := make([]release.RequiredCheck, 0, len(c.Lifecycle.Release.RequiredChecks))
 	for _, check := range c.Lifecycle.Release.RequiredChecks {
-		required = append(required, release.RequiredCheck{Name: check.Name, AppID: check.AppID})
+		required = append(required, release.RequiredCheck{
+			Name:  check.Name,
+			AppID: check.AppID,
+		})
 	}
 	decision, err := release.Evaluate(attempt, pull, defaultHead, onDefault, required, checks)
 	if err != nil {
@@ -507,13 +546,19 @@ func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger st
 			continue
 		}
 		if found && attempt.Phase == state.Pending && attempt.Owner == nil && pending[item.Issue.ProjectItemID] {
-			recovery = append(recovery, candidate{number: item.Issue.Number, rank: item.PriorityRank})
+			recovery = append(recovery, candidate{
+				number: item.Issue.Number,
+				rank:   item.PriorityRank,
+			})
 			continue
 		}
 		if found {
 			continue
 		}
-		newWork = append(newWork, candidate{number: item.Issue.Number, rank: item.PriorityRank})
+		newWork = append(newWork, candidate{
+			number: item.Issue.Number,
+			rank:   item.PriorityRank,
+		})
 	}
 	// A configured owner field accepts P0..P4, with smaller rank first.
 	// Without that field all ranks are equal and issue number is the stable tie.

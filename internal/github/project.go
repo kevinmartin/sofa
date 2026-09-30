@@ -131,7 +131,9 @@ func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dep
 			if item.Content.LastEditedAt != nil {
 				snapshot.IssueLastEditedAt = *item.Content.LastEditedAt
 			}
-			workItem := ProjectWorkItem{Issue: snapshot}
+			workItem := ProjectWorkItem{
+				Issue: snapshot,
+			}
 			if dependencyField == "" {
 				workItem.DependenciesKnown = true
 			} else if item.Dependencies != nil {

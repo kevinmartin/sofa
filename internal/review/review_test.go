@@ -85,12 +85,42 @@ func TestEvaluateReservedRejectsNewerFeedbackAndChangedIdentity(t *testing.T) {
 	const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	a := state.Attempt{
-		ID: "attempt-1", Admission: state.Admission{Repository: "owner/repo"},
-		Phase: state.Pending, Limits: state.Limits{Repairs: 1}, Counts: state.Counters{Repairs: 1},
-		Publication: &state.Publication{Branch: "sofa/attempt-1", HeadSHA: head, PRNumber: 4, PRURL: "https://github.com/owner/repo/pull/4"},
+		ID: "attempt-1",
+		Admission: state.Admission{
+			Repository: "owner/repo",
+		},
+		Phase: state.Pending,
+		Limits: state.Limits{
+			Repairs: 1,
+		},
+		Counts: state.Counters{
+			Repairs: 1,
+		},
+		Publication: &state.Publication{
+			Branch:   "sofa/attempt-1",
+			HeadSHA:  head,
+			PRNumber: 4,
+			PRURL:    "https://github.com/owner/repo/pull/4",
+		},
 	}
-	p := github.PullSnapshot{Number: 4, URL: a.Publication.PRURL, State: "open", HeadSHA: head, HeadRef: a.Publication.Branch, HeadRepository: "owner/repo", BaseSHA: base, BaseRepository: "owner/repo"}
-	r := github.PullReview{ID: 8, UserID: "U_owner", State: "CHANGES_REQUESTED", CommitSHA: head, Body: "Fix the boundary case", SubmittedAt: time.Now().UTC()}
+	p := github.PullSnapshot{
+		Number:         4,
+		URL:            a.Publication.PRURL,
+		State:          "open",
+		HeadSHA:        head,
+		HeadRef:        a.Publication.Branch,
+		HeadRepository: "owner/repo",
+		BaseSHA:        base,
+		BaseRepository: "owner/repo",
+	}
+	r := github.PullReview{
+		ID:          8,
+		UserID:      "U_owner",
+		State:       "CHANGES_REQUESTED",
+		CommitSHA:   head,
+		Body:        "Fix the boundary case",
+		SubmittedAt: time.Now().UTC(),
+	}
 	a.Phase = state.Draft
 	a.Counts.Repairs = 0
 	d, err := Evaluate(a, p, r, "U_owner")
@@ -99,7 +129,13 @@ func TestEvaluateReservedRejectsNewerFeedbackAndChangedIdentity(t *testing.T) {
 	}
 	a.Phase = state.Pending
 	a.Counts.Repairs = 1
-	a.Repair = &state.RepairIntent{FeedbackID: d.FeedbackID, FeedbackHash: d.FeedbackHash, PRBaseSHA: base, PRHeadSHA: head, PRNumber: 4}
+	a.Repair = &state.RepairIntent{
+		FeedbackID:   d.FeedbackID,
+		FeedbackHash: d.FeedbackHash,
+		PRBaseSHA:    base,
+		PRHeadSHA:    head,
+		PRNumber:     4,
+	}
 	if got, err := EvaluateReserved(a, p, r, "U_owner"); err != nil || got.FeedbackID != d.FeedbackID {
 		t.Fatalf("reserved feedback was not recovered: %+v, %v", got, err)
 	}
@@ -127,12 +163,22 @@ func TestEvaluateReservedRejectsNewerFeedbackAndChangedIdentity(t *testing.T) {
 
 func TestLaterFeedbackAppendsOnlyLinkedMetadata(t *testing.T) {
 	ctx := context.Background()
-	engine := state.Engine{Store: &state.MemoryStore{}}
+	engine := state.Engine{
+		Store: &state.MemoryStore{},
+	}
 	a, _, err := engine.Admit(ctx, state.Admission{
-		Repository: "owner/repo", Issue: 1,
-		SpecDigest: strings.Repeat("a", 64), ConfigDigest: strings.Repeat("b", 64), BaseSHA: strings.Repeat("c", 40),
-		ProjectID: "project", ProjectItemID: "item", StatusOptionID: "ready", StatusUpdatedAt: time.Now().UTC(),
-	}, state.Limits{RuntimeSeconds: 10})
+		Repository:      "owner/repo",
+		Issue:           1,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       "project",
+		ProjectItemID:   "item",
+		StatusOptionID:  "ready",
+		StatusUpdatedAt: time.Now().UTC(),
+	}, state.Limits{
+		RuntimeSeconds: 10,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,8 +188,12 @@ func TestLaterFeedbackAppendsOnlyLinkedMetadata(t *testing.T) {
 	}
 	a.Phase = state.Draft
 	a.Publication = &state.Publication{
-		Branch: "sofa/task", ExpectedHead: strings.Repeat("c", 40), CandidateDigest: strings.Repeat("d", 64),
-		HeadSHA: strings.Repeat("e", 40), PRNumber: 7, PRURL: "https://github.com/owner/repo/pull/7",
+		Branch:          "sofa/task",
+		ExpectedHead:    strings.Repeat("c", 40),
+		CandidateDigest: strings.Repeat("d", 64),
+		HeadSHA:         strings.Repeat("e", 40),
+		PRNumber:        7,
+		PRURL:           "https://github.com/owner/repo/pull/7",
 	}
 	snapshot.State.Attempts[a.ID] = a
 	if err := engine.Store.CompareAndSwap(ctx, snapshot.Revision, snapshot.State); err != nil {
@@ -151,12 +201,22 @@ func TestLaterFeedbackAppendsOnlyLinkedMetadata(t *testing.T) {
 	}
 	mergedAt := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	pull := github.PullSnapshot{
-		Number: 7, URL: a.Publication.PRURL, HeadSHA: a.Publication.HeadSHA, HeadRef: a.Publication.Branch, Merged: true, MergedAt: mergedAt,
-		MergeCommitSHA: strings.Repeat("f", 40), HeadRepository: "owner/repo", BaseRepository: "owner/repo",
+		Number:         7,
+		URL:            a.Publication.PRURL,
+		HeadSHA:        a.Publication.HeadSHA,
+		HeadRef:        a.Publication.Branch,
+		Merged:         true,
+		MergedAt:       mergedAt,
+		MergeCommitSHA: strings.Repeat("f", 40),
+		HeadRepository: "owner/repo",
+		BaseRepository: "owner/repo",
 	}
 	comment := discovery.SpecComment{
-		ID: 9, AuthorID: "U_reporter", Body: "Potential regression in private data: should not appear in ledger",
-		CreatedAt: mergedAt.Add(time.Hour), UpdatedAt: mergedAt.Add(time.Hour),
+		ID:        9,
+		AuthorID:  "U_reporter",
+		Body:      "Potential regression in private data: should not appear in ledger",
+		CreatedAt: mergedAt.Add(time.Hour),
+		UpdatedAt: mergedAt.Add(time.Hour),
 	}
 	if err := RecordLaterFeedback(ctx, engine, a, pull, comment); err != nil {
 		t.Fatal(err)

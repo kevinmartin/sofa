@@ -212,7 +212,9 @@ func TestApprovedSnapshotSubstitutesOnlyApprovedComment(t *testing.T) {
 	if err := store.CompareAndSwap(context.Background(), ledger.Revision, ledger.State); err != nil {
 		t.Fatal(err)
 	}
-	approved, err := ApprovedSnapshot(context.Background(), fixtureReader{comment: c}, store, p, s)
+	approved, err := ApprovedSnapshot(context.Background(), fixtureReader{
+		comment: c,
+	}, store, p, s)
 	if err != nil || approved.Body != c.Body {
 		t.Fatalf("approved snapshot: %+v, %v", approved, err)
 	}
@@ -382,7 +384,9 @@ func TestObservedRevisionArchivesPriorApprovalOnce(t *testing.T) {
 	if err := store.CompareAndSwap(ctx, loaded.Revision, loaded.State); err != nil {
 		t.Fatal(err)
 	}
-	reader := &fakeCommentPublisher{comments: []SpecComment{firstComment, secondComment}}
+	reader := &fakeCommentPublisher{
+		comments: []SpecComment{firstComment, secondComment},
+	}
 	second, changed, err := ObserveSpecReview(ctx, reader, store, p, s)
 	if err != nil || !changed || second.Revision != 1 || second.ApprovedDigest != "" {
 		t.Fatalf("observed v2 review: %+v, changed=%v, err=%v", second, changed, err)

@@ -21,7 +21,9 @@ func boardRecord(stage, option string, at time.Time) BoardProjection {
 
 func TestBoardProjectionOwnerHandoffAndPendingRecovery(t *testing.T) {
 	ctx := context.Background()
-	engine := Engine{Store: &MemoryStore{}}
+	engine := Engine{
+		Store: &MemoryStore{},
+	}
 	base := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	inbox := boardRecord("inbox", "inbox-option", base)
 	if err := engine.ObserveBoard(ctx, inbox); err != nil {
@@ -66,7 +68,9 @@ func TestBoardProjectionOwnerHandoffAndPendingRecovery(t *testing.T) {
 
 func TestBoardProjectionNeverFightsManualOrLateChange(t *testing.T) {
 	ctx := context.Background()
-	engine := Engine{Store: &MemoryStore{}}
+	engine := Engine{
+		Store: &MemoryStore{},
+	}
 	base := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	building := boardRecord("building", "building-option", base)
 	if err := engine.ObserveBoard(ctx, building); err != nil {

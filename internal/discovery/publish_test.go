@@ -75,11 +75,17 @@ func discoveryPublishFixture(t *testing.T) (state.Engine, *memorySpecStore, admi
 		t.Fatal(err)
 	}
 	store := &memorySpecStore{}
-	engine := state.Engine{Store: store, Now: func() time.Time { return time.Date(2026, 9, 29, 10, 2, 0, 0, time.UTC) }}
+	engine := state.Engine{
+		Store: store,
+		Now:   func() time.Time { return time.Date(2026, 9, 29, 10, 2, 0, 0, time.UTC) },
+	}
 	if _, _, err := engine.AdmitDiscovery(ctx, grant, 2, 1); err != nil {
 		t.Fatal(err)
 	}
-	fence, err := engine.ClaimDiscovery(ctx, s.IssueID, state.Owner{RunID: "100", RunAttempt: 1})
+	fence, err := engine.ClaimDiscovery(ctx, s.IssueID, state.Owner{
+		RunID:      "100",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +104,9 @@ func discoveryPublishFixture(t *testing.T) (state.Engine, *memorySpecStore, admi
 func TestCommentTransportAmbiguityRecoversWithoutSecondPost(t *testing.T) {
 	ctx := context.Background()
 	engine, store, s, _, in := discoveryPublishFixture(t)
-	publisher := &fakeCommentPublisher{failPost: true}
+	publisher := &fakeCommentPublisher{
+		failPost: true,
+	}
 	if _, err := PublishSpecification(ctx, engine, store, publisher, in); err == nil {
 		t.Fatal("ambiguous POST unexpectedly reported success")
 	}
@@ -114,7 +122,10 @@ func TestCommentTransportAmbiguityRecoversWithoutSecondPost(t *testing.T) {
 	if err := engine.RecoverDiscovery(ctx, s.IssueID, proof); err != nil {
 		t.Fatal(err)
 	}
-	newFence, err := engine.ClaimDiscovery(ctx, s.IssueID, state.Owner{RunID: "101", RunAttempt: 1})
+	newFence, err := engine.ClaimDiscovery(ctx, s.IssueID, state.Owner{
+		RunID:      "101",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,14 +147,24 @@ func TestCommentTransportAmbiguityRecoversWithoutSecondPost(t *testing.T) {
 func TestAmbiguousPostWithoutMatchingBotCommentBlocksRetry(t *testing.T) {
 	ctx := context.Background()
 	engine, store, s, _, in := discoveryPublishFixture(t)
-	publisher := &fakeCommentPublisher{failPost: true}
+	publisher := &fakeCommentPublisher{
+		failPost: true,
+	}
 	_, _ = PublishSpecification(ctx, engine, store, publisher, in)
 	publisher.comments = nil // Ambiguous outcome: never issue a second POST.
-	proof := state.RunProof{Owner: in.Fence.Owner, Status: "completed", Conclusion: "failure", ObservedAt: time.Date(2026, 9, 29, 10, 2, 0, 0, time.UTC)}
+	proof := state.RunProof{
+		Owner:      in.Fence.Owner,
+		Status:     "completed",
+		Conclusion: "failure",
+		ObservedAt: time.Date(2026, 9, 29, 10, 2, 0, 0, time.UTC),
+	}
 	if err := engine.RecoverDiscovery(ctx, s.IssueID, proof); err != nil {
 		t.Fatal(err)
 	}
-	fence, err := engine.ClaimDiscovery(ctx, s.IssueID, state.Owner{RunID: "101", RunAttempt: 1})
+	fence, err := engine.ClaimDiscovery(ctx, s.IssueID, state.Owner{
+		RunID:      "101",
+		RunAttempt: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

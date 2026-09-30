@@ -18,12 +18,45 @@ func TestPlanPollCoalescesMissedTicksAndDuplicateWakeups(t *testing.T) {
 		wantDue    bool
 		wantMissed int64
 	}{
-		{name: "first poll", now: base, wantDue: true},
-		{name: "idle", now: base.Add(5 * time.Minute), last: base},
-		{name: "one due window", now: base.Add(10 * time.Minute), last: base, wantDue: true, wantMissed: 1},
-		{name: "hours coalesce", now: base.Add(4 * time.Hour), last: base, wantDue: true, wantMissed: 24},
-		{name: "fresh event", now: base.Add(time.Minute), last: base, lastWakeID: "old", wakeID: "new", wantDue: true},
-		{name: "duplicate event", now: base.Add(time.Minute), last: base, lastWakeID: "same", wakeID: "same"},
+		{
+			name:    "first poll",
+			now:     base,
+			wantDue: true,
+		},
+		{
+			name: "idle",
+			now:  base.Add(5 * time.Minute),
+			last: base,
+		},
+		{
+			name:       "one due window",
+			now:        base.Add(10 * time.Minute),
+			last:       base,
+			wantDue:    true,
+			wantMissed: 1,
+		},
+		{
+			name:       "hours coalesce",
+			now:        base.Add(4 * time.Hour),
+			last:       base,
+			wantDue:    true,
+			wantMissed: 24,
+		},
+		{
+			name:       "fresh event",
+			now:        base.Add(time.Minute),
+			last:       base,
+			lastWakeID: "old",
+			wakeID:     "new",
+			wantDue:    true,
+		},
+		{
+			name:       "duplicate event",
+			now:        base.Add(time.Minute),
+			last:       base,
+			lastWakeID: "same",
+			wakeID:     "same",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := PlanPoll(tc.now, tc.last, 10*time.Minute, tc.lastWakeID, tc.wakeID)
@@ -53,8 +86,18 @@ func TestGatesAndProjectionFailClosed(t *testing.T) {
 		PRExists:      true,
 		RequiredGates: []string{"quality", "security"},
 		GateEvidence: []GateEvidence{
-			{ID: "quality", CandidateSHA: sha, BaseSHA: other, Outcome: GatePassed},
-			{ID: "security", CandidateSHA: sha, BaseSHA: other, Outcome: GatePassed},
+			{
+				ID:           "quality",
+				CandidateSHA: sha,
+				BaseSHA:      other,
+				Outcome:      GatePassed,
+			},
+			{
+				ID:           "security",
+				CandidateSHA: sha,
+				BaseSHA:      other,
+				Outcome:      GatePassed,
+			},
 		},
 	}
 	if got := ProjectDecision(base); got.MoveTo != Review {
@@ -89,7 +132,21 @@ func TestLifecycleTransitionsAndTerminalOutcomes(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	baseSHA := strings.Repeat("c", 40)
 	verified := func(stage Stage) Projection {
-		return Projection{Current: stage, Authorized: true, PRExists: true, CandidateSHA: sha, PRHeadSHA: sha, PRBaseSHA: baseSHA, RequiredGates: []string{"quality"}, GateEvidence: []GateEvidence{{ID: "quality", CandidateSHA: sha, BaseSHA: baseSHA, Outcome: GatePassed}}}
+		return Projection{
+			Current:       stage,
+			Authorized:    true,
+			PRExists:      true,
+			CandidateSHA:  sha,
+			PRHeadSHA:     sha,
+			PRBaseSHA:     baseSHA,
+			RequiredGates: []string{"quality"},
+			GateEvidence: []GateEvidence{{
+				ID:           "quality",
+				CandidateSHA: sha,
+				BaseSHA:      baseSHA,
+				Outcome:      GatePassed,
+			}},
+		}
 	}
 	reviewMerged := verified(Review)
 	reviewMerged.PRMerged = true
@@ -110,27 +167,173 @@ func TestLifecycleTransitionsAndTerminalOutcomes(t *testing.T) {
 		want    Stage
 		blocked bool
 	}{
-		{name: "ready remains until publication", input: Projection{Current: Ready, Authorized: true}},
-		{name: "ready to building", input: Projection{Current: Ready, Authorized: true, Published: true, PRExists: true, CandidateSHA: sha, PRHeadSHA: sha}, want: Building},
-		{name: "building to verification", input: Projection{Current: Building, Authorized: true, PRExists: true, CandidateSHA: sha, PRHeadSHA: sha}, want: Verification},
-		{name: "review to release", input: reviewMerged, want: Release},
-		{name: "release to done without configured gate", input: release, want: Done},
-		{name: "release waits for gate", input: releaseRequired, blocked: true},
-		{name: "release rejects other commit", input: releaseWrong, blocked: true},
-		{name: "release exact commit", input: releasePassed, want: Done},
-		{name: "manual skip to review without gates", input: Projection{Current: Review, Authorized: true, PRExists: true, PRMerged: true, CandidateSHA: sha, PRHeadSHA: sha, PRBaseSHA: baseSHA, MergedSHA: sha}, blocked: true},
-		{name: "manual skip to release without gates", input: Projection{Current: Release, Authorized: true, PRExists: true, CandidateSHA: sha, PRHeadSHA: sha, PRBaseSHA: baseSHA, MergedSHA: sha}, blocked: true},
-		{name: "closed without merge", input: Projection{Current: Review, Authorized: true, PRExists: true, PRClosed: true}, blocked: true},
-		{name: "cancelled", input: Projection{Current: Building, Authorized: true, TerminalOutcome: "cancelled"}, blocked: true},
-		{name: "superseded", input: Projection{Current: Verification, Authorized: true, TerminalOutcome: "superseded"}, blocked: true},
-		{name: "deferred", input: Projection{Current: Discovery, Authorized: true, TerminalOutcome: "deferred"}, blocked: true},
-		{name: "blocked", input: Projection{Current: SpecReview, Authorized: true, TerminalOutcome: "blocked"}, blocked: true},
-		{name: "inbox cannot auto-admit", input: Projection{Current: Inbox}, blocked: true},
-		{name: "discovery cannot auto-approve", input: Projection{Current: Discovery, Authorized: true}},
-		{name: "spec review waits for owner", input: Projection{Current: SpecReview, Authorized: true}},
-		{name: "backlog waits for owner", input: Projection{Current: Backlog, Authorized: true}},
-		{name: "review cannot auto-merge", input: verified(Review)},
-		{name: "done remains terminal", input: Projection{Current: Done, Authorized: true}},
+		{
+			name: "ready remains until publication",
+			input: Projection{
+				Current:    Ready,
+				Authorized: true,
+			},
+		},
+		{
+			name: "ready to building",
+			input: Projection{
+				Current:      Ready,
+				Authorized:   true,
+				Published:    true,
+				PRExists:     true,
+				CandidateSHA: sha,
+				PRHeadSHA:    sha,
+			},
+			want: Building,
+		},
+		{
+			name: "building to verification",
+			input: Projection{
+				Current:      Building,
+				Authorized:   true,
+				PRExists:     true,
+				CandidateSHA: sha,
+				PRHeadSHA:    sha,
+			},
+			want: Verification,
+		},
+		{
+			name:  "review to release",
+			input: reviewMerged,
+			want:  Release,
+		},
+		{
+			name:  "release to done without configured gate",
+			input: release,
+			want:  Done,
+		},
+		{
+			name:    "release waits for gate",
+			input:   releaseRequired,
+			blocked: true,
+		},
+		{
+			name:    "release rejects other commit",
+			input:   releaseWrong,
+			blocked: true,
+		},
+		{
+			name:  "release exact commit",
+			input: releasePassed,
+			want:  Done,
+		},
+		{
+			name: "manual skip to review without gates",
+			input: Projection{
+				Current:      Review,
+				Authorized:   true,
+				PRExists:     true,
+				PRMerged:     true,
+				CandidateSHA: sha,
+				PRHeadSHA:    sha,
+				PRBaseSHA:    baseSHA,
+				MergedSHA:    sha,
+			},
+			blocked: true,
+		},
+		{
+			name: "manual skip to release without gates",
+			input: Projection{
+				Current:      Release,
+				Authorized:   true,
+				PRExists:     true,
+				CandidateSHA: sha,
+				PRHeadSHA:    sha,
+				PRBaseSHA:    baseSHA,
+				MergedSHA:    sha,
+			},
+			blocked: true,
+		},
+		{
+			name: "closed without merge",
+			input: Projection{
+				Current:    Review,
+				Authorized: true,
+				PRExists:   true,
+				PRClosed:   true,
+			},
+			blocked: true,
+		},
+		{
+			name: "cancelled",
+			input: Projection{
+				Current:         Building,
+				Authorized:      true,
+				TerminalOutcome: "cancelled",
+			},
+			blocked: true,
+		},
+		{
+			name: "superseded",
+			input: Projection{
+				Current:         Verification,
+				Authorized:      true,
+				TerminalOutcome: "superseded",
+			},
+			blocked: true,
+		},
+		{
+			name: "deferred",
+			input: Projection{
+				Current:         Discovery,
+				Authorized:      true,
+				TerminalOutcome: "deferred",
+			},
+			blocked: true,
+		},
+		{
+			name: "blocked",
+			input: Projection{
+				Current:         SpecReview,
+				Authorized:      true,
+				TerminalOutcome: "blocked",
+			},
+			blocked: true,
+		},
+		{
+			name: "inbox cannot auto-admit",
+			input: Projection{
+				Current: Inbox,
+			},
+			blocked: true,
+		},
+		{
+			name: "discovery cannot auto-approve",
+			input: Projection{
+				Current:    Discovery,
+				Authorized: true,
+			},
+		},
+		{
+			name: "spec review waits for owner",
+			input: Projection{
+				Current:    SpecReview,
+				Authorized: true,
+			},
+		},
+		{
+			name: "backlog waits for owner",
+			input: Projection{
+				Current:    Backlog,
+				Authorized: true,
+			},
+		},
+		{
+			name:  "review cannot auto-merge",
+			input: verified(Review),
+		},
+		{
+			name: "done remains terminal",
+			input: Projection{
+				Current:    Done,
+				Authorized: true,
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ProjectDecision(tc.input)

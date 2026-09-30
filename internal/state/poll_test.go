@@ -8,7 +8,9 @@ import (
 )
 
 func TestPollClaimCoalescesOverlappingAndMissedRuns(t *testing.T) {
-	engine := Engine{Store: &MemoryStore{}}
+	engine := Engine{
+		Store: &MemoryStore{},
+	}
 	base := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	var wg sync.WaitGroup
 	results := make(chan PollClaim, 20)

@@ -35,7 +35,10 @@ func newReleaseObserveCommand() *cobra.Command {
 				if !ok || err != nil || id < 1 || name == "" {
 					return errors.New("invalid required check; use name@app-id")
 				}
-				required = append(required, release.RequiredCheck{Name: name, AppID: id})
+				required = append(required, release.RequiredCheck{
+					Name:  name,
+					AppID: id,
+				})
 			}
 			token := os.Getenv("SOFA_GATE_READ_TOKEN")
 			var client *github.Client

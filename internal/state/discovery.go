@@ -180,7 +180,11 @@ func (e Engine) ClaimDiscovery(ctx context.Context, issueID string, owner Owner)
 		d.Phase = DiscoveryRunning
 		d.UpdatedAt = e.now()
 		s.Discoveries[issueID] = d
-		fence = DiscoveryFence{IssueID: issueID, Generation: d.Generation, Owner: owner}
+		fence = DiscoveryFence{
+			IssueID:    issueID,
+			Generation: d.Generation,
+			Owner:      owner,
+		}
 		return true, nil
 	})
 	return
@@ -210,7 +214,11 @@ func (e Engine) AssertDiscoveryOwner(ctx context.Context, fence DiscoveryFence) 
 // the external POST. The key is a deterministic retry locator; neither it nor
 // the pending digest can satisfy Spec Review or Ready approval.
 func (e Engine) PrepareDiscoveryPublication(ctx context.Context, fence DiscoveryFence, digest, key string) error {
-	intent := DiscoveryPublication{Digest: digest, Key: key, Producer: fence.Owner}
+	intent := DiscoveryPublication{
+		Digest:   digest,
+		Key:      key,
+		Producer: fence.Owner,
+	}
 	if !intent.valid() {
 		return fmt.Errorf("%w: Discovery publication intent", ErrInvalid)
 	}

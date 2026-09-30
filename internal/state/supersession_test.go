@@ -12,45 +12,87 @@ func TestApprovedRevisionSupersedesAttemptWithoutResettingBudget(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 9, 29, 9, 0, 0, 0, time.UTC)
 	store := &MemoryStore{}
-	engine := Engine{Store: store, Now: func() time.Time { return base.Add(9 * time.Hour) }}
+	engine := Engine{
+		Store: store,
+		Now:   func() time.Time { return base.Add(9 * time.Hour) },
+	}
 	oldSpec := strings.Repeat("a", 64)
 	newSpec := strings.Repeat("b", 64)
 	oldSource := strings.Repeat("c", 64)
 	newSource := strings.Repeat("d", 64)
 	firstReady := base.Add(3 * time.Hour)
 	oldAdmission := Admission{
-		Repository: "owner/consumer", Issue: 7, SpecDigest: oldSpec,
-		ConfigDigest: strings.Repeat("e", 64), BaseSHA: strings.Repeat("f", 40),
-		ProjectID: "P", ProjectItemID: "PVTI", StatusOptionID: "ready",
+		Repository:      "owner/consumer",
+		Issue:           7,
+		SpecDigest:      oldSpec,
+		ConfigDigest:    strings.Repeat("e", 64),
+		BaseSHA:         strings.Repeat("f", 40),
+		ProjectID:       "P",
+		ProjectItemID:   "PVTI",
+		StatusOptionID:  "ready",
 		StatusUpdatedAt: firstReady,
 	}
-	oldAttempt, created, err := engine.Admit(ctx, oldAdmission, Limits{ModelCalls: 3, Repairs: 1, InfrastructureRetries: 1, RuntimeSeconds: 1200})
+	oldAttempt, created, err := engine.Admit(ctx, oldAdmission, Limits{
+		ModelCalls:            3,
+		Repairs:               1,
+		InfrastructureRetries: 1,
+		RuntimeSeconds:        1200,
+	})
 	if err != nil || !created {
 		t.Fatalf("v1 admission: %v", err)
 	}
-	owner := Owner{RunID: "run-one", RunAttempt: 1}
+	owner := Owner{
+		RunID:      "run-one",
+		RunAttempt: 1,
+	}
 	fence, err := engine.Claim(ctx, oldAttempt.ID, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.Charge(ctx, fence, Counters{ModelCalls: 1, RuntimeSeconds: 100}); err != nil {
+	if err := engine.Charge(ctx, fence, Counters{
+		ModelCalls:     1,
+		RuntimeSeconds: 100,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	oldTask := DiscoveryTask{
-		Repository: "owner/consumer", IssueID: "I_7", Issue: 7,
-		ProjectID: "P", ProjectItemID: "PVTI", StatusOptionID: "discovery",
-		StatusUpdatedAt: base, SourceDigest: oldSource, Phase: DiscoveryReview,
-		Generation: 1, ModelCalls: 1, MaxModelCalls: 1, SpecDigest: oldSpec,
-		CommentID: 17, CommentAuthorID: "bot", CommentCreatedAt: base.Add(time.Hour),
-		CommentUpdatedAt: base.Add(time.Hour), CreatedAt: base, UpdatedAt: base.Add(time.Hour),
+		Repository:       "owner/consumer",
+		IssueID:          "I_7",
+		Issue:            7,
+		ProjectID:        "P",
+		ProjectItemID:    "PVTI",
+		StatusOptionID:   "discovery",
+		StatusUpdatedAt:  base,
+		SourceDigest:     oldSource,
+		Phase:            DiscoveryReview,
+		Generation:       1,
+		ModelCalls:       1,
+		MaxModelCalls:    1,
+		SpecDigest:       oldSpec,
+		CommentID:        17,
+		CommentAuthorID:  "bot",
+		CommentCreatedAt: base.Add(time.Hour),
+		CommentUpdatedAt: base.Add(time.Hour),
+		CreatedAt:        base,
+		UpdatedAt:        base.Add(time.Hour),
 	}
 	oldRecord := SpecRecord{
-		Repository: "owner/consumer", IssueID: "I_7", Issue: 7,
-		ProjectID: "P", ProjectItemID: "PVTI", SourceDigest: oldSource,
-		SpecDigest: oldSpec, CommentID: 17, CommentAuthorID: "bot",
-		CommentCreatedAt: base.Add(time.Hour), CommentUpdatedAt: base.Add(time.Hour),
-		ReviewOptionID: "review", ReviewUpdatedAt: base.Add(90 * time.Minute),
-		ApprovedDigest: oldSpec, BacklogOptionID: "backlog", BacklogUpdatedAt: base.Add(2 * time.Hour),
+		Repository:       "owner/consumer",
+		IssueID:          "I_7",
+		Issue:            7,
+		ProjectID:        "P",
+		ProjectItemID:    "PVTI",
+		SourceDigest:     oldSource,
+		SpecDigest:       oldSpec,
+		CommentID:        17,
+		CommentAuthorID:  "bot",
+		CommentCreatedAt: base.Add(time.Hour),
+		CommentUpdatedAt: base.Add(time.Hour),
+		ReviewOptionID:   "review",
+		ReviewUpdatedAt:  base.Add(90 * time.Minute),
+		ApprovedDigest:   oldSpec,
+		BacklogOptionID:  "backlog",
+		BacklogUpdatedAt: base.Add(2 * time.Hour),
 	}
 	loaded, err := store.Load(ctx)
 	if err != nil {
@@ -64,9 +106,14 @@ func TestApprovedRevisionSupersedesAttemptWithoutResettingBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := DiscoveryAdmission{
-		Repository: "owner/consumer", IssueID: "I_7", Issue: 7,
-		ProjectID: "P", ProjectItemID: "PVTI", StatusOptionID: "discovery",
-		StatusUpdatedAt: base.Add(4 * time.Hour), SourceDigest: newSource,
+		Repository:      "owner/consumer",
+		IssueID:         "I_7",
+		Issue:           7,
+		ProjectID:       "P",
+		ProjectItemID:   "PVTI",
+		StatusOptionID:  "discovery",
+		StatusUpdatedAt: base.Add(4 * time.Hour),
+		SourceDigest:    newSource,
 	}
 	if _, _, err := engine.AdmitDiscovery(ctx, changed, 2, 0); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("invalid cap accepted: %v", err)
@@ -85,7 +132,10 @@ func TestApprovedRevisionSupersedesAttemptWithoutResettingBudget(t *testing.T) {
 	if err != nil || !created || revised.Revision != 1 || revised.ModelCalls != 1 || revised.Phase != DiscoveryBlocked || revised.Failure != "budget" {
 		t.Fatalf("bounded v2 budget hold: %+v, created=%v, err=%v", revised, created, err)
 	}
-	if _, err := engine.ClaimDiscovery(ctx, "I_7", Owner{RunID: "run-two", RunAttempt: 1}); !errors.Is(err, ErrClaimed) {
+	if _, err := engine.ClaimDiscovery(ctx, "I_7", Owner{
+		RunID:      "run-two",
+		RunAttempt: 1,
+	}); !errors.Is(err, ErrClaimed) {
 		t.Fatalf("exhausted v2 consumed another prompt: %v", err)
 	}
 	revised, created, err = engine.AdmitDiscovery(ctx, changed, 2, 2)

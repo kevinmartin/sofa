@@ -78,9 +78,16 @@ func PlanPoll(now, last time.Time, interval time.Duration, lastWakeID, wakeID st
 	eventDue := wakeID != "" && wakeID != lastWakeID
 	timeDue := last.IsZero() || !now.Before(last.Add(interval))
 	if !timeDue && !eventDue {
-		return PollPlan{Next: last.Add(interval), WakeID: lastWakeID}, nil
+		return PollPlan{
+			Next:   last.Add(interval),
+			WakeID: lastWakeID,
+		}, nil
 	}
-	plan := PollPlan{Due: true, Next: now.Add(interval), WakeID: lastWakeID}
+	plan := PollPlan{
+		Due:    true,
+		Next:   now.Add(interval),
+		WakeID: lastWakeID,
+	}
 	if eventDue {
 		plan.WakeID = wakeID
 	}
@@ -212,63 +219,109 @@ type Decision struct {
 // move away from it requires a new observation, not an automatic fight.
 func ProjectDecision(p Projection) Decision {
 	if p.Current != p.LastProjected && p.LastProjected != "" {
-		return Decision{Conflict: true, NextAction: "inspect manual Project status change"}
+		return Decision{
+			Conflict:   true,
+			NextAction: "inspect manual Project status change",
+		}
 	}
 	if p.TerminalOutcome != "" {
-		return Decision{BlockedReason: p.TerminalOutcome, NextAction: "inspect terminal task outcome"}
+		return Decision{
+			BlockedReason: p.TerminalOutcome,
+			NextAction:    "inspect terminal task outcome",
+		}
 	}
 	if !p.Authorized {
-		return Decision{BlockedReason: "authorization unavailable", NextAction: "restore owner approval"}
+		return Decision{
+			BlockedReason: "authorization unavailable",
+			NextAction:    "restore owner approval",
+		}
 	}
 	if p.PRExists && p.PRClosed && !p.PRMerged {
-		return Decision{BlockedReason: "closed without merge", NextAction: "inspect closed PR"}
+		return Decision{
+			BlockedReason: "closed without merge",
+			NextAction:    "inspect closed PR",
+		}
 	}
 	switch p.Current {
 	case Ready:
 		// Milestone-01 publication revalidates current Ready. Moving it while
 		// the worker runs would revoke the active grant mid-attempt.
 		if p.Published && p.PRExists && p.CandidateSHA != "" && p.PRHeadSHA == p.CandidateSHA {
-			return Decision{MoveTo: Building}
+			return Decision{
+				MoveTo: Building,
+			}
 		}
 	case Building:
 		if p.PRExists && p.CandidateSHA != "" && p.PRHeadSHA == p.CandidateSHA {
-			return Decision{MoveTo: Verification}
+			return Decision{
+				MoveTo: Verification,
+			}
 		}
 	case Verification:
 		if !p.PRExists || p.PRHeadSHA == "" || p.PRHeadSHA != p.CandidateSHA {
-			return Decision{BlockedReason: "candidate changed or unavailable", NextAction: "revalidate exact PR head"}
+			return Decision{
+				BlockedReason: "candidate changed or unavailable",
+				NextAction:    "revalidate exact PR head",
+			}
 		}
 		passed, reason := GatesPassed(p.RequiredGates, p.GateEvidence, p.CandidateSHA, p.PRBaseSHA, p.AllowFixture)
 		if passed {
-			return Decision{MoveTo: Review}
+			return Decision{
+				MoveTo: Review,
+			}
 		}
-		return Decision{BlockedReason: reason, NextAction: "wait for current required gate evidence"}
+		return Decision{
+			BlockedReason: reason,
+			NextAction:    "wait for current required gate evidence",
+		}
 	case Review:
 		if !p.PRExists || p.PRHeadSHA != p.CandidateSHA {
-			return Decision{BlockedReason: "candidate changed or unavailable", NextAction: "revalidate exact PR head"}
+			return Decision{
+				BlockedReason: "candidate changed or unavailable",
+				NextAction:    "revalidate exact PR head",
+			}
 		}
 		passed, reason := GatesPassed(p.RequiredGates, p.GateEvidence, p.CandidateSHA, p.PRBaseSHA, p.AllowFixture)
 		if !passed {
-			return Decision{BlockedReason: reason, NextAction: "restore current required gate evidence"}
+			return Decision{
+				BlockedReason: reason,
+				NextAction:    "restore current required gate evidence",
+			}
 		}
 		if p.PRMerged && shaPattern.MatchString(p.MergedSHA) {
-			return Decision{MoveTo: Release}
+			return Decision{
+				MoveTo: Release,
+			}
 		}
 	case Release:
 		if !p.PRExists || p.PRHeadSHA != p.CandidateSHA {
-			return Decision{BlockedReason: "candidate changed or unavailable", NextAction: "revalidate exact PR head"}
+			return Decision{
+				BlockedReason: "candidate changed or unavailable",
+				NextAction:    "revalidate exact PR head",
+			}
 		}
 		passed, reason := GatesPassed(p.RequiredGates, p.GateEvidence, p.CandidateSHA, p.PRBaseSHA, p.AllowFixture)
 		if !passed {
-			return Decision{BlockedReason: reason, NextAction: "restore current required gate evidence"}
+			return Decision{
+				BlockedReason: reason,
+				NextAction:    "restore current required gate evidence",
+			}
 		}
 		if !shaPattern.MatchString(p.MergedSHA) {
-			return Decision{BlockedReason: "merge identity unavailable", NextAction: "observe merged commit"}
+			return Decision{
+				BlockedReason: "merge identity unavailable",
+				NextAction:    "observe merged commit",
+			}
 		}
 		if !p.ReleaseRequired || p.ReleasePassed && p.ReleaseSHA == p.MergedSHA {
-			return Decision{MoveTo: Done}
+			return Decision{
+				MoveTo: Done,
+			}
 		}
-		return Decision{BlockedReason: "release verification missing or failed", NextAction: "observe release checks for merged commit"}
+		return Decision{
+			BlockedReason: "release verification missing or failed",
+			NextAction:    "observe release checks for merged commit",
+		}
 	}
 	return Decision{}
 }

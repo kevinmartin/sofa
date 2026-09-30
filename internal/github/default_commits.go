@@ -41,7 +41,10 @@ func (c *Client) RecentDefaultCommits(ctx context.Context, repository, defaultHe
 			return nil, errors.New("default commit identity unavailable")
 		}
 		seen[item.SHA] = true
-		commits = append(commits, DefaultCommit{SHA: item.SHA, Message: item.Commit.Message})
+		commits = append(commits, DefaultCommit{
+			SHA:     item.SHA,
+			Message: item.Commit.Message,
+		})
 	}
 	return commits, nil
 }

@@ -57,9 +57,21 @@ func TestProjectIssuesPaginatesAndRejectsPartialOrAmbiguousScans(t *testing.T) {
 		duplicate    bool
 		wantError    bool
 	}{
-		{name: "complete", secondStatus: 200},
-		{name: "later API failure", secondStatus: 503, wantError: true},
-		{name: "duplicate issue across pages", secondStatus: 200, duplicate: true, wantError: true},
+		{
+			name:         "complete",
+			secondStatus: 200,
+		},
+		{
+			name:         "later API failure",
+			secondStatus: 503,
+			wantError:    true,
+		},
+		{
+			name:         "duplicate issue across pages",
+			secondStatus: 200,
+			duplicate:    true,
+			wantError:    true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -121,10 +133,31 @@ func TestSetProjectStatusRejectsChangedItemBeforeMutation(t *testing.T) {
 		updated   time.Time
 		wantWrite bool
 	}{
-		{name: "exact", item: "PVTI_1", option: "ready", updated: updatedAt, wantWrite: true},
-		{name: "other item", item: "PVTI_2", option: "ready", updated: updatedAt},
-		{name: "manual move", item: "PVTI_1", option: "review", updated: updatedAt},
-		{name: "late edit", item: "PVTI_1", option: "ready", updated: updatedAt.Add(time.Minute)},
+		{
+			name:      "exact",
+			item:      "PVTI_1",
+			option:    "ready",
+			updated:   updatedAt,
+			wantWrite: true,
+		},
+		{
+			name:    "other item",
+			item:    "PVTI_2",
+			option:  "ready",
+			updated: updatedAt,
+		},
+		{
+			name:    "manual move",
+			item:    "PVTI_1",
+			option:  "review",
+			updated: updatedAt,
+		},
+		{
+			name:    "late edit",
+			item:    "PVTI_1",
+			option:  "ready",
+			updated: updatedAt.Add(time.Minute),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writes := 0
@@ -176,9 +209,21 @@ func TestProjectStatusFieldRejectsPublicAndDuplicateOptions(t *testing.T) {
 		options   []any
 		wantError bool
 	}{
-		{name: "valid", options: []any{map[string]any{"id": "a", "name": "Ready"}}},
-		{name: "public", public: true, options: []any{map[string]any{"id": "a", "name": "Ready"}}, wantError: true},
-		{name: "duplicate", options: []any{map[string]any{"id": "a", "name": "Ready"}, map[string]any{"id": "b", "name": "Ready"}}, wantError: true},
+		{
+			name:    "valid",
+			options: []any{map[string]any{"id": "a", "name": "Ready"}},
+		},
+		{
+			name:      "public",
+			public:    true,
+			options:   []any{map[string]any{"id": "a", "name": "Ready"}},
+			wantError: true,
+		},
+		{
+			name:      "duplicate",
+			options:   []any{map[string]any{"id": "a", "name": "Ready"}, map[string]any{"id": "b", "name": "Ready"}},
+			wantError: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, err := New("fixture-token", roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -207,14 +252,38 @@ func TestParseDependenciesRequiresOwnerFieldIntent(t *testing.T) {
 		want    []int
 		invalid bool
 	}{
-		{text: "none", want: []int{}},
-		{text: "#12, #3", want: []int{3, 12}},
-		{text: "", invalid: true},
-		{text: "#2, #2", invalid: true},
-		{text: "#4", invalid: true},
-		{text: "other/repo#2", invalid: true},
-		{text: "#1,#2", invalid: true},
-		{text: "#0", invalid: true},
+		{
+			text: "none",
+			want: []int{},
+		},
+		{
+			text: "#12, #3",
+			want: []int{3, 12},
+		},
+		{
+			text:    "",
+			invalid: true,
+		},
+		{
+			text:    "#2, #2",
+			invalid: true,
+		},
+		{
+			text:    "#4",
+			invalid: true,
+		},
+		{
+			text:    "other/repo#2",
+			invalid: true,
+		},
+		{
+			text:    "#1,#2",
+			invalid: true,
+		},
+		{
+			text:    "#0",
+			invalid: true,
+		},
 	} {
 		got, err := ParseDependencies(tc.text, 4)
 		if (err != nil) != tc.invalid || !tc.invalid && !reflect.DeepEqual(got, tc.want) {
