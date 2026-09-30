@@ -442,15 +442,11 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
-	var selected review.Decision
-	var selectedReview github.PullReview
-	for _, submitted := range reviews {
-		decision, evalErr := review.Evaluate(attempt, pull, submitted, c.OwnerID)
-		if evalErr == nil && (selected.FeedbackID == "" || submitted.SubmittedAt.After(selectedReview.SubmittedAt) || submitted.SubmittedAt.Equal(selectedReview.SubmittedAt) && submitted.ID > selectedReview.ID) {
-			selected, selectedReview = decision, submitted
-		}
-	}
+	selected, selectedReview := selectRepairReview(attempt, pull, reviews, c.OwnerID)
 	if selected.FeedbackID == "" {
+		if attempt.Repair != nil {
+			return errors.New("reserved owner review or exact PR identity changed")
+		}
 		return writeRepairStatus(outDir, false, "no-current-owner-review", attempt.ID)
 	}
 	if err := integrity.ScanSecrets(append(append([]byte(nil), spec...), []byte(selected.FeedbackText)...), [][]byte{[]byte(os.Getenv("SOFA_PROJECTS_TOKEN")), []byte(os.Getenv("SOFA_STATE_TOKEN"))}); err != nil {
@@ -463,14 +459,28 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		PRHeadSHA:    selected.PRHeadSHA,
 		PRNumber:     selected.PRNumber,
 	}
-	reserved, err := engine.ReserveReviewRepair(ctx, attempt.ID, intent)
-	if err != nil {
-		return err
+	if attempt.Repair == nil {
+		reserved, err := engine.ReserveReviewRepair(ctx, attempt.ID, intent)
+		if err != nil {
+			return err
+		}
+		if !reserved {
+			return writeRepairStatus(outDir, false, "already-reserved", attempt.ID)
+		}
+	} else {
+		if attempt.Repair.CandidateSHA != "" || attempt.Repair.CandidateDigest != "" {
+			return errors.New("prepared repair candidate requires publication reconciliation")
+		}
+		attempt, err = recoverReservedReviewRepair(ctx, engine, ledger, c.Repository, attempt)
+		if errors.Is(err, state.ErrActive) {
+			return writeRepairStatus(outDir, false, "already-active", attempt.ID)
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if !reserved {
-		return writeRepairStatus(outDir, false, "already-reserved", attempt.ID)
-	}
-	fence, err := engine.Claim(ctx, attempt.ID, owner)
+	charge := state.Counters{ModelCalls: 1, RuntimeSeconds: int64(c.Limits.AttemptSeconds)}
+	fence, err := engine.ClaimReviewRepair(ctx, attempt.ID, owner, charge)
 	if err != nil {
 		return err
 	}
@@ -502,11 +512,6 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		_ = engine.Fail(ctx, fence, "authority")
 		return err
 	}
-	charge := state.Counters{ModelCalls: 1, RuntimeSeconds: int64(c.Limits.AttemptSeconds)}
-	if err := engine.Charge(ctx, fence, charge); err != nil {
-		_ = engine.Fail(ctx, fence, "validation")
-		return err
-	}
 	m := repairManifest{
 		Version:       1,
 		Admission:     attempt.Admission,
@@ -524,6 +529,55 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		return err
 	}
 	return writeRepairStatus(outDir, true, "repair-admitted", attempt.ID)
+}
+
+func selectRepairReview(attempt state.Attempt, pull github.PullSnapshot, reviews []github.PullReview, ownerID string) (review.Decision, github.PullReview) {
+	var selected review.Decision
+	var selectedReview github.PullReview
+	for _, submitted := range reviews {
+		var decision review.Decision
+		var err error
+		if attempt.Repair != nil {
+			decision, err = review.EvaluateReserved(attempt, pull, submitted, ownerID)
+		} else {
+			decision, err = review.Evaluate(attempt, pull, submitted, ownerID)
+		}
+		if err == nil && (selected.FeedbackID == "" || submitted.SubmittedAt.After(selectedReview.SubmittedAt) || submitted.SubmittedAt.Equal(selectedReview.SubmittedAt) && submitted.ID > selectedReview.ID) {
+			selected, selectedReview = decision, submitted
+		}
+	}
+	return selected, selectedReview
+}
+
+type repairRunProofReader interface {
+	RunProof(context.Context, string, state.Owner) (state.RunProof, error)
+}
+
+// Only GitHub's terminal proof for the exact persisted owner may release a
+// stopped repair. A pending reservation needs no proof; an active run stays
+// fenced, and Recover preserves the consumed counters and review identity.
+func recoverReservedReviewRepair(ctx context.Context, engine state.Engine, proofReader repairRunProofReader, repository string, attempt state.Attempt) (state.Attempt, error) {
+	if attempt.Repair == nil || attempt.Repair.CandidateSHA != "" || attempt.Repair.CandidateDigest != "" {
+		return attempt, state.ErrInvalid
+	}
+	if attempt.Owner != nil {
+		proof, err := proofReader.RunProof(ctx, repository, *attempt.Owner)
+		if err != nil {
+			return attempt, err
+		}
+		if err := engine.Recover(ctx, attempt.ID, proof); err != nil {
+			return attempt, err
+		}
+	}
+	snapshot, err := engine.Store.Load(ctx)
+	if err != nil {
+		return attempt, err
+	}
+	current, ok := snapshot.State.Attempts[attempt.ID]
+	if !ok || current.Admission != attempt.Admission || current.Publication == nil || attempt.Publication == nil || *current.Publication != *attempt.Publication || current.Repair == nil || *current.Repair != *attempt.Repair || current.Phase != state.Pending || current.Owner != nil {
+		return attempt, state.ErrAdmissionChanged
+	}
+	return current, nil
 }
 
 func writeRepairStatus(outDir string, dispatch bool, reason, attemptID string) error {

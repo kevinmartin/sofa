@@ -68,6 +68,9 @@ func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
 	if err := e.BeginRepairPublication(ctx, repairFence, newDigest, newHead); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.ClaimReviewRepair(ctx, a.ID, Owner{RunID: "44", RunAttempt: 1}, Counters{ModelCalls: 1, RuntimeSeconds: 600}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("prepared candidate was sent to a new model run: %v", err)
+	}
 	if err := e.BeginRepairPublication(ctx, repairFence, newDigest, newHead); err != nil {
 		t.Fatalf("same candidate intent not idempotent: %v", err)
 	}
@@ -87,5 +90,64 @@ func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
 	}
 	if err := e.MarkReviewRepairPublished(ctx, repairFence, newPublication); err != nil {
 		t.Fatalf("same final acknowledgement not idempotent: %v", err)
+	}
+}
+
+func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	f := claimed(t, e, a.ID)
+	if err := e.Advance(ctx, f, Validating); err != nil {
+		t.Fatal(err)
+	}
+	p := Publication{Branch: "sofa/task", ExpectedHead: a.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}
+	if err := e.BeginPublication(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	p.HeadSHA, p.PRNumber, p.PRURL = strings.Repeat("e", 40), 7, "https://github.com/owner/consumer/pull/7"
+	if err := e.MarkPublished(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	intent := RepairIntent{FeedbackID: "review-7-8-abcd", FeedbackHash: strings.Repeat("f", 64), PRBaseSHA: strings.Repeat("b", 40), PRHeadSHA: p.HeadSHA, PRNumber: p.PRNumber}
+	if ok, err := e.ReserveReviewRepair(ctx, a.ID, intent); err != nil || !ok {
+		t.Fatalf("reserve: %v, %v", ok, err)
+	}
+	first := Owner{RunID: "43", RunAttempt: 1}
+	charge := Counters{ModelCalls: 1, RuntimeSeconds: 600}
+	firstFence, err := e.ClaimReviewRepair(ctx, a.ID, first, charge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ClaimReviewRepair(ctx, a.ID, first, charge); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("same run charged twice: %v", err)
+	}
+	if err := e.Recover(ctx, a.ID, RunProof{Owner: first, Status: "in_progress", ObservedAt: testNow}); !errors.Is(err, ErrActive) {
+		t.Fatalf("active run released: %v", err)
+	}
+	if err := e.Recover(ctx, a.ID, proof(Owner{RunID: "different", RunAttempt: 1})); !errors.Is(err, ErrStale) {
+		t.Fatalf("other run released repair: %v", err)
+	}
+	if err := e.Recover(ctx, a.ID, proof(first)); err != nil {
+		t.Fatal(err)
+	}
+	recovered := snapshot(t, e, a.ID)
+	if recovered.Phase != Pending || recovered.Owner != nil || recovered.Repair == nil || *recovered.Repair != intent || recovered.Publication == nil || *recovered.Publication != p || recovered.Counts.Repairs != 1 || recovered.Counts.ModelCalls != 1 || recovered.Counts.RuntimeSeconds != 600 || recovered.Counts.InfrastructureRetries != 1 {
+		t.Fatalf("terminal recovery lost durable repair identity or counters: %+v", recovered)
+	}
+	second := Owner{RunID: "44", RunAttempt: 1}
+	secondFence, err := e.ClaimReviewRepair(ctx, a.ID, second, charge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondFence.Generation <= firstFence.Generation {
+		t.Fatal("recovered run did not fence old owner")
+	}
+	final := snapshot(t, e, a.ID)
+	if final.Counts.Repairs != 1 || final.Counts.ModelCalls != 2 || final.Counts.RuntimeSeconds != 1200 || final.Counts.InfrastructureRetries != 1 {
+		t.Fatalf("recovery reset or double-charged budget: %+v", final.Counts)
+	}
+	if err := e.AssertOwner(ctx, firstFence); !errors.Is(err, ErrStale) {
+		t.Fatalf("old owner retained authority: %v", err)
 	}
 }

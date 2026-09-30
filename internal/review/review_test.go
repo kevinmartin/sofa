@@ -81,6 +81,50 @@ func TestEvaluateOwnerFeedbackRequiresExactPublishedPR(t *testing.T) {
 	}
 }
 
+func TestEvaluateReservedRejectsNewerFeedbackAndChangedIdentity(t *testing.T) {
+	const head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	a := state.Attempt{
+		ID: "attempt-1", Admission: state.Admission{Repository: "owner/repo"},
+		Phase: state.Pending, Limits: state.Limits{Repairs: 1}, Counts: state.Counters{Repairs: 1},
+		Publication: &state.Publication{Branch: "sofa/attempt-1", HeadSHA: head, PRNumber: 4, PRURL: "https://github.com/owner/repo/pull/4"},
+	}
+	p := github.PullSnapshot{Number: 4, URL: a.Publication.PRURL, State: "open", HeadSHA: head, HeadRef: a.Publication.Branch, HeadRepository: "owner/repo", BaseSHA: base, BaseRepository: "owner/repo"}
+	r := github.PullReview{ID: 8, UserID: "U_owner", State: "CHANGES_REQUESTED", CommitSHA: head, Body: "Fix the boundary case", SubmittedAt: time.Now().UTC()}
+	a.Phase = state.Draft
+	a.Counts.Repairs = 0
+	d, err := Evaluate(a, p, r, "U_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Phase = state.Pending
+	a.Counts.Repairs = 1
+	a.Repair = &state.RepairIntent{FeedbackID: d.FeedbackID, FeedbackHash: d.FeedbackHash, PRBaseSHA: base, PRHeadSHA: head, PRNumber: 4}
+	if got, err := EvaluateReserved(a, p, r, "U_owner"); err != nil || got.FeedbackID != d.FeedbackID {
+		t.Fatalf("reserved feedback was not recovered: %+v, %v", got, err)
+	}
+	newer := r
+	newer.ID = 9
+	newer.SubmittedAt = newer.SubmittedAt.Add(time.Minute)
+	if _, err := EvaluateReserved(a, p, newer, "U_owner"); err == nil {
+		t.Fatal("newer review replaced reserved feedback")
+	}
+	changed := p
+	changed.HeadSHA = base
+	if _, err := EvaluateReserved(a, changed, r, "U_owner"); err == nil {
+		t.Fatal("changed head inherited review reservation")
+	}
+	changed = p
+	changed.BaseSHA = head
+	if _, err := EvaluateReserved(a, changed, r, "U_owner"); err == nil {
+		t.Fatal("changed base inherited review reservation")
+	}
+	r.State = "DISMISSED"
+	if _, err := EvaluateReserved(a, p, r, "U_owner"); err == nil {
+		t.Fatal("dismissed review inherited reservation")
+	}
+}
+
 func TestLaterFeedbackAppendsOnlyLinkedMetadata(t *testing.T) {
 	ctx := context.Background()
 	engine := state.Engine{Store: &state.MemoryStore{}}

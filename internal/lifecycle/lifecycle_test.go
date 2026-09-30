@@ -127,7 +127,10 @@ func TestLifecycleTransitionsAndTerminalOutcomes(t *testing.T) {
 		{name: "blocked", input: Projection{Current: SpecReview, Authorized: true, TerminalOutcome: "blocked"}, blocked: true},
 		{name: "inbox cannot auto-admit", input: Projection{Current: Inbox}, blocked: true},
 		{name: "discovery cannot auto-approve", input: Projection{Current: Discovery, Authorized: true}},
+		{name: "spec review waits for owner", input: Projection{Current: SpecReview, Authorized: true}},
+		{name: "backlog waits for owner", input: Projection{Current: Backlog, Authorized: true}},
 		{name: "review cannot auto-merge", input: verified(Review)},
+		{name: "done remains terminal", input: Projection{Current: Done, Authorized: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := ProjectDecision(tc.input)

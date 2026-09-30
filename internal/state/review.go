@@ -5,6 +5,46 @@ import (
 	"fmt"
 )
 
+// ClaimReviewRepair atomically fences a reserved repair and charges the prompt
+// and runtime budget for this generation. An interrupted admission therefore
+// cannot claim an uncharged prompt or charge one generation twice.
+func (e Engine) ClaimReviewRepair(ctx context.Context, id string, owner Owner, charge Counters) (fence Fence, err error) {
+	if !validOwner(owner) || charge.ModelCalls != 1 || charge.RuntimeSeconds <= 0 || charge.Repairs != 0 || charge.InfrastructureRetries != 0 {
+		return fence, fmt.Errorf("%w: repair owner or charge", ErrInvalid)
+	}
+	err = e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[id]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if a.Repair == nil || a.Publication == nil || a.Repair.CandidateSHA != "" || a.Repair.CandidateDigest != "" || a.Counts.Repairs < 1 {
+			return false, fmt.Errorf("%w: repair reservation unavailable", ErrInvalid)
+		}
+		if a.Owner != nil || a.Phase != Pending {
+			return false, ErrClaimed
+		}
+		next := Counters{
+			ModelCalls:            a.Counts.ModelCalls + charge.ModelCalls,
+			Repairs:               a.Counts.Repairs,
+			InfrastructureRetries: a.Counts.InfrastructureRetries,
+			RuntimeSeconds:        a.Counts.RuntimeSeconds + charge.RuntimeSeconds,
+		}
+		if !a.Limits.permits(next) {
+			return false, ErrLimit
+		}
+		a.Counts = next
+		a.Generation++
+		a.Owner = &owner
+		a.Phase = Executing
+		a.Dispatch = "claimed"
+		a.UpdatedAt = e.now()
+		s.Attempts[id] = a
+		fence = Fence{AttemptID: id, Generation: a.Generation, Owner: owner}
+		return true, nil
+	})
+	return
+}
+
 // ReserveReviewRepair converts an existing draft attempt into one bounded
 // repair dispatch. The caller must first validate the current PR and the
 // immutable owner review against GitHub. This CAS reserves budget before any

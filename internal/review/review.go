@@ -82,6 +82,30 @@ func Evaluate(attempt state.Attempt, pull github.PullSnapshot, submitted github.
 	if attempt.Phase != state.Draft || attempt.Publication == nil || attempt.Publication.PRNumber < 1 || attempt.Counts.Repairs >= attempt.Limits.Repairs {
 		return Decision{}, errors.New("review repair unavailable for attempt")
 	}
+	return evaluateFeedback(attempt, pull, submitted, ownerID)
+}
+
+// EvaluateReserved rechecks the one review already charged to a repair intent.
+// Newer feedback cannot replace it, even if the original Actions run stopped.
+func EvaluateReserved(attempt state.Attempt, pull github.PullSnapshot, submitted github.PullReview, ownerID string) (Decision, error) {
+	if attempt.Repair == nil || attempt.Publication == nil || attempt.Counts.Repairs < 1 || attempt.Counts.Repairs > attempt.Limits.Repairs || attempt.Phase == state.Draft || attempt.Phase == state.Blocked || attempt.Phase == state.Deferred {
+		return Decision{}, errors.New("review repair reservation unavailable")
+	}
+	r := attempt.Repair
+	if r.CandidateSHA != "" || r.CandidateDigest != "" {
+		return Decision{}, errors.New("prepared repair requires publication reconciliation")
+	}
+	decision, err := evaluateFeedback(attempt, pull, submitted, ownerID)
+	if err != nil {
+		return Decision{}, err
+	}
+	if decision.FeedbackID != r.FeedbackID || decision.FeedbackHash != r.FeedbackHash || decision.PRNumber != r.PRNumber || decision.PRHeadSHA != r.PRHeadSHA || decision.PRBaseSHA != r.PRBaseSHA {
+		return Decision{}, errors.New("review differs from reserved repair")
+	}
+	return decision, nil
+}
+
+func evaluateFeedback(attempt state.Attempt, pull github.PullSnapshot, submitted github.PullReview, ownerID string) (Decision, error) {
 	p := attempt.Publication
 	repo := attempt.Admission.Repository
 	if pull.Number != p.PRNumber || pull.URL != p.PRURL || pull.HeadSHA != p.HeadSHA || pull.HeadRef != p.Branch || !strings.EqualFold(pull.HeadRepository, repo) || !strings.EqualFold(pull.BaseRepository, repo) || pull.State != "open" || pull.Merged || !shaPattern.MatchString(pull.BaseSHA) {

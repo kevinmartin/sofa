@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/kevinmartin/sofa/internal/admission"
 	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
+	"github.com/kevinmartin/sofa/internal/review"
 	"github.com/kevinmartin/sofa/internal/state"
 )
 
@@ -37,7 +40,7 @@ func repairFixture(t *testing.T) (repairManifest, github.PullSnapshot, []github.
 		},
 		Publication: pub,
 		Repair: state.RepairIntent{
-			FeedbackID: "review-7-9-abcd", FeedbackHash: hex.EncodeToString(h[:]),
+			FeedbackID: fmt.Sprintf("review-7-9-%s", hex.EncodeToString(h[:8])), FeedbackHash: hex.EncodeToString(h[:]),
 			PRBaseSHA: strings.Repeat("f", 40), PRHeadSHA: pub.HeadSHA, PRNumber: pub.PRNumber,
 		},
 		ReviewID: 9, CanonicalSpec: base.CanonicalSpec, FeedbackText: feedback,
@@ -52,6 +55,81 @@ func repairFixture(t *testing.T) (repairManifest, github.PullSnapshot, []github.
 		Body: feedback, SubmittedAt: time.Now().UTC(),
 	}}
 	return m, pull, reviews
+}
+
+type repairProofReader struct {
+	proof state.RunProof
+	err   error
+}
+
+func (r repairProofReader) RunProof(_ context.Context, _ string, _ state.Owner) (state.RunProof, error) {
+	return r.proof, r.err
+}
+
+func TestReservedRepairAdmissionKeepsOriginalReviewAndTerminalFence(t *testing.T) {
+	ctx := context.Background()
+	m, pull, reviews := repairFixture(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	engine := state.Engine{Store: &state.MemoryStore{}, Now: func() time.Time { return now }}
+	a, _, err := engine.Admit(ctx, m.Admission, state.Limits{ModelCalls: 2, Repairs: 1, InfrastructureRetries: 1, RuntimeSeconds: 1200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Phase = state.Draft
+	a.Publication = &m.Publication
+	snapshot.State.Attempts[a.ID] = a
+	if err := engine.Store.CompareAndSwap(ctx, snapshot.Revision, snapshot.State); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := engine.ReserveReviewRepair(ctx, a.ID, m.Repair); err != nil || !ok {
+		t.Fatalf("reserve: %v, %v", ok, err)
+	}
+	snapshot, err = engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := snapshot.State.Attempts[a.ID]
+	if got, err := recoverReservedReviewRepair(ctx, engine, repairProofReader{err: errors.New("proof should not be read")}, m.Admission.Repository, pending); err != nil || got.Phase != state.Pending || got.Counts.Repairs != 1 || got.Counts.ModelCalls != 0 {
+		t.Fatalf("reservation-only crash was not recoverable without a run proof: %+v, %v", got, err)
+	}
+	firstOwner := state.Owner{RunID: "77", RunAttempt: 1}
+	if _, err := engine.ClaimReviewRepair(ctx, a.ID, firstOwner, state.Counters{ModelCalls: 1, RuntimeSeconds: 600}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = snapshot.State.Attempts[a.ID]
+	newer := reviews[0]
+	newer.ID = 10
+	newer.SubmittedAt = newer.SubmittedAt.Add(time.Minute)
+	if _, err := review.EvaluateReserved(a, pull, reviews[0], reviews[0].UserID); err != nil {
+		t.Fatalf("reserved fixture feedback rejected: %v; attempt=%+v pull=%+v", err, a, pull)
+	}
+	selected, selectedReview := selectRepairReview(a, pull, []github.PullReview{reviews[0], newer}, reviews[0].UserID)
+	if selected.FeedbackID != m.Repair.FeedbackID || selectedReview.ID != reviews[0].ID {
+		t.Fatalf("newer review borrowed reservation: %+v, %+v", selected, selectedReview)
+	}
+	if _, err := recoverReservedReviewRepair(ctx, engine, repairProofReader{err: errors.New("transient API error")}, m.Admission.Repository, a); err == nil {
+		t.Fatal("API failure released owner")
+	}
+	active := state.RunProof{Owner: firstOwner, Status: "in_progress", ObservedAt: now}
+	if _, err := recoverReservedReviewRepair(ctx, engine, repairProofReader{proof: active}, m.Admission.Repository, a); !errors.Is(err, state.ErrActive) {
+		t.Fatalf("active owner released: %v", err)
+	}
+	terminal := state.RunProof{Owner: firstOwner, Status: "completed", Conclusion: "cancelled", ObservedAt: now}
+	recovered, err := recoverReservedReviewRepair(ctx, engine, repairProofReader{proof: terminal}, m.Admission.Repository, a)
+	if err != nil || recovered.Repair == nil || *recovered.Repair != m.Repair || recovered.Publication == nil || *recovered.Publication != m.Publication || recovered.Owner != nil || recovered.Phase != state.Pending || recovered.Counts.Repairs != 1 || recovered.Counts.ModelCalls != 1 || recovered.Counts.InfrastructureRetries != 1 {
+		t.Fatalf("reserved repair not safely recovered: %+v, %v", recovered, err)
+	}
+	if selected, _ := selectRepairReview(recovered, pull, []github.PullReview{newer}, reviews[0].UserID); selected.FeedbackID != "" {
+		t.Fatal("new review authorized recovered repair")
+	}
 }
 
 type repairCommentReader struct{ comment discovery.SpecComment }
