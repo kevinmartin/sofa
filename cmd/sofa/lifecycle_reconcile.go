@@ -170,12 +170,20 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		if !known {
 			continue
 		}
+		if stage != lifecycle.Ready && stage != lifecycle.Building && stage != lifecycle.Verification && stage != lifecycle.Review && stage != lifecycle.Release && stage != lifecycle.Done {
+			continue
+		}
+		// A Ready item without a recorded specification cannot be approved.
+		// Avoid a fresh remote ledger read for every historical Project item;
+		// candidates with a record still get full live revision validation.
+		if _, recorded := ledger.State.Specs[issue.IssueID]; !recorded {
+			result.Held = append(result.Held, issue.Number)
+			continue
+		}
 		if stage == lifecycle.Ready {
 			_, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, issue)
-		} else if stage == lifecycle.Building || stage == lifecycle.Verification || stage == lifecycle.Review || stage == lifecycle.Release || stage == lifecycle.Done {
-			_, err = discovery.VerifyApprovedRevision(ctx, projects, store, policy, issue)
 		} else {
-			continue
+			_, err = discovery.VerifyApprovedRevision(ctx, projects, store, policy, issue)
 		}
 		if err != nil {
 			result.Held = append(result.Held, issue.Number)
