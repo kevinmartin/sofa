@@ -74,7 +74,7 @@ jobs:
           test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_E2E_CANDIDATE"
           test "$(git -C consumer rev-parse HEAD)" = "$SOFA_E2E_DISPOSABLE_BASE"
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: toolkit/go.mod
           cache: false
@@ -236,7 +236,7 @@ jobs:
           persist-credentials: false
           path: toolkit
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: toolkit/go.mod
           cache: false
@@ -307,7 +307,7 @@ jobs:
           persist-credentials: false
           path: toolkit
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: toolkit/go.mod
           cache: false
@@ -411,7 +411,7 @@ jobs:
           persist-credentials: false
           path: toolkit
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: toolkit/go.mod
           cache: false
