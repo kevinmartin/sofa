@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/state"
 )
@@ -50,6 +52,99 @@ func repairFixture(t *testing.T) (repairManifest, github.PullSnapshot, []github.
 		Body: feedback, SubmittedAt: time.Now().UTC(),
 	}}
 	return m, pull, reviews
+}
+
+type repairCommentReader struct{ comment discovery.SpecComment }
+
+func (r repairCommentReader) IssueComment(_ context.Context, _ string, _, _ int64) (discovery.SpecComment, error) {
+	return r.comment, nil
+}
+
+func TestRepairReadsExactApprovedCommentInsteadOfIssueIdea(t *testing.T) {
+	c, m := testManifest(t)
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	issue := admission.Snapshot{
+		Repository:        c.Repository,
+		RepositoryID:      c.RepositoryID,
+		IssueID:           m.Grant.IssueID,
+		Number:            m.Grant.IssueNumber,
+		Title:             "Fixture",
+		Body:              "Investigate the fixture before specifying the change.",
+		Open:              true,
+		ProjectID:         c.ProjectID,
+		ProjectPrivate:    true,
+		ProjectItemID:     m.Grant.ProjectItemID,
+		CurrentStatus:     c.Lifecycle.Statuses["review"],
+		StatusOptionID:    "review-option",
+		StatusUpdatedAt:   now.Add(4 * time.Minute),
+		IssueLastEditedAt: now,
+		Complete:          true,
+	}
+	proposal := discovery.Specification{
+		Version: discovery.SpecificationVersion, Problem: "Fixture behavior is incomplete.",
+		Evidence: "The current fixture reproduces the missing behavior.",
+		Goals:    "Complete the fixture behavior.", NonGoals: "No unrelated changes.",
+		Constraints: "Keep the existing API.", Dependencies: "None.",
+		Acceptance: "Given the fixture input, the expected output is produced.",
+		Validation: "Run the fixture and Go tests.", Risks: "Check existing callers.",
+		Questions: "None.", DeliverySlices: "One bounded change.",
+	}
+	body, err := proposal.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	comment := discovery.SpecComment{
+		ID: 42, AuthorID: "BOT_node", Body: body,
+		CreatedAt: now.Add(time.Minute), UpdatedAt: now.Add(time.Minute),
+	}
+	_, sourceDigest, err := admission.CanonicalSpec(issue.Title, issue.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, specDigest, err := admission.CanonicalSpec(issue.Title, comment.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigest, err := c.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := state.Attempt{Admission: state.Admission{
+		Repository: c.Repository, Issue: int64(issue.Number), SpecDigest: specDigest,
+		ConfigDigest: configDigest, ProjectItemID: issue.ProjectItemID,
+	}}
+	if _, err := validateRepairSource(c, issue, attempt); err == nil {
+		t.Fatal("raw issue idea incorrectly stood in for the approved specification")
+	}
+	ledger := state.Empty()
+	ledger.Specs[issue.IssueID] = state.SpecRecord{
+		Repository: c.Repository, IssueID: issue.IssueID, Issue: int64(issue.Number),
+		ProjectID: c.ProjectID, ProjectItemID: issue.ProjectItemID,
+		SourceDigest: sourceDigest, SpecDigest: specDigest, IssueEditedAt: now,
+		CommentID: comment.ID, CommentAuthorID: comment.AuthorID,
+		CommentCreatedAt: comment.CreatedAt, CommentUpdatedAt: comment.UpdatedAt,
+		ReviewOptionID: "spec-review-option", ReviewUpdatedAt: now.Add(2 * time.Minute),
+		ApprovedDigest: specDigest, BacklogOptionID: "backlog-option",
+		BacklogUpdatedAt: now.Add(3 * time.Minute),
+	}
+	store := &state.MemoryStore{}
+	if err := store.CompareAndSwap(context.Background(), "", ledger); err != nil {
+		t.Fatal(err)
+	}
+	reader := repairCommentReader{comment: comment}
+	got, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt)
+	if err != nil || string(got) != string(canonical) {
+		t.Fatalf("exact approved comment was not used: %v", err)
+	}
+	reader.comment.Body = strings.Replace(reader.comment.Body, "expected output", "different output", 1)
+	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); err == nil {
+		t.Fatal("changed acceptance criteria inherited approval")
+	}
+	reader.comment = comment
+	issue.Body = "A different source idea"
+	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); err == nil {
+		t.Fatal("changed issue idea inherited approval")
+	}
 }
 
 func TestRepairManifestAndCurrentFeedbackBinding(t *testing.T) {

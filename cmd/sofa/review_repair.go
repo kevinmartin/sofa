@@ -16,6 +16,7 @@ import (
 
 	"github.com/kevinmartin/sofa/internal/admission"
 	"github.com/kevinmartin/sofa/internal/config"
+	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/review"
@@ -323,7 +324,7 @@ func runReviewRepairPublish(ctx context.Context, configPath, manifestPath, bundl
 		if err != nil {
 			return err
 		}
-		if _, err := validateRepairSource(c, source, a); err != nil {
+		if _, err := approvedRepairSource(ctx, c, projects, engine.Store, source, a); err != nil {
 			return err
 		}
 		pull, err := publisher.Pull(ctx, c.Repository, m.Publication.PRNumber)
@@ -429,7 +430,7 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
-	spec, err := validateRepairSource(c, issueSnapshot, attempt)
+	spec, err := approvedRepairSource(ctx, c, projects, store, issueSnapshot, attempt)
 	if err != nil {
 		return err
 	}
@@ -479,7 +480,7 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
-	if _, err := validateRepairSource(c, currentSource, attempt); err != nil {
+	if _, err := approvedRepairSource(ctx, c, projects, store, currentSource, attempt); err != nil {
 		_ = engine.Fail(ctx, fence, "authority")
 		return err
 	}
@@ -534,6 +535,21 @@ func writeRepairStatus(outDir string, dispatch bool, reason, attemptID string) e
 		"reason":     reason,
 		"attempt_id": attemptID,
 	})
+}
+
+// approvedRepairSource reads the exact bot-authored revision approved in
+// Backlog before applying the repair's delivery-stage and admission checks.
+// The issue body remains the source idea; it cannot stand in for that revision.
+func approvedRepairSource(ctx context.Context, c config.Config, reader discovery.CommentReader, store state.Store, source admission.Snapshot, attempt state.Attempt) (json.RawMessage, error) {
+	policy, err := discoveryPolicy(c)
+	if err != nil {
+		return nil, err
+	}
+	approved, err := discovery.VerifyApprovedRevision(ctx, reader, store, policy, source)
+	if err != nil {
+		return nil, err
+	}
+	return validateRepairSource(c, approved, attempt)
 }
 
 func validateRepairSource(c config.Config, snapshot admission.Snapshot, attempt state.Attempt) (json.RawMessage, error) {
