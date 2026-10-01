@@ -23,30 +23,17 @@ type SpecStore interface {
 // body for the existing milestone-01 admission/revalidation contract. It must
 // be called on every trusted gate before delivery or publication.
 func ApprovedSnapshot(ctx context.Context, reader CommentReader, store state.Store, policy Policy, source admission.Snapshot) (admission.Snapshot, error) {
-	approved, err := VerifyApprovedRevision(ctx, reader, store, policy, source)
-	if err != nil {
-		return admission.Snapshot{}, err
-	}
-	ledger, err := store.Load(ctx)
-	if err != nil {
-		return admission.Snapshot{}, err
-	}
-	record := ledger.State.Specs[source.IssueID]
-	comment, err := reader.IssueComment(ctx, policy.Repository, int64(source.Number), record.CommentID)
-	if err != nil {
-		return admission.Snapshot{}, err
-	}
-	if err := ReadyApproved(policy, source, comment, record); err != nil {
-		return admission.Snapshot{}, err
-	}
-	approved.Body = comment.Body
-	return approved, nil
+	return approvedRevision(ctx, reader, store, policy, source, true)
 }
 
 // VerifyApprovedRevision checks the source idea and exact approved comment
 // after the board has advanced beyond Ready. It does not itself authorize a
 // new delivery attempt or claim that the current lifecycle stage is Ready.
 func VerifyApprovedRevision(ctx context.Context, reader CommentReader, store state.Store, policy Policy, source admission.Snapshot) (admission.Snapshot, error) {
+	return approvedRevision(ctx, reader, store, policy, source, false)
+}
+
+func approvedRevision(ctx context.Context, reader CommentReader, store state.Store, policy Policy, source admission.Snapshot, requireReady bool) (admission.Snapshot, error) {
 	if reader == nil || store == nil {
 		return admission.Snapshot{}, errors.New("approved specification source unavailable")
 	}
@@ -67,6 +54,11 @@ func VerifyApprovedRevision(ctx context.Context, reader CommentReader, store sta
 	}
 	if !currentRevision(source, comment, record) || (!source.IssueLastEditedAt.IsZero() && !record.BacklogUpdatedAt.After(source.IssueLastEditedAt)) {
 		return admission.Snapshot{}, ErrRevision
+	}
+	if requireReady {
+		if err := ReadyApproved(policy, source, comment, record); err != nil {
+			return admission.Snapshot{}, err
+		}
 	}
 	source.Body = comment.Body
 	return source, nil

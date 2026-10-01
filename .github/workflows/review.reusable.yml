@@ -362,7 +362,7 @@ jobs:
   finalize-failure:
     name: Record bounded repair failure without model or publisher credentials
     needs: [admit, execute, verify, publish]
-    if: always() && needs.admit.result == 'success' && (needs.execute.result == 'failure' || needs.verify.result == 'failure' || needs.publish.result == 'failure')
+    if: always() && needs.admit.result == 'success' && needs.admit.outputs.dispatch == 'true' && (contains(fromJSON('["failure","cancelled"]'), needs.execute.result) || contains(fromJSON('["failure","cancelled"]'), needs.verify.result) || contains(fromJSON('["failure","cancelled"]'), needs.publish.result))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -419,9 +419,9 @@ jobs:
           SOFA_EXECUTE_RESULT: ${{ needs.execute.result }}
           SOFA_VERIFY_RESULT: ${{ needs.verify.result }}
         run: |
-          if [[ "$SOFA_EXECUTE_RESULT" == failure ]]; then
+          if [[ "$SOFA_EXECUTE_RESULT" != success ]]; then
             stage=execute
-          elif [[ "$SOFA_VERIFY_RESULT" == failure ]]; then
+          elif [[ "$SOFA_VERIFY_RESULT" != success ]]; then
             stage=verify
           else
             stage=publish

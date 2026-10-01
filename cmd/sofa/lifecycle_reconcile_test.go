@@ -21,6 +21,19 @@ import (
 
 type lifecycleRoundTrip func(*http.Request) (*http.Response, error)
 
+type lifecycleSpecStore struct {
+	*state.MemoryStore
+	saved map[string][]byte
+}
+
+func (s *lifecycleSpecStore) SaveSpec(_ context.Context, issueID, digest string, canonical []byte) error {
+	if s.saved == nil {
+		s.saved = make(map[string][]byte)
+	}
+	s.saved[issueID+":"+digest] = bytes.Clone(canonical)
+	return nil
+}
+
 type discoveryProofFunc func(context.Context, string, state.Owner) (state.RunProof, error)
 
 func (f discoveryProofFunc) RunProof(ctx context.Context, repo string, owner state.Owner) (state.RunProof, error) {
@@ -809,6 +822,9 @@ func TestRecoverDiscoveryReviewValidatesCommentAndRetriesPendingProjectMove(t *t
 		StatusOptionID:   issue.StatusOptionID,
 		StatusUpdatedAt:  base,
 		SourceDigest:     sourceDigest,
+		MaxModelCalls:    2,
+		CreatedAt:        base,
+		UpdatedAt:        base.Add(time.Minute),
 		Phase:            state.DiscoveryReview,
 		SpecDigest:       specDigest,
 		CommentID:        77,
@@ -816,7 +832,12 @@ func TestRecoverDiscoveryReviewValidatesCommentAndRetriesPendingProjectMove(t *t
 		CommentCreatedAt: base.Add(time.Minute),
 		CommentUpdatedAt: base.Add(time.Minute),
 	}
-	store := &state.MemoryStore{}
+	store := &lifecycleSpecStore{MemoryStore: &state.MemoryStore{}}
+	initial := state.Empty()
+	initial.Discoveries[issue.IssueID] = task
+	if err := store.CompareAndSwap(context.Background(), "", initial); err != nil {
+		t.Fatal(err)
+	}
 	engine := state.Engine{
 		Store: store,
 	}
@@ -867,17 +888,17 @@ func TestRecoverDiscoveryReviewValidatesCommentAndRetriesPendingProjectMove(t *t
 		t.Fatal(err)
 	}
 	corruptComment = true
-	if err := recoverDiscoveryReview(context.Background(), client, engine, c, policy, statuses, issue, task); err == nil || mutationCalls != 0 {
+	if err := recoverDiscoveryReview(context.Background(), client, store, engine, c, policy, statuses, issue, task); err == nil || mutationCalls != 0 {
 		t.Fatalf("changed comment could reach Project mutation: err=%v calls=%d", err, mutationCalls)
 	}
 	corruptComment = false
-	if err := recoverDiscoveryReview(context.Background(), client, engine, c, policy, statuses, issue, task); err == nil || mutationCalls != 1 {
+	if err := recoverDiscoveryReview(context.Background(), client, store, engine, c, policy, statuses, issue, task); err == nil || mutationCalls != 1 {
 		t.Fatalf("transient mutation failure not retained: err=%v calls=%d", err, mutationCalls)
 	}
 	if _, pending, err := engine.PendingBoardMove(context.Background(), issue.IssueID); err != nil || !pending {
 		t.Fatalf("lost Project response erased write intent: pending=%t err=%v", pending, err)
 	}
-	if err := recoverDiscoveryReview(context.Background(), client, engine, c, policy, statuses, issue, task); err != nil || mutationCalls != 2 {
+	if err := recoverDiscoveryReview(context.Background(), client, store, engine, c, policy, statuses, issue, task); err != nil || mutationCalls != 2 {
 		t.Fatalf("pending Discovery move not recovered: err=%v calls=%d", err, mutationCalls)
 	}
 	snapshot, err := store.Load(context.Background())
@@ -887,5 +908,9 @@ func TestRecoverDiscoveryReviewValidatesCommentAndRetriesPendingProjectMove(t *t
 	projection := snapshot.State.Projections[issue.IssueID]
 	if projection.Stage != string(lifecycle.SpecReview) || projection.PendingStage != "" || projection.OptionID != "review-option" {
 		t.Fatalf("recovered board projection = %+v", projection)
+	}
+	record, ok := snapshot.State.Specs[issue.IssueID]
+	if !ok || record.ReviewOptionID != "review-option" || record.SpecDigest != specDigest || len(store.saved[issue.IssueID+":"+specDigest]) == 0 {
+		t.Fatalf("Spec Review was not captured immediately after recovery: record=%+v saved=%d", record, len(store.saved))
 	}
 }

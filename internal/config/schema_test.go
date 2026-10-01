@@ -121,6 +121,26 @@ func TestConfigurationSchema(t *testing.T) {
 			text: replace("    spec_review: Spec Review", "    spec_review: ' Spec Review '"),
 		},
 		{
+			name:         "empty optional owner fields",
+			text:         replace("  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: ''\n  priority_field: ''"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name:         "named optional owner fields",
+			text:         replace("  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: Dependencies\n  priority_field: Priority"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name: "padded dependencies field",
+			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: ' Dependencies'"),
+		},
+		{
+			name: "padded priority field",
+			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  priority_field: 'Priority '"),
+		},
+		{
 			name: "unknown profile field",
 			text: replace("  agent: copilot", "  agent: copilot\n  unknown: true"),
 		},

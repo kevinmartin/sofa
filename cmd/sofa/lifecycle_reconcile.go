@@ -215,7 +215,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			continue
 		}
 		recovering[item.Issue.IssueID] = true
-		if err := recoverDiscoveryReview(ctx, projects, engine, c, policy, statuses, item.Issue, task); err != nil {
+		if err := recoverDiscoveryReview(ctx, projects, store, engine, c, policy, statuses, item.Issue, task); err != nil {
 			result.Held = append(result.Held, item.Issue.Number)
 		} else {
 			result.Moved = append(result.Moved, item.Issue.Number)
@@ -443,7 +443,7 @@ func doneCorrectionPatrol(items []github.ProjectWorkItem, statuses lifecycle.Sta
 // recoverDiscoveryReview verifies the durable published comment and resumes the
 // Discovery-to-Spec Review move. Comment reads, revision checks, ledger writes, and
 // Project move errors are returned.
-func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, policy discovery.Policy, statuses lifecycle.Statuses, issue admission.Snapshot, task state.DiscoveryTask) error {
+func recoverDiscoveryReview(ctx context.Context, client *github.Client, store discovery.SpecStore, engine state.Engine, c config.Config, policy discovery.Policy, statuses lifecycle.Statuses, issue admission.Snapshot, task state.DiscoveryTask) error {
 	comment, err := client.IssueComment(ctx, c.Repository, int64(issue.Number), task.CommentID)
 	if err != nil {
 		return err
@@ -461,7 +461,17 @@ func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine s
 		From:        lifecycle.Discovery,
 		To:          lifecycle.SpecReview,
 	}
-	return applyBoardMove(ctx, client, engine, c, statuses, effect, issue)
+	if err := applyBoardMove(ctx, client, engine, c, statuses, effect, issue); err != nil {
+		return err
+	}
+	current, err := client.Issue(ctx, c, issue.Number)
+	if err != nil {
+		return err
+	}
+	if _, _, err := discovery.ObserveSpecReview(ctx, client, store, policy, current); err != nil {
+		return err
+	}
+	return nil
 }
 
 // attemptForItem returns the current approved attempt bound to the Project item.

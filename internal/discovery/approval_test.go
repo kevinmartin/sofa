@@ -184,6 +184,26 @@ func (r fixtureReader) IssueComment(_ context.Context, _ string, _, id int64) (S
 	return r.comment, nil
 }
 
+type countingStore struct {
+	state.Store
+	loads int
+}
+
+func (s *countingStore) Load(ctx context.Context) (state.Snapshot, error) {
+	s.loads++
+	return s.Store.Load(ctx)
+}
+
+type countingReader struct {
+	fixtureReader
+	reads int
+}
+
+func (r *countingReader) IssueComment(ctx context.Context, repository string, issue, id int64) (SpecComment, error) {
+	r.reads++
+	return r.fixtureReader.IssueComment(ctx, repository, issue, id)
+}
+
 func TestApprovedSnapshotSubstitutesOnlyApprovedComment(t *testing.T) {
 	p := fixturePolicy()
 	s := fixtureSnapshot()
@@ -212,14 +232,24 @@ func TestApprovedSnapshotSubstitutesOnlyApprovedComment(t *testing.T) {
 	if err := store.CompareAndSwap(context.Background(), ledger.Revision, ledger.State); err != nil {
 		t.Fatal(err)
 	}
-	approved, err := ApprovedSnapshot(context.Background(), fixtureReader{
-		comment: c,
-	}, store, p, s)
+	trackedStore := &countingStore{Store: store}
+	trackedReader := &countingReader{fixtureReader: fixtureReader{comment: c}}
+	approved, err := ApprovedSnapshot(context.Background(), trackedReader, trackedStore, p, s)
 	if err != nil || approved.Body != c.Body {
 		t.Fatalf("approved snapshot: %+v, %v", approved, err)
 	}
+	if trackedStore.loads != 1 || trackedReader.reads != 1 {
+		t.Fatalf("approval observed different ledger/comment pairs: %d loads, %d reads", trackedStore.loads, trackedReader.reads)
+	}
 	if approved.Title != s.Title || approved.IssueLastEditedAt != s.IssueLastEditedAt {
 		t.Fatal("approved snapshot changed source identity")
+	}
+	s.CurrentStatus = "Backlog"
+	if _, err := ApprovedSnapshot(context.Background(), fixtureReader{comment: c}, store, p, s); !errors.Is(err, ErrAuthority) {
+		t.Fatalf("non-Ready source was admitted: %v", err)
+	}
+	if _, err := VerifyApprovedRevision(context.Background(), fixtureReader{comment: c}, store, p, s); err != nil {
+		t.Fatalf("approved revision should remain verifiable outside Ready: %v", err)
 	}
 }
 
