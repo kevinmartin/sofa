@@ -70,6 +70,10 @@ and cannot be represented by this standard JSON Schema:
 - Lifecycle status names must be unique and `statuses.ready` must match
   `ready_status`; the schema verifies keys and shape, while Go checks these
   semantic relationships.
+- `blocked_reason_field` and `next_action_field` must be configured together.
+  The effective advice fields, `dependencies_field`, and `priority_field` must
+  have distinct names, none of which may be `Status`.
+- Each `release.required_checks` name and App ID pair must be unique.
 
 Run `go test ./internal/config` from the toolkit root to compile the schema,
 validate the consumer example and invalid-policy cases, and verify these

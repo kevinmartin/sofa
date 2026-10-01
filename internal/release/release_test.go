@@ -109,6 +109,26 @@ func TestEvaluateMergeAndReleaseExactCommit(t *testing.T) {
 			}
 		})
 	}
+	baseline, err := Evaluate(attempt, pull, defaultHead, true, required, []github.CommitCheck{pass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withUnrelated, err := Evaluate(attempt, pull, defaultHead, true, required, []github.CommitCheck{pass, {
+		Name:      "optional / advisory",
+		AppID:     88,
+		SourceID:  12,
+		State:     "failure",
+		UpdatedAt: now.Add(time.Minute),
+	}})
+	if err != nil || withUnrelated.Kind != baseline.Kind || withUnrelated.EventID != baseline.EventID {
+		t.Fatalf("unrelated check changed release event: baseline=%+v unrelated=%+v err=%v", baseline, withUnrelated, err)
+	}
+	updatedRequired := pass
+	updatedRequired.UpdatedAt = now.Add(time.Minute)
+	withUpdatedRequired, err := Evaluate(attempt, pull, defaultHead, true, required, []github.CommitCheck{updatedRequired})
+	if err != nil || withUpdatedRequired.Kind != baseline.Kind || withUpdatedRequired.EventID == baseline.EventID {
+		t.Fatalf("required check revision did not change release event: baseline=%+v updated=%+v err=%v", baseline, withUpdatedRequired, err)
+	}
 	closed := pull
 	closed.Merged = false
 	closed.MergeCommitSHA = ""

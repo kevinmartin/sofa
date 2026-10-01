@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ObserveBoard remembers an exact Project status revision. The only unplanned
@@ -132,4 +133,29 @@ func (e Engine) PendingBoardMove(ctx context.Context, issueID string) (BoardProj
 		return BoardProjection{}, false, errors.New("invalid pending Project transition")
 	}
 	return projection, true, nil
+}
+
+// CancelBoardMove releases an obsolete intent only after the caller has freshly
+// observed the exact pre-mutation Project revision and decided on a different
+// transition. An uncertain or changed Project status must retain the intent.
+func (e Engine) CancelBoardMove(ctx context.Context, observed BoardProjection, nextStage string) error {
+	if !observed.valid() || observed.PendingStage != "" || nextStage != "" && !validStage(nextStage) {
+		return fmt.Errorf("%w: board cancellation", ErrInvalid)
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		prior, ok := s.Projections[observed.IssueID]
+		if !ok || prior.PendingStage == "" || prior.PendingStage == nextStage {
+			return false, ErrConflict
+		}
+		withoutIntent := prior
+		withoutIntent.PendingStage = ""
+		withoutIntent.PendingOptionID = ""
+		withoutIntent.PendingFromOptionID = ""
+		withoutIntent.PendingFromUpdatedAt = time.Time{}
+		if withoutIntent != observed {
+			return false, ErrConflict
+		}
+		s.Projections[observed.IssueID] = withoutIntent
+		return true, nil
+	})
 }

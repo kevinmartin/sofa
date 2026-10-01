@@ -258,6 +258,52 @@ func TestRecoveryRequiresTerminalOwnerAndFencesOldRun(t *testing.T) {
 	}
 }
 
+func TestStopProvenOwnerFencesTerminalRunWithoutRetryOrLostIntent(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	f := claimed(t, e, a.ID)
+	if err := e.Charge(ctx, f, Counters{ModelCalls: 1, InfrastructureRetries: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, f, Validating); err != nil {
+		t.Fatal(err)
+	}
+	publication := Publication{
+		Branch:          "sofa/issue-7",
+		ExpectedHead:    a.Admission.BaseSHA,
+		CandidateDigest: strings.Repeat("d", 64),
+	}
+	if err := e.BeginPublication(ctx, f, publication); err != nil {
+		t.Fatal(err)
+	}
+	bad := proof(f.Owner)
+	bad.Status = "in_progress"
+	if err := e.StopProvenOwner(ctx, a.ID, bad, "infrastructure"); !errors.Is(err, ErrActive) {
+		t.Fatalf("live owner released: %v", err)
+	}
+	bad = proof(Owner{RunID: f.Owner.RunID, RunAttempt: f.Owner.RunAttempt + 1})
+	if err := e.StopProvenOwner(ctx, a.ID, bad, "infrastructure"); !errors.Is(err, ErrStale) {
+		t.Fatalf("wrong attempt released owner: %v", err)
+	}
+	if got := snapshot(t, e, a.ID); got.Phase != Publishing || got.Owner == nil || got.Generation != f.Generation {
+		t.Fatalf("rejected proof changed claim: %+v", got)
+	}
+	if err := e.StopProvenOwner(ctx, a.ID, proof(f.Owner), "infrastructure"); err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot(t, e, a.ID)
+	if got.Phase != Deferred || got.Owner != nil || got.Generation != f.Generation+1 || got.Counts.ModelCalls != 1 || got.Counts.InfrastructureRetries != 2 || got.Publication == nil || *got.Publication != publication {
+		t.Fatalf("terminal stop lost fence, budget, or intent: %+v", got)
+	}
+	if err := e.AssertOwner(ctx, f); !errors.Is(err, ErrStale) {
+		t.Fatalf("stopped owner kept authority: %v", err)
+	}
+	if err := e.StopProvenOwner(ctx, a.ID, proof(f.Owner), "infrastructure"); !errors.Is(err, ErrStale) {
+		t.Fatalf("duplicate stop changed terminal attempt: %v", err)
+	}
+}
+
 func TestCheckpointRecoveryExpiryAndProvenance(t *testing.T) {
 	e := engine()
 	a := admitted(t, e)

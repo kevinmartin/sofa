@@ -494,6 +494,41 @@ func (e Engine) Recover(ctx context.Context, id string, proof RunProof) error {
 	})
 }
 
+// StopProvenOwner releases a terminal Actions owner when automatic recovery is
+// not authorized. It preserves every charged counter and recovery identity.
+// The exact run proof and ledger owner are checked together under CAS, so a
+// failed API read or a replacement owner cannot free another worker's slot.
+func (e Engine) StopProvenOwner(ctx context.Context, id string, proof RunProof, kind string) error {
+	if !proof.terminal(e.now()) {
+		return ErrActive
+	}
+	if kind != "authority" && kind != "infrastructure" {
+		return fmt.Errorf("%w: stopped owner failure class", ErrInvalid)
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[id]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() || a.Owner == nil || *a.Owner != proof.Owner {
+			return false, ErrStale
+		}
+		if a.Phase != Executing && a.Phase != Validating && a.Phase != Publishing {
+			return false, ErrClaimed
+		}
+		a.Owner = nil
+		a.Generation++
+		a.Failure = kind
+		a.Phase = Blocked
+		if kind == "infrastructure" {
+			a.Phase = Deferred
+		}
+		a.UpdatedAt = e.now()
+		s.Attempts[id] = a
+		return true, nil
+	})
+}
+
 // Observe is idempotent by record ID. The same ID with different content fails
 // instead of rewriting a historical observation.
 func (e Engine) Observe(ctx context.Context, observation Observation) error {

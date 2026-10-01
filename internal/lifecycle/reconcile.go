@@ -59,6 +59,7 @@ type Effect struct {
 	NextAction    string
 	Conflict      bool
 	RetryIntent   bool
+	CancelIntent  bool
 }
 
 // PRMoveFence binds a proposed board move to the PR observed during the scan.
@@ -157,14 +158,8 @@ func Scan(input ScanInput) ([]Effect, error) {
 			effects = append(effects, effect)
 			continue
 		}
-		attempt, exists := attempts[issue.ProjectItemID]
-		if !exists || attempt.Admission.Issue != int64(issue.Number) || attempt.Admission.ProjectID != issue.ProjectID || !strings.EqualFold(attempt.Admission.Repository, input.Repository) {
-			effect.BlockedReason = "delivery attempt unavailable"
-			effects = append(effects, effect)
-			continue
-		}
 		record, recordExists := input.Ledger.Specs[issue.IssueID]
-		if !input.Authority[issue.IssueID] || !recordExists || record.ApprovedDigest == "" || record.Issue != int64(issue.Number) || record.ProjectItemID != issue.ProjectItemID || record.ProjectID != issue.ProjectID || !strings.EqualFold(record.Repository, input.Repository) || attempt.Admission.SpecDigest != record.ApprovedDigest || attempt.SpecRevision != record.Revision || !attempt.Admission.StatusUpdatedAt.After(record.BacklogUpdatedAt) || attempt.Admission.ProjectItemID != issue.ProjectItemID || attempt.Admission.ProjectID != issue.ProjectID {
+		if !input.Authority[issue.IssueID] || !recordExists || record.ApprovedDigest == "" || record.ApprovedDigest != record.SpecDigest || record.Issue != int64(issue.Number) || record.ProjectItemID != issue.ProjectItemID || record.ProjectID != issue.ProjectID || !strings.EqualFold(record.Repository, input.Repository) {
 			effect.BlockedReason = "approved scope unavailable or changed"
 			effects = append(effects, effect)
 			continue
@@ -176,11 +171,37 @@ func Scan(input ScanInput) ([]Effect, error) {
 			effects = append(effects, effect)
 			continue
 		}
+		attempt, exists := attempts[issue.ProjectItemID]
+		if !exists {
+			if stage != Ready || !issue.Open || !issue.StatusUpdatedAt.After(record.BacklogUpdatedAt) {
+				effect.BlockedReason = "delivery attempt unavailable"
+			}
+			// An approved Ready item without an attempt is eligible for the
+			// caller's bounded delivery selection; a reason here would hold it.
+			effects = append(effects, effect)
+			continue
+		}
+		if attempt.Admission.Issue != int64(issue.Number) || attempt.Admission.ProjectID != issue.ProjectID || !strings.EqualFold(attempt.Admission.Repository, input.Repository) {
+			effect.BlockedReason = "delivery attempt unavailable"
+			effects = append(effects, effect)
+			continue
+		}
+		if attempt.Admission.SpecDigest != record.ApprovedDigest || attempt.SpecRevision != record.Revision || !attempt.Admission.StatusUpdatedAt.After(record.BacklogUpdatedAt) || attempt.Admission.ProjectItemID != issue.ProjectItemID || attempt.Admission.ProjectID != issue.ProjectID || stage == Ready && (attempt.Admission.StatusOptionID != issue.StatusOptionID || !attempt.Admission.StatusUpdatedAt.Equal(issue.StatusUpdatedAt)) {
+			effect.BlockedReason = "approved scope unavailable or changed"
+			effects = append(effects, effect)
+			continue
+		}
 		// A terminal attempt remains in its observed board stage. Only the
 		// validated phase, never the untrusted failure detail, reaches advice.
 		if attempt.Phase == state.Blocked || attempt.Phase == state.Deferred {
 			effect.BlockedReason = string(attempt.Phase)
 			effect.NextAction = "inspect bounded delivery outcome"
+			effects = append(effects, effect)
+			continue
+		}
+		if stage == Ready && attempt.Phase == state.Pending && attempt.Owner == nil {
+			// A recovery already owns a WIP slot. Let the caller dispatch the
+			// same attempt instead of treating its unpublished PR as a hold.
 			effects = append(effects, effect)
 			continue
 		}
@@ -228,11 +249,14 @@ func Scan(input ScanInput) ([]Effect, error) {
 			effect.BlockedReason = "pending transition no longer justified"
 			effect.NextAction = "inspect changed PR and pending move"
 			effect.Conflict = true
+			effect.CancelIntent = true
 		}
 		if decision.MoveTo != "" {
 			if pendingRetry && string(decision.MoveTo) != prior.PendingStage {
 				effect.BlockedReason = "pending transition no longer justified"
 				effect.Conflict = true
+				effect.CancelIntent = true
+				effect.To = decision.MoveTo
 			} else {
 				effect.Kind = Move
 				effect.To = decision.MoveTo

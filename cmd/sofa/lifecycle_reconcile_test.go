@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,243 @@ func TestReadyForDeliveryHonorsApprovalDependenciesAndWIP(t *testing.T) {
 	}
 	if got := readyForDelivery(c, items, ledger, authority, statuses, nil); len(got) != 0 {
 		t.Fatalf("active writer did not consume WIP slot: %v", got)
+	}
+}
+
+func TestReadyAuthorityRequiresDeliveryAdmissionBeforeScheduling(t *testing.T) {
+	c, err := readConfig("../../examples/consumer/.sofa.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue := admission.Snapshot{
+		Repository:      c.Repository,
+		RepositoryID:    c.RepositoryID,
+		IssueID:         "issue-289",
+		Number:          289,
+		Title:           "Approved work",
+		Body:            "Versioned approved specification",
+		Open:            true,
+		ProjectID:       c.ProjectID,
+		ProjectPrivate:  true,
+		ProjectItemID:   "item-289",
+		CurrentStatus:   c.ReadyStatus,
+		StatusUpdatedAt: time.Now().UTC(),
+		BaseSHA:         strings.Repeat("a", 40),
+		Complete:        true,
+	}
+	authority := make(map[string]bool)
+	grants := make(map[string]state.Admission)
+	if err := recordReadyAuthority(c, issue, authority, grants); err == nil || authority[issue.IssueID] || len(grants) != 0 {
+		t.Fatalf("invalid Ready snapshot gained scheduling authority: %v %v", authority, grants)
+	}
+	items := []github.ProjectWorkItem{{
+		Issue:             issue,
+		DependenciesKnown: true,
+		PriorityKnown:     true,
+	}}
+	statuses := lifecycle.Statuses{lifecycle.Ready: c.ReadyStatus}
+	if got := readyForDelivery(c, items, state.Empty(), authority, statuses, nil); len(got) != 0 {
+		t.Fatalf("invalid grant dispatched: %v", got)
+	}
+	issue.StatusOptionID = "ready-option"
+	if err := recordReadyAuthority(c, issue, authority, grants); err != nil || !authority[issue.IssueID] || grants[issue.ProjectItemID].SpecDigest == "" {
+		t.Fatalf("valid Ready snapshot lacked scheduling grant: %v %v", err, grants)
+	}
+}
+
+func TestStoppedLegacyDeliveryOwnersReleaseReadyWIPOnlyWithExactProof(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	c := config.Config{
+		Repository: "kevinmartin/sofa-disposable",
+		ProjectID:  "project-1",
+		Lifecycle: &config.Lifecycle{
+			DeliveryWIP: 1,
+		},
+	}
+	store := &state.MemoryStore{}
+	engine := state.Engine{Store: store, Now: func() time.Time { return now }}
+	limits := state.Limits{ModelCalls: 2, Repairs: 1, InfrastructureRetries: 1, RuntimeSeconds: 100}
+	owners := make(map[int]state.Owner)
+	for _, number := range []int{23, 26} {
+		entry := state.Admission{
+			Repository:      c.Repository,
+			Issue:           int64(number),
+			SpecDigest:      strings.Repeat("a", 64),
+			ConfigDigest:    strings.Repeat("b", 64),
+			BaseSHA:         strings.Repeat("c", 40),
+			ProjectID:       c.ProjectID,
+			ProjectItemID:   "item-" + strconv.Itoa(number),
+			StatusOptionID:  "ready-option",
+			StatusUpdatedAt: now.Add(-time.Hour),
+		}
+		attempt, _, err := engine.Admit(ctx, entry, limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner := state.Owner{RunID: "123", RunAttempt: number}
+		owners[number] = owner
+		fence, err := engine.Claim(ctx, attempt.ID, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Charge(ctx, fence, state.Counters{InfrastructureRetries: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if number == 26 {
+			if err := engine.Advance(ctx, fence, state.Validating); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.BeginPublication(ctx, fence, state.Publication{Branch: "sofa/issue-26", ExpectedHead: entry.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	items := []github.ProjectWorkItem{{
+		Issue:             admission.Snapshot{IssueID: "issue-289", Number: 289, ProjectID: c.ProjectID, ProjectItemID: "item-289", CurrentStatus: "Ready"},
+		DependenciesKnown: true,
+		PriorityKnown:     true,
+	}}
+	statuses := lifecycle.Statuses{lifecycle.Ready: "Ready"}
+	ledger, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected := readyForDelivery(c, items, ledger.State, map[string]bool{"issue-289": true}, statuses, nil); len(selected) != 0 {
+		t.Fatalf("stale owners failed to hold WIP: %v", selected)
+	}
+	proofs := discoveryProofFunc(func(_ context.Context, _ string, owner state.Owner) (state.RunProof, error) {
+		if owner == owners[23] {
+			return state.RunProof{}, errors.New("API unavailable")
+		}
+		return state.RunProof{Owner: owner, Status: "completed", Conclusion: "failure", ObservedAt: now}, nil
+	})
+	changed, held := recoverStoppedDeliveries(ctx, proofs, engine, c, items, ledger.State, nil)
+	if !changed || len(held) != 1 || held[0] != 23 {
+		t.Fatalf("failed proof affected wrong owner: changed=%v held=%v", changed, held)
+	}
+	ledger, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected := readyForDelivery(c, items, ledger.State, map[string]bool{"issue-289": true}, statuses, nil); len(selected) != 0 {
+		t.Fatalf("unproved owner released WIP: %v", selected)
+	}
+	proofs = discoveryProofFunc(func(_ context.Context, _ string, owner state.Owner) (state.RunProof, error) {
+		return state.RunProof{Owner: owner, Status: "completed", Conclusion: "failure", ObservedAt: now}, nil
+	})
+	changed, held = recoverStoppedDeliveries(ctx, proofs, engine, c, items, ledger.State, nil)
+	if !changed || len(held) != 0 {
+		t.Fatalf("exact terminal proof failed: changed=%v held=%v", changed, held)
+	}
+	ledger, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected := readyForDelivery(c, items, ledger.State, map[string]bool{"issue-289": true}, statuses, nil); len(selected) != 1 || selected[0] != 289 {
+		t.Fatalf("Ready issue did not receive released WIP: %v", selected)
+	}
+	for _, attempt := range ledger.State.Attempts {
+		if attempt.Phase != state.Blocked || attempt.Owner != nil || attempt.Counts.InfrastructureRetries != 1 {
+			t.Fatalf("legacy attempt retried or lost budget: %+v", attempt)
+		}
+		if attempt.Admission.Issue == 26 && attempt.Publication == nil {
+			t.Fatal("publication intent lost")
+		}
+	}
+	changed, held = recoverStoppedDeliveries(ctx, proofs, engine, c, items, ledger.State, nil)
+	if changed || len(held) != 0 {
+		t.Fatalf("duplicate wake changed terminal state: changed=%v held=%v", changed, held)
+	}
+}
+
+func TestStoppedCurrentReadyDeliveryRecoversWithinRemainingBudget(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	c := config.Config{Repository: "kevinmartin/sofa-disposable", ProjectID: "project-1"}
+	store := &state.MemoryStore{}
+	initial := state.Empty()
+	digest := strings.Repeat("a", 64)
+	initial.Specs["issue-289"] = state.SpecRecord{
+		Repository:       c.Repository,
+		IssueID:          "issue-289",
+		Issue:            289,
+		ProjectID:        c.ProjectID,
+		ProjectItemID:    "item-289",
+		SourceDigest:     strings.Repeat("b", 64),
+		SpecDigest:       digest,
+		CommentID:        1,
+		CommentAuthorID:  "bot",
+		CommentCreatedAt: now.Add(-4 * time.Hour),
+		CommentUpdatedAt: now.Add(-4 * time.Hour),
+		ReviewOptionID:   "review",
+		ReviewUpdatedAt:  now.Add(-3 * time.Hour),
+		ApprovedDigest:   digest,
+		BacklogOptionID:  "backlog",
+		BacklogUpdatedAt: now.Add(-2 * time.Hour),
+	}
+	if err := store.CompareAndSwap(ctx, "", initial); err != nil {
+		t.Fatal(err)
+	}
+	engine := state.Engine{Store: store, Now: func() time.Time { return now }}
+	grant := state.Admission{
+		Repository:      c.Repository,
+		Issue:           289,
+		SpecDigest:      digest,
+		ConfigDigest:    strings.Repeat("c", 64),
+		BaseSHA:         strings.Repeat("d", 40),
+		ProjectID:       c.ProjectID,
+		ProjectItemID:   "item-289",
+		StatusOptionID:  "ready",
+		StatusUpdatedAt: now.Add(-time.Hour),
+	}
+	attempt, _, err := engine.Admit(ctx, grant, state.Limits{ModelCalls: 2, Repairs: 1, InfrastructureRetries: 1, RuntimeSeconds: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := state.Owner{RunID: "289", RunAttempt: 1}
+	if _, err := engine.Claim(ctx, attempt.ID, owner); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []github.ProjectWorkItem{{Issue: admission.Snapshot{IssueID: "issue-289", Number: 289, ProjectID: c.ProjectID, ProjectItemID: "item-289", CurrentStatus: "Ready"}}}
+	proofs := discoveryProofFunc(func(_ context.Context, _ string, observed state.Owner) (state.RunProof, error) {
+		return state.RunProof{Owner: observed, Status: "completed", Conclusion: "cancelled", ObservedAt: now}, nil
+	})
+	changed, held := recoverStoppedDeliveries(ctx, proofs, engine, c, items, ledger.State, map[string]state.Admission{"item-289": grant})
+	if !changed || len(held) != 0 {
+		t.Fatalf("current Ready owner did not recover: changed=%v held=%v", changed, held)
+	}
+	ledger, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ledger.State.Attempts[attempt.ID]
+	if got.Phase != state.Pending || got.Owner != nil || got.Counts.InfrastructureRetries != 1 {
+		t.Fatalf("recovery did not retain retry budget: %+v", got)
+	}
+	second := state.Owner{RunID: "290", RunAttempt: 1}
+	if _, err := engine.Claim(ctx, attempt.ID, second); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, held = recoverStoppedDeliveries(ctx, proofs, engine, c, items, ledger.State, map[string]state.Admission{"item-289": grant})
+	if !changed || len(held) != 0 {
+		t.Fatalf("exhausted Ready owner did not stop: changed=%v held=%v", changed, held)
+	}
+	ledger, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = ledger.State.Attempts[attempt.ID]
+	if got.Phase != state.Deferred || got.Owner != nil || got.Counts.InfrastructureRetries != 1 {
+		t.Fatalf("exhausted Ready owner retried or lost budget: %+v", got)
 	}
 }
 
@@ -827,12 +1065,19 @@ func TestBoardMoveRejectsPRChangedAfterScan(t *testing.T) {
 		},
 	}
 	mutationCalls := 0
+	pullCalls := 0
+	changeAfterFirstRead := false
 	client, err := github.New("fixture-token", lifecycleRoundTrip(func(r *http.Request) (*http.Response, error) {
 		if r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/pulls/7" {
+			pullCalls++
+			currentHead := strings.Repeat("c", 40)
+			if changeAfterFirstRead && pullCalls == 1 {
+				currentHead = head
+			}
 			return lifecycleJSONResponse(200, map[string]any{
 				"number": 7, "html_url": effect.PRFence.URL, "state": "open", "draft": true,
 				"updated_at": when,
-				"head":       map[string]any{"sha": strings.Repeat("c", 40), "ref": "sofa/issue-7", "repo": map[string]any{"full_name": c.Repository}},
+				"head":       map[string]any{"sha": currentHead, "ref": "sofa/issue-7", "repo": map[string]any{"full_name": c.Repository}},
 				"base":       map[string]any{"sha": base, "ref": "main", "repo": map[string]any{"full_name": c.Repository}},
 			}), nil
 		}
@@ -867,6 +1112,99 @@ func TestBoardMoveRejectsPRChangedAfterScan(t *testing.T) {
 	}
 	if mutationCalls != 0 {
 		t.Fatalf("stale PR head reached Project mutation: %d", mutationCalls)
+	}
+	if _, pending, err := engine.PendingBoardMove(ctx, item.IssueID); err != nil || pending {
+		t.Fatalf("changed PR persisted a stale Project intent: pending=%t err=%v", pending, err)
+	}
+	pullCalls = 0
+	changeAfterFirstRead = true
+	if err := applyBoardMove(ctx, client, engine, c, statuses, effect, item); err == nil || !strings.Contains(err.Error(), "PR identity or revision changed") {
+		t.Fatalf("PR changed after intent write was not fenced: %v", err)
+	}
+	if pullCalls != 2 || mutationCalls != 0 {
+		t.Fatalf("post-intent PR change reached mutation: reads=%d writes=%d", pullCalls, mutationCalls)
+	}
+	if _, pending, err := engine.PendingBoardMove(ctx, item.IssueID); err != nil || !pending {
+		t.Fatalf("uncertain post-intent change lost its recoverable fence: pending=%t err=%v", pending, err)
+	}
+}
+
+func TestCancelObsoleteBoardMoveRequiresFreshExactProjectStatus(t *testing.T) {
+	ctx := context.Background()
+	c, err := readConfig("../../examples/consumer/.sofa.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := lifecycleStatuses(c)
+	when := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	item := admission.Snapshot{
+		IssueID:         "I_7",
+		Number:          7,
+		ProjectItemID:   "PVTI_7",
+		StatusOptionID:  "review-option",
+		StatusUpdatedAt: when,
+	}
+	engine := state.Engine{Store: &state.MemoryStore{}}
+	observed := boardFromSnapshot(c, lifecycle.Review, item)
+	if err := engine.ObserveBoard(ctx, observed); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.BeginBoardMove(ctx, observed, string(lifecycle.Release), "release-option"); err != nil {
+		t.Fatal(err)
+	}
+	statusChanged := false
+	client, err := github.New("fixture-token", lifecycleRoundTrip(func(r *http.Request) (*http.Response, error) {
+		var request struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case strings.Contains(request.Query, "repository(owner:"):
+			return lifecycleJSONResponse(200, map[string]any{"data": map[string]any{"repository": map[string]any{
+				"id": c.RepositoryID, "nameWithOwner": c.Repository,
+				"defaultBranchRef": map[string]any{"target": map[string]any{"oid": strings.Repeat("a", 40)}},
+				"issue":            map[string]any{"id": item.IssueID, "number": item.Number, "title": "Fix greeting", "body": "Investigate greeting", "state": "OPEN"},
+			}}}), nil
+		case strings.Contains(request.Query, "projectItems(first:"):
+			updated := when
+			if statusChanged {
+				updated = when.Add(time.Minute)
+			}
+			return lifecycleJSONResponse(200, map[string]any{"data": map[string]any{"node": map[string]any{
+				"projectItems": map[string]any{"nodes": []any{map[string]any{
+					"id": item.ProjectItemID, "isArchived": false,
+					"project":          map[string]any{"id": c.ProjectID, "public": false},
+					"fieldValueByName": map[string]any{"name": statuses[lifecycle.Review], "optionId": item.StatusOptionID, "updatedAt": updated},
+				}}, "pageInfo": map[string]any{"hasNextPage": false}},
+			}}}), nil
+		default:
+			t.Fatalf("unexpected GitHub query: %s", request.Query)
+			return nil, nil
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect := lifecycle.Effect{
+		IssueID:      item.IssueID,
+		IssueNumber:  item.Number,
+		From:         lifecycle.Review,
+		To:           lifecycle.Building,
+		CancelIntent: true,
+	}
+	statusChanged = true
+	if err := cancelObsoleteBoardMove(ctx, client, engine, c, statuses, effect, item); err == nil {
+		t.Fatal("changed Project status cancelled an uncertain move")
+	}
+	if _, pending, err := engine.PendingBoardMove(ctx, item.IssueID); err != nil || !pending {
+		t.Fatalf("changed Project status erased pending move: pending=%t err=%v", pending, err)
+	}
+	statusChanged = false
+	if err := cancelObsoleteBoardMove(ctx, client, engine, c, statuses, effect, item); err != nil {
+		t.Fatalf("exact unchanged Project status did not cancel obsolete move: %v", err)
+	}
+	if _, pending, err := engine.PendingBoardMove(ctx, item.IssueID); err != nil || pending {
+		t.Fatalf("obsolete move remained pending: pending=%t err=%v", pending, err)
 	}
 }
 

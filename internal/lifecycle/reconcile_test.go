@@ -167,6 +167,83 @@ func TestScanKeepsPRResultsAndResourcesSeparate(t *testing.T) {
 	}
 }
 
+func readyScanFixture(t *testing.T) ScanInput {
+	t.Helper()
+	input := scanFixture(t)
+	issue := input.Issues[0]
+	issue.CurrentStatus = "Ready"
+	issue.StatusOptionID = "ready-option"
+	input.Issues[0] = issue
+	prior := input.Ledger.Projections[issue.IssueID]
+	prior.Stage = "ready"
+	prior.OptionID = issue.StatusOptionID
+	prior.UpdatedAt = issue.StatusUpdatedAt
+	input.Ledger.Projections[issue.IssueID] = prior
+	return input
+}
+
+func TestScanLeavesApprovedReadyWithoutAttemptEligibleForDelivery(t *testing.T) {
+	input := readyScanFixture(t)
+	for id, attempt := range input.Ledger.Attempts {
+		if attempt.Admission.Issue == 1 {
+			delete(input.Ledger.Attempts, id)
+		}
+	}
+	effects, err := Scan(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(effects) != 2 || effects[0].Kind != Hold || effects[0].BlockedReason != "" || effects[1].Kind != Move || effects[1].To != Review {
+		t.Fatalf("approved Ready item was held before admission or affected another issue: %+v", effects)
+	}
+
+	input.Authority["I_1"] = false
+	effects, err = Scan(input)
+	if err != nil || effects[0].BlockedReason != "approved scope unavailable or changed" || effects[1].Kind != Move {
+		t.Fatalf("unapproved Ready item became eligible: %+v, %v", effects, err)
+	}
+	input.Authority["I_1"] = true
+	input.Issues[0].Body = "Changed acceptance criteria"
+	effects, err = Scan(input)
+	if err != nil || effects[0].BlockedReason != "source idea changed after approval" || effects[1].Kind != Move {
+		t.Fatalf("changed source became eligible: %+v, %v", effects, err)
+	}
+}
+
+func TestScanLeavesOnlyExactOwnerlessReadyRecoveryEligible(t *testing.T) {
+	input := readyScanFixture(t)
+	var attemptID string
+	for id, attempt := range input.Ledger.Attempts {
+		if attempt.Admission.Issue == 1 {
+			attemptID = id
+			attempt.Phase = state.Pending
+			attempt.Dispatch = "pending"
+			attempt.Publication = nil
+			input.Ledger.Attempts[id] = attempt
+			input.Issues[0].StatusUpdatedAt = attempt.Admission.StatusUpdatedAt
+			prior := input.Ledger.Projections["I_1"]
+			prior.UpdatedAt = attempt.Admission.StatusUpdatedAt
+			input.Ledger.Projections["I_1"] = prior
+		}
+	}
+	if attemptID == "" {
+		t.Fatal("Ready attempt missing")
+	}
+	effects, err := Scan(input)
+	if err != nil || len(effects) != 2 || effects[0].Kind != Hold || effects[0].BlockedReason != "" || effects[1].Kind != Move {
+		t.Fatalf("ownerless Pending recovery was held or affected another issue: %+v, %v", effects, err)
+	}
+
+	input.Issues[0].StatusUpdatedAt = input.Issues[0].StatusUpdatedAt.Add(time.Minute)
+	prior := input.Ledger.Projections["I_1"]
+	prior.UpdatedAt = input.Issues[0].StatusUpdatedAt
+	input.Ledger.Projections["I_1"] = prior
+	effects, err = Scan(input)
+	if err != nil || effects[0].BlockedReason != "approved scope unavailable or changed" || effects[1].Kind != Move {
+		t.Fatalf("changed Ready revision reused pending attempt: %+v, %v", effects, err)
+	}
+}
+
 func TestScanRetriesPendingMoveOnlyWithCurrentEvidence(t *testing.T) {
 	input := scanFixture(t)
 	prior := input.Ledger.Projections["I_1"]
@@ -183,7 +260,7 @@ func TestScanRetriesPendingMoveOnlyWithCurrentEvidence(t *testing.T) {
 	first.Gates = nil
 	input.Evidence["I_1"] = first
 	effects, err = Scan(input)
-	if err != nil || effects[0].Kind != Hold || effects[0].RetryIntent || effects[0].BlockedReason == "" || effects[1].Kind != Move {
+	if err != nil || effects[0].Kind != Hold || effects[0].RetryIntent || !effects[0].CancelIntent || effects[0].BlockedReason == "" || effects[1].Kind != Move {
 		t.Fatalf("stale evidence retried or affected another item: %+v, %v", effects, err)
 	}
 }
@@ -208,7 +285,7 @@ func TestScanHoldsPendingBuildingMoveAfterPRChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if effects[0].Kind != Hold || effects[0].BlockedReason != "pending transition no longer justified" || !effects[0].Conflict || effects[1].Kind != Move {
+	if effects[0].Kind != Hold || effects[0].BlockedReason != "pending transition no longer justified" || !effects[0].Conflict || !effects[0].CancelIntent || effects[1].Kind != Move {
 		t.Fatalf("changed PR retried a stale move or blocked another item: %+v", effects)
 	}
 }

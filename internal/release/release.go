@@ -149,7 +149,14 @@ func Evaluate(attempt state.Attempt, pull github.PullSnapshot, defaultHead strin
 	// The event identity is based on the exact observed outcome. Later changes to
 	// required checks append a correction rather than rewriting earlier events.
 	var parts []string
+	requiredSet := make(map[RequiredCheck]bool, len(required))
+	for _, check := range required {
+		requiredSet[check] = true
+	}
 	for _, check := range checks {
+		if !requiredSet[RequiredCheck{Name: check.Name, AppID: check.AppID}] {
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s:%d:%d:%s:%s", check.Name, check.AppID, check.SourceID, check.State, check.UpdatedAt.UTC().Format(time.RFC3339Nano)))
 	}
 	sort.Strings(parts)

@@ -236,6 +236,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		}
 	}
 	authority := make(map[string]bool, len(items))
+	readyAdmissions := make(map[string]state.Admission)
 	evidence := make(map[string]lifecycle.DeliveryEvidence)
 	// Historical Done items need correction patrols, but scanning every merge,
 	// check, comment and recent commit on every wake grows without bound. The
@@ -262,11 +263,19 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			// validate. Let the advice projection clear any stale hold text.
 			if stage != lifecycle.Done {
 				result.Held = append(result.Held, issue.Number)
+				result.HoldAdvisories = append(result.HoldAdvisories, fixedHoldAdvice(lifecycle.Effect{
+					IssueNumber:   issue.Number,
+					BlockedReason: "approved scope unavailable or changed",
+				}))
 			}
 			continue
 		}
 		if stage == lifecycle.Ready {
-			_, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, issue)
+			var approved admission.Snapshot
+			approved, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, issue)
+			if err == nil {
+				err = recordReadyAuthority(c, approved, authority, readyAdmissions)
+			}
 		} else {
 			_, err = discovery.VerifyApprovedRevision(ctx, projects, store, policy, issue)
 		}
@@ -274,7 +283,9 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			result.Held = append(result.Held, issue.Number)
 			continue
 		}
-		authority[issue.IssueID] = true
+		if stage != lifecycle.Ready {
+			authority[issue.IssueID] = true
+		}
 		attempt, found, lookupErr := attemptForItem(ledger.State, c.Repository, issue)
 		if lookupErr != nil {
 			result.Held = append(result.Held, issue.Number)
@@ -316,6 +327,17 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		}
 		evidence[issue.IssueID] = observed
 	}
+	// A stopped delivery owner can hold WIP even when its historical issue has
+	// no milestone-02 specification. Reconcile exact terminal runs before slot
+	// selection; only an unchanged current Ready grant may enter retry Pending.
+	recovered, recoveryHeld = recoverStoppedDeliveries(ctx, ledgerClient, engine, c, items, ledger.State, readyAdmissions)
+	result.Held = append(result.Held, recoveryHeld...)
+	if recovered {
+		ledger, err = store.Load(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	scanIssues := make([]admission.Snapshot, 0, len(issues))
 	for _, issue := range issues {
 		if !recovering[issue.IssueID] {
@@ -351,6 +373,13 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 				result.Moved = append(result.Moved, effect.IssueNumber)
 			}
 		case lifecycle.Hold:
+			if effect.CancelIntent {
+				// An obsolete intent can be cleared only after a fresh Project
+				// read still shows the exact pre-mutation Status revision.
+				if err := cancelObsoleteBoardMove(ctx, projects, engine, c, statuses, effect, item); err != nil {
+					result.Held = append(result.Held, effect.IssueNumber)
+				}
+			}
 			if effect.BlockedReason != "" {
 				result.Held = append(result.Held, effect.IssueNumber)
 				if effect.From != lifecycle.Backlog {
@@ -899,6 +928,78 @@ func recoverStoppedDiscoveries(ctx context.Context, reader discoveryRunProofRead
 	return recovered, held
 }
 
+// recordReadyAuthority publishes the scheduler grant only after the normal
+// delivery admission checks pass for the approved specification snapshot.
+func recordReadyAuthority(c config.Config, approved admission.Snapshot, authority map[string]bool, readyAdmissions map[string]state.Admission) error {
+	grant, _, err := admission.Authorize(c, approved)
+	if err != nil {
+		return err
+	}
+	authority[approved.IssueID] = true
+	readyAdmissions[approved.ProjectItemID] = ledgerAdmission(grant)
+	return nil
+}
+
+// recoverStoppedDeliveries releases only owners proved terminal by their exact
+// Actions run attempt. A current, unchanged Ready grant may use remaining
+// infrastructure retries. Historical attempts without that grant are stopped
+// without dispatch, even if their old retry budget has room.
+func recoverStoppedDeliveries(ctx context.Context, reader discoveryRunProofReader, engine state.Engine, c config.Config, items []github.ProjectWorkItem, ledger state.State, readyAdmissions map[string]state.Admission) (bool, []int) {
+	byItem := make(map[string]admission.Snapshot, len(items))
+	for _, item := range items {
+		byItem[item.Issue.ProjectItemID] = item.Issue
+	}
+	ids := make([]string, 0, len(ledger.Attempts))
+	for id := range ledger.Attempts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	changed := false
+	held := make([]int, 0)
+	for _, id := range ids {
+		attempt := ledger.Attempts[id]
+		if !attempt.SupersededAt.IsZero() || !strings.EqualFold(attempt.Admission.Repository, c.Repository) || attempt.Admission.ProjectID != c.ProjectID || attempt.Owner == nil || attempt.Phase != state.Executing && attempt.Phase != state.Validating && attempt.Phase != state.Publishing {
+			continue
+		}
+		issue, present := byItem[attempt.Admission.ProjectItemID]
+		currentReady := false
+		if present && int64(issue.Number) == attempt.Admission.Issue && issue.ProjectID == c.ProjectID {
+			if approved, ok := readyAdmissions[issue.ProjectItemID]; ok {
+				// Delivery revalidation retains the admitted base while the
+				// default branch advances; all other grant fields stay exact.
+				approved.BaseSHA = attempt.Admission.BaseSHA
+				if approved == attempt.Admission {
+					current, found, err := state.CurrentAttemptForIssue(ledger, issue.IssueID)
+					currentReady = err == nil && found && current.ID == attempt.ID
+				}
+			}
+		}
+		proof, err := reader.RunProof(ctx, c.Repository, *attempt.Owner)
+		if err != nil {
+			held = append(held, int(attempt.Admission.Issue))
+			continue
+		}
+		if currentReady && attempt.Counts.InfrastructureRetries < attempt.Limits.InfrastructureRetries {
+			err = engine.Recover(ctx, id, proof)
+			if errors.Is(err, state.ErrLimit) {
+				err = engine.StopProvenOwner(ctx, id, proof, "infrastructure")
+			}
+		} else {
+			kind := "authority"
+			if currentReady {
+				kind = "infrastructure"
+			}
+			err = engine.StopProvenOwner(ctx, id, proof, kind)
+		}
+		if err == nil {
+			changed = true
+		} else if !errors.Is(err, state.ErrActive) {
+			held = append(held, int(attempt.Admission.Issue))
+		}
+	}
+	return changed, held
+}
+
 // readyForDiscovery queues only owner-admitted Project items with an available
 // WIP slot. A pending reservation is retried before new work; a running or
 // already presented task never creates a second model prompt on a poll.
@@ -1088,6 +1189,11 @@ func applyBoardMove(ctx context.Context, client *github.Client, engine state.Eng
 	if targetOptionID == "" {
 		return errors.New("target Project status option unavailable")
 	}
+	if effect.From != lifecycle.Discovery {
+		if err := verifyMoveFence(ctx, client, c, effect.PRFence); err != nil {
+			return err
+		}
+	}
 	if effect.RetryIntent {
 		pending, found, err := engine.PendingBoardMove(ctx, item.IssueID)
 		if err != nil {
@@ -1102,16 +1208,8 @@ func applyBoardMove(ctx context.Context, client *github.Client, engine state.Eng
 		}
 	}
 	if effect.From != lifecycle.Discovery {
-		if effect.PRFence == nil || effect.PRFence.Number < 1 {
-			return errors.New("project move lacks exact PR identity")
-		}
-		pull, err := client.Pull(ctx, c.Repository, effect.PRFence.Number)
-		if err != nil {
+		if err := verifyMoveFence(ctx, client, c, effect.PRFence); err != nil {
 			return err
-		}
-		fence := effect.PRFence
-		if pull.URL != fence.URL || pull.HeadSHA != fence.HeadSHA || pull.BaseSHA != fence.BaseSHA || (pull.State == "closed") != fence.Closed || pull.Merged != fence.Merged || pull.MergeCommitSHA != fence.MergeCommitSHA {
-			return errors.New("project move PR identity or revision changed")
 		}
 	}
 	if err := client.SetProjectStatusIfCurrent(ctx, item.IssueID, c.ProjectID, item.ProjectItemID, item.StatusOptionID, item.StatusUpdatedAt, statuses, effect.To); err != nil {
@@ -1125,4 +1223,34 @@ func applyBoardMove(ctx context.Context, client *github.Client, engine state.Eng
 		return errors.New("project move outcome not yet observable")
 	}
 	return engine.ObserveBoard(ctx, boardFromSnapshot(c, effect.To, current))
+}
+
+// verifyMoveFence keeps an observed PR revision from being used after a repair
+// push, base update, close, or merge. It runs before intent persistence and
+// again immediately before the Project mutation.
+func verifyMoveFence(ctx context.Context, client *github.Client, c config.Config, fence *lifecycle.PRMoveFence) error {
+	if fence == nil || fence.Number < 1 {
+		return errors.New("project move lacks exact PR identity")
+	}
+	pull, err := client.Pull(ctx, c.Repository, fence.Number)
+	if err != nil {
+		return err
+	}
+	if pull.URL != fence.URL || pull.HeadSHA != fence.HeadSHA || pull.BaseSHA != fence.BaseSHA || (pull.State == "closed") != fence.Closed || pull.Merged != fence.Merged || pull.MergeCommitSHA != fence.MergeCommitSHA {
+		return errors.New("project move PR identity or revision changed")
+	}
+	return nil
+}
+
+// cancelObsoleteBoardMove clears a stale intent only when the fresh Project
+// status still equals the exact revision from which that intent was created.
+func cancelObsoleteBoardMove(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, statuses lifecycle.Statuses, effect lifecycle.Effect, item admission.Snapshot) error {
+	current, err := client.Issue(ctx, c, item.Number)
+	if err != nil {
+		return err
+	}
+	if current.IssueID != item.IssueID || current.ProjectID != c.ProjectID || !current.ProjectPrivate || current.ProjectItemID != item.ProjectItemID || current.CurrentStatus != statuses[effect.From] || current.StatusOptionID != item.StatusOptionID || !current.StatusUpdatedAt.Equal(item.StatusUpdatedAt) {
+		return errors.New("project status changed during intent cancellation")
+	}
+	return engine.CancelBoardMove(ctx, boardFromSnapshot(c, effect.From, current), string(effect.To))
 }

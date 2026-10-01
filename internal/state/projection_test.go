@@ -135,3 +135,33 @@ func TestBoardProjectionOwnerResetCancelsPendingFactoryMove(t *testing.T) {
 		t.Fatalf("stale factory move survived owner reset: %t, %v", pending, err)
 	}
 }
+
+func TestCancelBoardMoveRequiresExactUnchangedProjectRevision(t *testing.T) {
+	ctx := context.Background()
+	engine := Engine{Store: &MemoryStore{}}
+	base := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	building := boardRecord("building", "building-option", base)
+	if err := engine.ObserveBoard(ctx, building); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.BeginBoardMove(ctx, building, "verification", "verification-option"); err != nil {
+		t.Fatal(err)
+	}
+	changed := building
+	changed.UpdatedAt = base.Add(time.Minute)
+	if err := engine.CancelBoardMove(ctx, changed, "review"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed Project revision cancelled move: %v", err)
+	}
+	if err := engine.CancelBoardMove(ctx, building, "verification"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("still-justified target cancelled move: %v", err)
+	}
+	if err := engine.CancelBoardMove(ctx, building, "building"); err != nil {
+		t.Fatalf("obsolete intent not cancelled: %v", err)
+	}
+	if _, pending, err := engine.PendingBoardMove(ctx, building.IssueID); err != nil || pending {
+		t.Fatalf("cancelled move retained an intent: pending=%t err=%v", pending, err)
+	}
+	if err := engine.BeginBoardMove(ctx, building, "verification", "verification-option"); err != nil {
+		t.Fatalf("new decision could not reserve a move: %v", err)
+	}
+}
