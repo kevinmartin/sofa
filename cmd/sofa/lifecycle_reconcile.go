@@ -34,6 +34,7 @@ type lifecycleReconcileResult struct {
 	Held              []int               `json:"held_issue_numbers"`
 	Moved             []int               `json:"moved_issue_numbers"`
 	BacklogAdvisories []lifecycleAdvisory `json:"backlog_advisories"`
+	HoldAdvisories    []lifecycleAdvisory `json:"hold_advisories"`
 }
 
 // Lifecycle advice contains only fixed controller text and an issue number;
@@ -118,6 +119,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		Held:              []int{},
 		Moved:             []int{},
 		BacklogAdvisories: []lifecycleAdvisory{},
+		HoldAdvisories:    []lifecycleAdvisory{},
 	}
 	if !claim.Claimed {
 		return writeJSON(opts.outPath, result)
@@ -339,6 +341,9 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		case lifecycle.Hold:
 			if effect.BlockedReason != "" {
 				result.Held = append(result.Held, effect.IssueNumber)
+				if effect.From != lifecycle.Backlog {
+					result.HoldAdvisories = append(result.HoldAdvisories, fixedHoldAdvice(effect))
+				}
 			}
 		}
 	}
@@ -385,6 +390,58 @@ func revisedBacklogAdvice(number int) lifecycleAdvisory {
 		BlockedReason: "specification proposal or source changed",
 		NextAction:    "move to Discovery for a revised specification and fresh Backlog approval",
 	}
+}
+
+// fixedHoldAdvice deliberately reselects controller-owned text. Failure detail,
+// issue/comment content, and future unconstrained Effect fields cannot enter
+// the public Actions summary through this result.
+func fixedHoldAdvice(effect lifecycle.Effect) lifecycleAdvisory {
+	advice := lifecycleAdvisory{IssueNumber: effect.IssueNumber}
+	switch effect.BlockedReason {
+	case "blocked", "deferred":
+		advice.BlockedReason = effect.BlockedReason
+		advice.NextAction = "inspect bounded delivery outcome"
+	case "unknown Project status":
+		advice.BlockedReason = "unknown Project status"
+		advice.NextAction = "update trusted status mapping"
+	case "Project item identity changed", "Project changed during pending transition", "pending transition no longer justified":
+		advice.BlockedReason = "Project status conflicts with recorded transition"
+		advice.NextAction = "inspect current Project item and recorded status"
+	case "ambiguous attempts for Project item":
+		advice.BlockedReason = "ambiguous attempts for Project item"
+		advice.NextAction = "inspect superseded task history"
+	case "delivery attempt unavailable":
+		advice.BlockedReason = "delivery attempt unavailable"
+		advice.NextAction = "inspect admitted delivery history"
+	case "approved scope unavailable or changed", "source idea changed after approval", "authorization unavailable":
+		advice.BlockedReason = "approved scope unavailable or changed"
+		advice.NextAction = "review the approved specification and current issue"
+	case "candidate publication pending or blocked":
+		advice.BlockedReason = "candidate publication pending or blocked"
+		advice.NextAction = "inspect bounded delivery outcome"
+	case "current PR identity unavailable", "candidate changed or unavailable":
+		advice.BlockedReason = "current PR identity unavailable"
+		advice.NextAction = "revalidate the published PR and exact head"
+	case "source issue closed before merge":
+		advice.BlockedReason = "source issue closed before merge"
+		advice.NextAction = "inspect issue closure or restore owner authority"
+	case "closed without merge":
+		advice.BlockedReason = "closed without merge"
+		advice.NextAction = "inspect closed PR"
+	case "required gate plan or candidate unavailable", "ambiguous gate evidence", "invalid gate plan", "required gate evidence missing or stale", "required gate did not pass":
+		advice.BlockedReason = "required gate evidence unavailable or failed"
+		advice.NextAction = "inspect current required gate evidence"
+	case "merge identity unavailable":
+		advice.BlockedReason = "merge identity unavailable"
+		advice.NextAction = "observe merged commit"
+	case "release verification missing or failed":
+		advice.BlockedReason = "release verification missing or failed"
+		advice.NextAction = "observe release checks for merged commit"
+	default:
+		advice.BlockedReason = "lifecycle item held"
+		advice.NextAction = "inspect trusted lifecycle evidence"
+	}
+	return advice
 }
 
 // backlogOwnerFieldAdvice reports only configured, owner-controlled metadata.

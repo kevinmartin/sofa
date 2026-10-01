@@ -51,6 +51,36 @@ func lifecycleJSONResponse(code int, value any) *http.Response {
 	}
 }
 
+func TestFixedHoldAdviceSeparatesIssueAndRedactsUntrustedDetails(t *testing.T) {
+	first := fixedHoldAdvice(lifecycle.Effect{
+		IssueNumber:   7,
+		BlockedReason: "blocked",
+		NextAction:    "TOP_SECRET raw failure detail",
+	})
+	second := fixedHoldAdvice(lifecycle.Effect{
+		IssueNumber:   8,
+		BlockedReason: "TOP_SECRET issue text",
+		NextAction:    "TOP_SECRET comment text",
+	})
+	if first.IssueNumber != 7 || first.BlockedReason != "blocked" || first.NextAction != "inspect bounded delivery outcome" {
+		t.Fatalf("terminal advice changed or used raw detail: %+v", first)
+	}
+	if second.IssueNumber != 8 || second.BlockedReason != "lifecycle item held" || second.NextAction != "inspect trusted lifecycle evidence" {
+		t.Fatalf("unrecognized hold escaped fixed text or borrowed another issue: %+v", second)
+	}
+	result := lifecycleReconcileResult{
+		BacklogAdvisories: []lifecycleAdvisory{revisedBacklogAdvice(9)},
+		HoldAdvisories:    []lifecycleAdvisory{first, second},
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "TOP_SECRET") || !strings.Contains(string(encoded), `"hold_advisories"`) || !strings.Contains(string(encoded), `"backlog_advisories"`) {
+		t.Fatalf("result leaked raw details or dropped advice lane: %s", encoded)
+	}
+}
+
 func TestReadyForDeliveryHonorsApprovalDependenciesAndWIP(t *testing.T) {
 	c := config.Config{
 		Repository: "kevinmartin/sofa-disposable",

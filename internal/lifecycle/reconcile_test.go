@@ -240,3 +240,50 @@ func TestScanHoldsAmbiguousAttemptWithoutBorrowingAnotherPR(t *testing.T) {
 		t.Fatalf("ambiguous attempt contaminated another item: %+v", effects)
 	}
 }
+
+func TestScanReportsTerminalAttemptWithoutLeakingFailureOrBorrowingOtherPR(t *testing.T) {
+	for _, phase := range []state.Phase{state.Blocked, state.Deferred} {
+		t.Run(string(phase), func(t *testing.T) {
+			input := scanFixture(t)
+			for id, attempt := range input.Ledger.Attempts {
+				if attempt.Admission.Issue != 1 {
+					continue
+				}
+				attempt.Phase = phase
+				attempt.Failure = "TOP_SECRET untrusted provider failure"
+				input.Ledger.Attempts[id] = attempt
+			}
+			effects, err := Scan(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(effects) != 2 || effects[0].Kind != Hold || effects[0].BlockedReason != string(phase) || effects[0].NextAction != "inspect bounded delivery outcome" || effects[1].Kind != Move || effects[1].To != Review {
+				t.Fatalf("terminal result crossed issue boundary: %+v", effects)
+			}
+			if strings.Contains(effects[0].BlockedReason+effects[0].NextAction, "TOP_SECRET") {
+				t.Fatalf("raw failure escaped terminal hold: %+v", effects[0])
+			}
+		})
+	}
+}
+
+func TestScanDoesNotPresentSupersededAttemptAsCurrentTerminalOutcome(t *testing.T) {
+	input := scanFixture(t)
+	for id, attempt := range input.Ledger.Attempts {
+		if attempt.Admission.Issue != 1 {
+			continue
+		}
+		attempt.Phase = state.Blocked
+		attempt.Failure = "human-change"
+		attempt.SupersededAt = attempt.UpdatedAt.Add(time.Minute)
+		attempt.SupersededSourceDigest = strings.Repeat("e", 64)
+		input.Ledger.Attempts[id] = attempt
+	}
+	effects, err := Scan(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(effects) != 2 || effects[0].Kind != Hold || effects[0].BlockedReason != "delivery attempt unavailable" || effects[1].Kind != Move || effects[1].To != Review {
+		t.Fatalf("superseded history impersonated a current attempt: %+v", effects)
+	}
+}

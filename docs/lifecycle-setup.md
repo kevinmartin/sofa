@@ -41,7 +41,19 @@ expose the mover reliably, so Sofa does not claim to identify who made a move.
 One scheduled caller should invoke the reusable reconciliation workflow every
 ten minutes, or hourly using `lifecycle.poll_minutes: 60`. Manual and event
 wakeups use the same ledger and coalesce missed ticks. A poll reads metadata
-only; no model is started for unchanged items. Its bounded output dispatches
+only; no model is started for unchanged items. Before the first poll at a new
+Sofa `toolkit_sha`, dispatch the consumer's default-branch, secretless
+controller-build caller. It invokes `controller-build.reusable.yml` with that
+same full SHA and uploads a controller artifact in the consumer repository.
+The poll finds the artifact by exact SHA and verifies its producer, archive,
+manifest, and binary before fetching the Project credential. The artifact
+expires after 30 days; dispatch the builder again for the still-pinned SHA
+before expiry. A missing, expired, or invalid artifact stops the poll and
+requires an operator to inspect the build. The poll never rebuilds the
+controller from source. Keep the producer caller on a protected default
+branch and its artifact free of secrets.
+
+The poll's bounded output dispatches
 the caller-owned Discovery workflow for owner-admitted Discovery items and the
 delivery workflow for approved Ready items. The Discovery caller passes an
 exact `toolkit_sha` and targeted `issue_number` to

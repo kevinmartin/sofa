@@ -163,6 +163,14 @@ func Scan(input ScanInput) ([]Effect, error) {
 			effects = append(effects, effect)
 			continue
 		}
+		// A terminal attempt remains in its observed board stage. Only the
+		// validated phase, never the untrusted failure detail, reaches advice.
+		if attempt.Phase == state.Blocked || attempt.Phase == state.Deferred {
+			effect.BlockedReason = string(attempt.Phase)
+			effect.NextAction = "inspect bounded delivery outcome"
+			effects = append(effects, effect)
+			continue
+		}
 		if attempt.Phase != state.Draft || attempt.Publication == nil || attempt.Publication.PRNumber < 1 {
 			effect.BlockedReason = "candidate publication pending or blocked"
 			effects = append(effects, effect)
