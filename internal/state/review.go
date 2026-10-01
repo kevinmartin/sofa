@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"reflect"
 )
 
 // ClaimReviewRepair atomically fences a reserved repair and charges the prompt
@@ -215,6 +216,62 @@ func (e Engine) MarkReviewRepairPublished(ctx context.Context, fence Fence, publ
 		a.Repair = nil
 		a.Phase = Draft
 		return nil
+	})
+}
+
+// ReconcilePreparedReviewRepair acknowledges a previously verified repair only
+// after its exact Actions owner has terminated and the caller has independently
+// checked the live PR, branch, review, and Project authority. It never reserves
+// another model turn or changes the charged budgets. Comparing the full expected
+// attempt under CAS prevents an observation of one issue from settling another.
+func (e Engine) ReconcilePreparedReviewRepair(ctx context.Context, expected Attempt, proof RunProof, published Publication) error {
+	if !proof.terminal(e.now()) || expected.Owner == nil || *expected.Owner != proof.Owner || expected.Repair == nil || expected.Publication == nil || !expected.SupersededAt.IsZero() || !published.valid() {
+		return ErrInvalid
+	}
+	r := expected.Repair
+	p := expected.Publication
+	if (expected.Phase != Blocked || expected.Failure != "validation") && expected.Phase != Publishing {
+		return ErrInvalid
+	}
+	if r.CandidateSHA == "" || r.CandidateDigest == "" || published.HeadSHA != r.CandidateSHA || published.CandidateDigest != r.CandidateDigest || published.ExpectedHead != r.PRHeadSHA || published.PRNumber != r.PRNumber || published.PRNumber != p.PRNumber || published.PRURL != p.PRURL || published.Branch != p.Branch {
+		return ErrInvalid
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[expected.ID]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if a.Phase == Draft && a.Repair == nil && a.Publication != nil && *a.Publication == published && a.Counts == expected.Counts {
+			return false, nil
+		}
+		if !reflect.DeepEqual(a, expected) {
+			return false, ErrAdmissionChanged
+		}
+		// The approved specification is ledger authority for this attempt.
+		// Compare it inside the same CAS that acknowledges the pushed commit so
+		// a concurrent revision cannot reauthorize an obsolete repair.
+		matches := 0
+		for _, spec := range s.Specs {
+			if spec.Repository != expected.Admission.Repository || spec.Issue != expected.Admission.Issue {
+				continue
+			}
+			if spec.Revision != expected.SpecRevision || spec.SpecDigest != expected.Admission.SpecDigest || spec.ApprovedDigest != spec.SpecDigest || spec.ProjectID != expected.Admission.ProjectID || spec.ProjectItemID != expected.Admission.ProjectItemID || !expected.Admission.StatusUpdatedAt.After(spec.BacklogUpdatedAt) {
+				return false, ErrAdmissionChanged
+			}
+			matches++
+		}
+		if matches != 1 {
+			return false, ErrAdmissionChanged
+		}
+		a.Publication = &published
+		a.Repair = nil
+		a.Owner = nil
+		a.Generation++
+		a.Phase = Draft
+		a.Failure = ""
+		a.UpdatedAt = e.now()
+		s.Attempts[expected.ID] = a
+		return true, nil
 	})
 }
 

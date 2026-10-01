@@ -77,6 +77,19 @@ func newReviewRepairCommand() *cobra.Command {
 	admitCmd.Flags().IntVar(&admit.issue, "issue", 0, "Original admitted issue number")
 	admitCmd.Flags().StringVar(&admit.outDir, "out-dir", "", "Directory for bounded repair artifacts")
 	root.AddCommand(admitCmd)
+	var reconcile struct {
+		configPath string
+		issue      int
+	}
+	reconcileCmd := newStageCommand("reconcile", "Acknowledge an exact prepared repair without another model turn", "review-repair reconcile requires --config, --issue", func(cmd *cobra.Command, _ []string) error {
+		if reconcile.configPath == "" || reconcile.issue < 1 {
+			return errors.New("review-repair reconcile requires --config, --issue")
+		}
+		return runReviewRepairReconcile(cmd.Context(), reconcile.configPath, reconcile.issue)
+	})
+	reconcileCmd.Flags().StringVar(&reconcile.configPath, "config", "", "Trusted consumer configuration")
+	reconcileCmd.Flags().IntVar(&reconcile.issue, "issue", 0, "Original admitted issue number")
+	root.AddCommand(reconcileCmd)
 	var execute struct {
 		configPath, manifestPath, workspace, out string
 	}
@@ -135,6 +148,48 @@ func newReviewRepairCommand() *cobra.Command {
 	failCmd.Flags().StringVar(&fail.stage, "stage", "", "Failed stage: execute, verify, or publish")
 	root.AddCommand(failCmd)
 	return root
+}
+
+// runReviewRepairReconcile is an operator-accessible deterministic recovery for
+// a prepared push. The regular admit path invokes the same checks automatically.
+// It needs Project and state authority, but never a model or publisher token.
+func runReviewRepairReconcile(ctx context.Context, configPath string, issue int) error {
+	c, err := readConfig(configPath)
+	if err != nil {
+		return err
+	}
+	if c.Lifecycle == nil || os.Getenv(c.Profile.SecretEnv) != "" || os.Getenv("SOFA_PUBLISH_TOKEN") != "" {
+		return errors.New("prepared repair reconciliation requires lifecycle and no model or publisher credential")
+	}
+	projects, err := clientFromEnv("SOFA_PROJECTS_TOKEN")
+	if err != nil {
+		return err
+	}
+	ledger, err := clientFromEnv("SOFA_STATE_TOKEN")
+	if err != nil {
+		return err
+	}
+	store := github.StateStore{Client: ledger, Repository: c.Repository}
+	engine := state.Engine{Store: store}
+	source, err := projects.Issue(ctx, c, issue)
+	if err != nil {
+		return err
+	}
+	snapshot, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	attempt, found, err := state.CurrentAttemptForIssue(snapshot.State, source.IssueID)
+	if err != nil {
+		return err
+	}
+	if !found || attempt.Repair == nil || attempt.Repair.CandidateSHA == "" || attempt.Publication == nil {
+		return errors.New("no prepared repair requires reconciliation")
+	}
+	if _, err := approvedRepairSource(ctx, c, projects, store, source, attempt); err != nil {
+		return err
+	}
+	return reconcilePreparedReviewRepair(ctx, c, attempt, engine, projects, ledger)
 }
 
 // runReviewRepairFail validates the current Actions owner and records an execute,
@@ -471,6 +526,12 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	if err != nil {
 		return err
 	}
+	if attempt.Repair != nil && (attempt.Repair.CandidateSHA != "" || attempt.Repair.CandidateDigest != "") {
+		if err := reconcilePreparedReviewRepair(ctx, c, attempt, engine, projects, ledger); err != nil {
+			return err
+		}
+		return writeRepairStatus(outDir, false, "prepared-repair-reconciled", attempt.ID)
+	}
 	pull, err := ledger.Pull(ctx, c.Repository, attempt.Publication.PRNumber)
 	if err != nil {
 		return err
@@ -579,6 +640,102 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		return err
 	}
 	return writeRepairStatus(outDir, true, "repair-admitted", attempt.ID)
+}
+
+// reconcilePreparedReviewRepair is the no-model recovery path for a verified
+// repair whose Git push succeeded before the PR API reflected the new head.
+// Every current authority and remote identity is checked again before a CAS
+// acknowledges the prepared SHA; an old or unrelated PR leaves the intent held.
+func reconcilePreparedReviewRepair(ctx context.Context, c config.Config, attempt state.Attempt, engine state.Engine, projects, ledger *github.Client) error {
+	if attempt.Repair == nil || attempt.Publication == nil || attempt.Owner == nil {
+		return errors.New("prepared repair ledger identity unavailable")
+	}
+	info, err := ledger.RepositoryInfo(ctx, c.Repository)
+	if err != nil || !strings.EqualFold(info.FullName, c.Repository) || info.DefaultBranch == "" {
+		return errors.New("prepared repair repository identity unavailable")
+	}
+	verifyPR := func() (github.PullSnapshot, error) {
+		return ledger.VerifyPreparedRepair(ctx, c.Repository, *attempt.Publication, *attempt.Repair, info.DefaultBranch, attempt.ID, attempt.Generation)
+	}
+	pull, err := verifyPR()
+	if err != nil {
+		return err
+	}
+	reviews, err := ledger.PullReviews(ctx, c.Repository, pull.Number)
+	if err != nil {
+		return err
+	}
+	i := newestOwnerReview(reviews, c.OwnerID)
+	if i < 0 {
+		return errors.New("prepared repair owner review unavailable")
+	}
+	if err := attachRepairReviewComments(ctx, ledger, c.Repository, pull.Number, reviews, reviews[i].ID); err != nil {
+		return err
+	}
+	if err := validatePreparedReview(attempt, pull, reviews, c.OwnerID); err != nil {
+		return err
+	}
+	proof, err := ledger.RunProof(ctx, c.Repository, *attempt.Owner)
+	if err != nil {
+		return err
+	}
+	source, err := projects.Issue(ctx, c, int(attempt.Admission.Issue))
+	if err != nil {
+		return err
+	}
+	if _, err := approvedRepairSource(ctx, c, projects, engine.Store, source, attempt); err != nil {
+		return err
+	}
+	pull, err = verifyPR()
+	if err != nil {
+		return err
+	}
+	// Project and PR reads cannot be made atomic with GitHub reviews. Re-read
+	// the owner decision as late as possible so a dismissed or superseding
+	// review does not settle a prepared repair against stale authority.
+	reviews, err = ledger.PullReviews(ctx, c.Repository, pull.Number)
+	if err != nil {
+		return err
+	}
+	i = newestOwnerReview(reviews, c.OwnerID)
+	if i < 0 {
+		return errors.New("prepared repair owner review unavailable")
+	}
+	if err := attachRepairReviewComments(ctx, ledger, c.Repository, pull.Number, reviews, reviews[i].ID); err != nil {
+		return err
+	}
+	if err := validatePreparedReview(attempt, pull, reviews, c.OwnerID); err != nil {
+		return err
+	}
+	published := *attempt.Publication
+	published.ExpectedHead = attempt.Repair.PRHeadSHA
+	published.CandidateDigest = attempt.Repair.CandidateDigest
+	published.HeadSHA = attempt.Repair.CandidateSHA
+	if err := engine.ReconcilePreparedReviewRepair(ctx, attempt, proof, published); err != nil {
+		return err
+	}
+	return observeOnce(ctx, engine, attempt.ID, "review-repair", "draft", published.HeadSHA, published.PRURL, fmt.Sprintf("g%d", attempt.Generation))
+}
+
+func validatePreparedReview(attempt state.Attempt, pull github.PullSnapshot, reviews []github.PullReview, ownerID string) error {
+	if attempt.Repair == nil {
+		return errors.New("prepared repair owner review unavailable")
+	}
+	i := newestOwnerReview(reviews, ownerID)
+	if i < 0 {
+		return errors.New("prepared repair owner review unavailable")
+	}
+	submitted := reviews[i]
+	feedback, err := review.FeedbackText(submitted)
+	if err != nil {
+		return err
+	}
+	h := sha256.Sum256([]byte(feedback))
+	feedbackID := fmt.Sprintf("review-%d-%d-%s", pull.Number, submitted.ID, hex.EncodeToString(h[:8]))
+	if submitted.UserID != ownerID || submitted.State != "CHANGES_REQUESTED" || submitted.CommitSHA != attempt.Repair.PRHeadSHA || submitted.SubmittedAt.IsZero() || feedbackID != attempt.Repair.FeedbackID || hex.EncodeToString(h[:]) != attempt.Repair.FeedbackHash {
+		return errors.New("prepared repair owner review changed")
+	}
+	return nil
 }
 
 // A newer owner review can supersede an unprepared reservation, but cannot

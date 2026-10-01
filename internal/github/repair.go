@@ -130,7 +130,7 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 		return empty, err
 	}
 	marker := fmt.Sprintf("sofa-repair=%s; feedback=%s; generation=%d; candidate=%s", b.AttemptID, in.FeedbackID, b.Generation, b.CandidateDigest)
-	commitSHA, push, cleanup, err := c.prepareRepairCommit(ctx, b, p.Branch, marker)
+	commitSHA, alreadyPushed, push, cleanup, err := c.prepareRepairCommit(ctx, b, p.Branch, marker)
 	if err != nil {
 		return empty, err
 	}
@@ -148,7 +148,7 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 	if err != nil {
 		return empty, err
 	}
-	if pr.HeadSHA == commitSHA {
+	if pr.HeadSHA == commitSHA || alreadyPushed {
 		if err := c.verifyExisting(ctx, b, commitSHA, marker); err != nil {
 			return empty, err
 		}
@@ -160,12 +160,14 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 			return empty, err
 		}
 	}
-	pr, err = c.Pull(ctx, b.Repository, p.PRNumber)
+	// GitHub can acknowledge the leased Git push before its pull-request API
+	// reflects the new head. Accept only the previous head while waiting; any
+	// other head or changed PR identity must fail closed.
+	pr, err = awaitRepairHead(ctx, func(ctx context.Context) (PullSnapshot, error) {
+		return c.Pull(ctx, b.Repository, p.PRNumber)
+	}, b.Repository, p, in.BaseBranch, commitSHA)
 	if err != nil {
 		return empty, err
-	}
-	if pr.Number != p.PRNumber || pr.URL != p.PRURL || pr.HeadSHA != commitSHA || pr.HeadRef != p.Branch || pr.BaseRef != in.BaseBranch || pr.State != "open" || pr.Merged || !strings.EqualFold(pr.HeadRepository, b.Repository) || !strings.EqualFold(pr.BaseRepository, b.Repository) {
-		return empty, errors.New("review repair PR changed after push")
 	}
 	return DraftPR{
 		Number:    pr.Number,
@@ -173,6 +175,69 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 		Branch:    p.Branch,
 		CommitSHA: commitSHA,
 	}, nil
+}
+
+func awaitRepairHead(ctx context.Context, pull func(context.Context) (PullSnapshot, error), repository string, previous state.Publication, baseBranch, commitSHA string) (PullSnapshot, error) {
+	const observationWindow = 15 * time.Second
+	const pollInterval = 500 * time.Millisecond
+	deadline := time.NewTimer(observationWindow)
+	defer deadline.Stop()
+	var lastErr error
+	for {
+		pr, err := pull(ctx)
+		if err == nil {
+			if !repairPullIdentity(pr, repository, previous, baseBranch) {
+				return PullSnapshot{}, errors.New("review repair PR changed after push")
+			}
+			if pr.HeadSHA == commitSHA {
+				return pr, nil
+			}
+			if pr.HeadSHA != previous.HeadSHA {
+				return PullSnapshot{}, errors.New("review repair PR changed after push")
+			}
+			lastErr = errors.New("review repair PR head not yet visible")
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return PullSnapshot{}, ctx.Err()
+		case <-deadline.C:
+			return PullSnapshot{}, lastErr
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// VerifyPreparedRepair checks the exact remote PR, branch ref, and committed
+// child of a repair intent already recorded by the trusted publisher. It does
+// not push or accept a candidate from a new worker.
+func (c *Client) VerifyPreparedRepair(ctx context.Context, repository string, previous state.Publication, repair state.RepairIntent, baseBranch, attemptID string, generation int64) (PullSnapshot, error) {
+	if !lifecycleRepositoryPattern.MatchString(repository) || !safeBranch(baseBranch) || !strings.HasPrefix(previous.Branch, "sofa/") || !safeBranch(previous.Branch) || !lifecycleSHAPattern.MatchString(repair.CandidateSHA) || !lifecycleSHAPattern.MatchString(previous.HeadSHA) || !lifecycleSHAPattern.MatchString(repair.PRBaseSHA) || repair.CandidateDigest == "" || generation < 1 {
+		return PullSnapshot{}, errors.New("invalid prepared repair identity")
+	}
+	pr, err := awaitRepairHead(ctx, func(ctx context.Context) (PullSnapshot, error) {
+		return c.Pull(ctx, repository, previous.PRNumber)
+	}, repository, previous, baseBranch, repair.CandidateSHA)
+	if err != nil {
+		return PullSnapshot{}, err
+	}
+	if !pr.Draft || pr.BaseSHA != repair.PRBaseSHA || repair.PRHeadSHA != previous.HeadSHA || repair.PRNumber != previous.PRNumber {
+		return PullSnapshot{}, errors.New("prepared repair PR identity changed")
+	}
+	ref, err := c.ref(ctx, repository, previous.Branch)
+	if err != nil || ref != repair.CandidateSHA {
+		return PullSnapshot{}, errors.New("prepared repair branch head changed")
+	}
+	commit, err := c.commit(ctx, repository, repair.CandidateSHA)
+	if err != nil {
+		return PullSnapshot{}, err
+	}
+	marker := fmt.Sprintf("sofa-repair=%s; feedback=%s; generation=%d; candidate=%s", attemptID, repair.FeedbackID, generation, repair.CandidateDigest)
+	if commit.SHA != repair.CandidateSHA || commit.Message != marker || len(commit.Parents) != 1 || commit.Parents[0].SHA != previous.HeadSHA {
+		return PullSnapshot{}, errors.New("prepared repair commit identity changed")
+	}
+	return pr, nil
 }
 
 // repairPullMatches checks the published PR identity and its exact previous head.
@@ -188,7 +253,7 @@ func repairPullIdentity(pr PullSnapshot, repository string, p state.Publication,
 
 // prepareRepairCommit prepares a child commit against the bundle's GitHub repository.
 // On success, the caller must invoke the returned cleanup after using the push callback.
-func (c *Client) prepareRepairCommit(ctx context.Context, b integrity.Bundle, branch, marker string) (string, func() error, func(), error) {
+func (c *Client) prepareRepairCommit(ctx context.Context, b integrity.Bundle, branch, marker string) (string, bool, func() error, func(), error) {
 	return c.prepareRepairCommitAtURL(ctx, b, branch, marker, "https://github.com/"+b.Repository+".git")
 }
 
@@ -197,20 +262,20 @@ func (c *Client) prepareRepairCommit(ctx context.Context, b integrity.Bundle, br
 // pushes only while the remote head equals b.BaseSHA, and a required cleanup.
 // Preparation does not push; errors clean up temporary files. Git preparation and
 // each push use separate two-minute timeouts, subject to earlier context cancellation.
-func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundle, branch, marker, repositoryURL string) (string, func() error, func(), error) {
+func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundle, branch, marker, repositoryURL string) (string, bool, func() error, func(), error) {
 	if !c.Authenticated() || !safeBranch(branch) || !strings.HasPrefix(branch, "sofa/") || !lifecycleSHAPattern.MatchString(b.BaseSHA) {
-		return "", nil, nil, errors.New("invalid repair Git identity")
+		return "", false, nil, nil, errors.New("invalid repair Git identity")
 	}
 	dir, err := os.MkdirTemp("", "sofa-repair-git-")
 	if err != nil {
-		return "", nil, nil, errors.New("cannot create repair Git directory")
+		return "", false, nil, nil, errors.New("cannot create repair Git directory")
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	askpass := filepath.Join(dir, "askpass")
 	script := "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' x-access-token ;;\n  *Password*) printf '%s\\n' \"$SOFA_GIT_PUSH_TOKEN\" ;;\n  *) exit 1 ;;\nesac\n"
 	if err := os.WriteFile(askpass, []byte(script), 0700); err != nil {
 		cleanup()
-		return "", nil, nil, errors.New("cannot prepare repair Git credential helper")
+		return "", false, nil, nil, errors.New("cannot prepare repair Git credential helper")
 	}
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -233,16 +298,16 @@ func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundl
 	defer cancel()
 	if _, err := runRepairGit(gitCtx, dir, env, nil, "init", "--bare", filepath.Join(dir, "repo.git")); err != nil {
 		cleanup()
-		return "", nil, nil, err
+		return "", false, nil, nil, err
 	}
 	if _, err := runRepairGit(gitCtx, dir, env, nil, "fetch", "--quiet", "--no-tags", "--depth=2", repositoryURL, "refs/heads/"+branch); err != nil {
 		cleanup()
-		return "", nil, nil, err
+		return "", false, nil, nil, err
 	}
 	current, err := runRepairGit(gitCtx, dir, env, nil, "rev-parse", "FETCH_HEAD")
 	if err != nil || !lifecycleSHAPattern.MatchString(current) {
 		cleanup()
-		return "", nil, nil, errors.New("repair branch head unavailable")
+		return "", false, nil, nil, errors.New("repair branch head unavailable")
 	}
 	// First publication sees the old head. A replay after a lost response may
 	// see our deterministic child; the old parent must still be available.
@@ -250,12 +315,12 @@ func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundl
 		parent, err := runRepairGit(gitCtx, dir, env, nil, "rev-parse", current+"^")
 		if err != nil || parent != b.BaseSHA {
 			cleanup()
-			return "", nil, nil, errors.New("repair branch changed before publication")
+			return "", false, nil, nil, errors.New("repair branch changed before publication")
 		}
 	}
 	if _, err := runRepairGit(gitCtx, dir, env, nil, "read-tree", b.BaseSHA); err != nil {
 		cleanup()
-		return "", nil, nil, err
+		return "", false, nil, nil, err
 	}
 	var index bytes.Buffer
 	for _, file := range b.Files {
@@ -266,23 +331,27 @@ func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundl
 		blob, err := runRepairGit(gitCtx, dir, env, bytes.NewReader(file.Content), "hash-object", "-w", "--stdin")
 		if err != nil || blob != blobSHA(file.Content) {
 			cleanup()
-			return "", nil, nil, errors.New("repair candidate blob mismatch")
+			return "", false, nil, nil, errors.New("repair candidate blob mismatch")
 		}
 		fmt.Fprintf(&index, "%s %s\t%s\n", integrity.RegularMode, blob, file.Path)
 	}
 	if _, err := runRepairGit(gitCtx, dir, env, &index, "update-index", "--index-info"); err != nil {
 		cleanup()
-		return "", nil, nil, err
+		return "", false, nil, nil, err
 	}
 	tree, err := runRepairGit(gitCtx, dir, env, nil, "write-tree")
 	if err != nil || !lifecycleSHAPattern.MatchString(tree) {
 		cleanup()
-		return "", nil, nil, errors.New("repair candidate tree unavailable")
+		return "", false, nil, nil, errors.New("repair candidate tree unavailable")
 	}
 	commit, err := runRepairGit(gitCtx, dir, env, nil, "commit-tree", tree, "-p", b.BaseSHA, "-m", marker)
 	if err != nil || !lifecycleSHAPattern.MatchString(commit) {
 		cleanup()
-		return "", nil, nil, errors.New("repair candidate commit unavailable")
+		return "", false, nil, nil, errors.New("repair candidate commit unavailable")
+	}
+	if current != b.BaseSHA && current != commit {
+		cleanup()
+		return "", false, nil, nil, errors.New("repair branch changed before publication")
 	}
 	push := func() error {
 		pushCtx, pushCancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -294,7 +363,7 @@ func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundl
 		}
 		return nil
 	}
-	return commit, push, cleanup, nil
+	return commit, current == commit, push, cleanup, nil
 }
 
 // runRepairGit runs Git with the supplied directory, environment, and input.

@@ -585,3 +585,25 @@ func TestRepairSourceRequiresSameApprovedSpecAndDeliveryPosition(t *testing.T) {
 		t.Fatal("completed item admitted a repair")
 	}
 }
+
+func TestPreparedRepairRetainsOnlyExactOwnerFeedback(t *testing.T) {
+	c, _ := testManifest(t)
+	m, pull, reviews := repairFixture(t)
+	m.Repair.CandidateSHA = strings.Repeat("a", 40)
+	m.Repair.CandidateDigest = strings.Repeat("b", 64)
+	pull.HeadSHA = m.Repair.CandidateSHA
+	attempt := state.Attempt{Repair: &m.Repair}
+	if err := validatePreparedReview(attempt, pull, reviews, c.OwnerID); err != nil {
+		t.Fatalf("original review rejected after prepared push: %v", err)
+	}
+	changed := append([]github.PullReview(nil), reviews...)
+	changed[0].Body = "different feedback"
+	if err := validatePreparedReview(attempt, pull, changed, c.OwnerID); err == nil {
+		t.Fatal("edited feedback inherited prepared repair")
+	}
+	changed = append([]github.PullReview(nil), reviews...)
+	changed = append(changed, github.PullReview{ID: 10, UserID: c.OwnerID, State: "CHANGES_REQUESTED", CommitSHA: pull.HeadSHA, Body: "new review", SubmittedAt: reviews[0].SubmittedAt.Add(time.Minute)})
+	if err := validatePreparedReview(attempt, pull, changed, c.OwnerID); err == nil {
+		t.Fatal("newer owner review inherited prepared repair")
+	}
+}

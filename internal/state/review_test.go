@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
@@ -100,6 +101,100 @@ func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
 	}
 	if err := e.MarkReviewRepairPublished(ctx, repairFence, newPublication); err != nil {
 		t.Fatalf("same final acknowledgement not idempotent: %v", err)
+	}
+}
+
+func TestPreparedReviewRepairReconcilesOnlyExactTerminalPublication(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	f := claimed(t, e, a.ID)
+	if err := e.Advance(ctx, f, Validating); err != nil {
+		t.Fatal(err)
+	}
+	p := Publication{Branch: "sofa/task", ExpectedHead: a.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}
+	if err := e.BeginPublication(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	p.HeadSHA = strings.Repeat("e", 40)
+	p.PRNumber = 7
+	p.PRURL = "https://github.com/owner/consumer/pull/7"
+	if err := e.MarkPublished(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	r := RepairIntent{FeedbackID: "review-7-8-abcd", FeedbackHash: strings.Repeat("f", 64), PRBaseSHA: strings.Repeat("b", 40), PRHeadSHA: p.HeadSHA, PRNumber: p.PRNumber}
+	if ok, err := e.ReserveReviewRepair(ctx, a.ID, r); err != nil || !ok {
+		t.Fatalf("reserve: %v, %v", ok, err)
+	}
+	owner := Owner{RunID: "44", RunAttempt: 1}
+	fence, err := e.ClaimReviewRepair(ctx, a.ID, owner, Counters{ModelCalls: 1, RuntimeSeconds: 600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Advance(ctx, fence, Validating); err != nil {
+		t.Fatal(err)
+	}
+	digest, sha := strings.Repeat("1", 64), strings.Repeat("2", 40)
+	if err := e.BeginRepairPublication(ctx, fence, digest, sha); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.FailReviewRepair(ctx, fence); err != nil {
+		t.Fatal(err)
+	}
+	blocked := snapshot(t, e, a.ID)
+	spec := SpecRecord{
+		Repository: a.Admission.Repository, IssueID: "I_7", Issue: a.Admission.Issue,
+		ProjectID: a.Admission.ProjectID, ProjectItemID: a.Admission.ProjectItemID,
+		SourceDigest: strings.Repeat("9", 64), SpecDigest: a.Admission.SpecDigest,
+		CommentID: 10, CommentAuthorID: "bot", CommentCreatedAt: testNow.Add(-3 * time.Hour),
+		CommentUpdatedAt: testNow.Add(-3 * time.Hour), ReviewOptionID: "review",
+		ReviewUpdatedAt: testNow.Add(-2 * time.Hour), ApprovedDigest: a.Admission.SpecDigest,
+		BacklogOptionID: "backlog", BacklogUpdatedAt: testNow.Add(-time.Hour),
+	}
+	setSpec := func(record SpecRecord) {
+		t.Helper()
+		if err := e.update(ctx, func(s *State) (bool, error) {
+			if s.Specs == nil {
+				s.Specs = map[string]SpecRecord{}
+			}
+			s.Specs[record.IssueID] = record
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSpec(spec)
+	published := p
+	published.ExpectedHead = p.HeadSHA
+	published.CandidateDigest = digest
+	published.HeadSHA = sha
+	proof := RunProof{Owner: owner, Status: "completed", Conclusion: "failure", ObservedAt: testNow}
+	if err := e.ReconcilePreparedReviewRepair(ctx, blocked, RunProof{Owner: owner, Status: "in_progress", ObservedAt: testNow}, published); err == nil {
+		t.Fatal("active run reconciled")
+	}
+	other := published
+	other.PRNumber++
+	if err := e.ReconcilePreparedReviewRepair(ctx, blocked, proof, other); err == nil {
+		t.Fatal("other PR publication reconciled")
+	}
+	revised := spec
+	revised.ApprovedDigest = ""
+	revised.BacklogOptionID = ""
+	revised.BacklogUpdatedAt = time.Time{}
+	setSpec(revised)
+	if err := e.ReconcilePreparedReviewRepair(ctx, blocked, proof, published); !errors.Is(err, ErrAdmissionChanged) {
+		t.Fatalf("concurrent spec revocation reconciled obsolete repair: %v", err)
+	}
+	setSpec(spec)
+	if err := e.ReconcilePreparedReviewRepair(ctx, blocked, proof, published); err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot(t, e, a.ID)
+	if got.Phase != Draft || got.Repair != nil || got.Failure != "" || got.Owner != nil || got.Publication == nil || *got.Publication != published || got.Counts != blocked.Counts {
+		t.Fatalf("prepared publication not acknowledged without new budget: %+v", got)
+	}
+	if err := e.ReconcilePreparedReviewRepair(ctx, blocked, proof, published); err != nil {
+		t.Fatalf("exact reconciliation replay was not idempotent: %v", err)
 	}
 }
 
