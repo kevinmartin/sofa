@@ -137,6 +137,7 @@ func TestAwaitRepairHeadAllowsOnlyBoundedOldHeadLag(t *testing.T) {
 		State:          "open",
 	}
 	t.Run("stale then current", func(t *testing.T) {
+		pull := pull
 		reads := 0
 		got, err := awaitRepairHead(context.Background(), func(context.Context) (PullSnapshot, error) {
 			reads++
@@ -166,13 +167,15 @@ func TestAwaitRepairHeadAllowsOnlyBoundedOldHeadLag(t *testing.T) {
 		}
 	})
 	t.Run("transient read", func(t *testing.T) {
+		current := pull
+		current.HeadSHA = candidate
 		reads := 0
 		got, err := awaitRepairHead(context.Background(), func(context.Context) (PullSnapshot, error) {
 			reads++
 			if reads == 1 {
 				return PullSnapshot{}, errors.New("transient read")
 			}
-			return pull, nil
+			return current, nil
 		}, "owner/repo", previous, "main", candidate)
 		if err != nil || got.HeadSHA != candidate || reads != 2 {
 			t.Fatalf("transient PR read was not retried: %+v, %v, reads=%d", got, err, reads)
@@ -192,18 +195,20 @@ func TestVerifyPreparedRepairRejectsChangedRemoteIdentity(t *testing.T) {
 	marker := "sofa-repair=" + attemptID + "; feedback=review-7-8-abcd; generation=2; candidate=" + digest
 	for _, tc := range []struct {
 		name, prHead, refHead, message string
+		draft                          bool
 		good                           bool
 	}{
-		{"exact", candidate, candidate, marker, true},
-		{"changed PR", strings.Repeat("f", 40), candidate, marker, false},
-		{"changed branch", candidate, strings.Repeat("f", 40), marker, false},
-		{"changed marker", candidate, candidate, "unrelated", false},
+		{"exact draft", candidate, candidate, marker, true, true},
+		{"exact ready for review", candidate, candidate, marker, false, true},
+		{"changed PR", strings.Repeat("f", 40), candidate, marker, true, false},
+		{"changed branch", candidate, strings.Repeat("f", 40), marker, true, false},
+		{"changed marker", candidate, candidate, "unrelated", true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, err := New("fixture-token", roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				switch r.URL.Path {
 				case "/repos/owner/fixture/pulls/7":
-					return jsonResponse(200, map[string]any{"number": 7, "html_url": previous.PRURL, "state": "open", "draft": true, "updated_at": time.Now().UTC(), "head": map[string]any{"sha": tc.prHead, "ref": previous.Branch, "repo": map[string]any{"full_name": repo}}, "base": map[string]any{"sha": base, "ref": "main", "repo": map[string]any{"full_name": repo}}}), nil
+					return jsonResponse(200, map[string]any{"number": 7, "html_url": previous.PRURL, "state": "open", "draft": tc.draft, "updated_at": time.Now().UTC(), "head": map[string]any{"sha": tc.prHead, "ref": previous.Branch, "repo": map[string]any{"full_name": repo}}, "base": map[string]any{"sha": base, "ref": "main", "repo": map[string]any{"full_name": repo}}}), nil
 				case "/repos/owner/fixture/git/ref/heads/sofa/task":
 					return jsonResponse(200, map[string]any{"object": map[string]any{"sha": tc.refHead}}), nil
 				case "/repos/owner/fixture/git/commits/" + candidate:

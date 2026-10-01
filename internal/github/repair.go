@@ -222,7 +222,7 @@ func (c *Client) VerifyPreparedRepair(ctx context.Context, repository string, pr
 	if err != nil {
 		return PullSnapshot{}, err
 	}
-	if !pr.Draft || pr.BaseSHA != repair.PRBaseSHA || repair.PRHeadSHA != previous.HeadSHA || repair.PRNumber != previous.PRNumber {
+	if pr.BaseSHA != repair.PRBaseSHA || repair.PRHeadSHA != previous.HeadSHA || repair.PRNumber != previous.PRNumber {
 		return PullSnapshot{}, errors.New("prepared repair PR identity changed")
 	}
 	ref, err := c.ref(ctx, repository, previous.Branch)
