@@ -109,6 +109,38 @@ func TestRetainedCandidateAvailabilityFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDiscoveryCandidateAvailabilityBindsProducerRun(t *testing.T) {
+	owner := state.Owner{RunID: "42", RunAttempt: 2}
+	name := "sofa-discovery-candidate-42-2"
+	for _, tc := range []struct {
+		name      string
+		artifacts []any
+		want      bool
+		wantError bool
+	}{
+		{"present", []any{map[string]any{"id": 17, "name": name, "expired": false, "workflow_run": map[string]any{"id": 42}}}, true, false},
+		{"expired", []any{map[string]any{"id": 17, "name": name, "expired": true, "workflow_run": map[string]any{"id": 42}}}, false, false},
+		{"wrong-run", []any{map[string]any{"id": 17, "name": name, "expired": false, "workflow_run": map[string]any{"id": 43}}}, false, true},
+		{"missing", []any{}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := New("fixture-token", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path != "/repos/owner/fixture/actions/runs/42/artifacts" || r.URL.Query().Get("name") != name {
+					t.Errorf("wrong artifact lookup: %s", r.URL.Redacted())
+				}
+				return jsonResponse(200, map[string]any{"total_count": len(tc.artifacts), "artifacts": tc.artifacts}), nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			available, err := client.DiscoveryCandidateAvailable(context.Background(), "owner/fixture", owner)
+			if available != tc.want || (err != nil) != tc.wantError {
+				t.Fatalf("available=%v, err=%v", available, err)
+			}
+		})
+	}
+}
+
 // This fake models GitHub's non-forced ref update: two commits built on the
 // same observed parent cannot both advance a branch. It also preserves a base
 // tree when the ledger alone is rewritten.

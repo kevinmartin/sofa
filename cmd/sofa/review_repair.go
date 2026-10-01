@@ -172,7 +172,7 @@ func runReviewRepairFail(ctx context.Context, configPath, manifestPath, stage st
 	if attempt.Phase == state.Blocked && attempt.Failure == "validation" {
 		return nil
 	}
-	if err := engine.Fail(ctx, m.Fence, "validation"); err != nil {
+	if err := engine.FailReviewRepair(ctx, m.Fence); err != nil {
 		return err
 	}
 	return observeOnce(ctx, engine, m.Fence.AttemptID, "review-repair-failure", stage, m.Repair.PRHeadSHA, "", fmt.Sprintf("g%d", m.Fence.Generation))

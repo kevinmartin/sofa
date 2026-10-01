@@ -102,6 +102,51 @@ func TestReviewRepairReservationAndSamePRPublication(t *testing.T) {
 	}
 }
 
+func TestFailedUnpreparedReviewRepairReturnsToDraftUntilBudgetExhausted(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	f := claimed(t, e, a.ID)
+	if err := e.Advance(ctx, f, Validating); err != nil {
+		t.Fatal(err)
+	}
+	p := Publication{Branch: "sofa/task", ExpectedHead: a.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}
+	if err := e.BeginPublication(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	p.HeadSHA, p.PRNumber, p.PRURL = strings.Repeat("e", 40), 7, "https://github.com/owner/consumer/pull/7"
+	if err := e.MarkPublished(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	intent := RepairIntent{FeedbackID: "review-first", FeedbackHash: strings.Repeat("f", 64), PRBaseSHA: strings.Repeat("b", 40), PRHeadSHA: p.HeadSHA, PRNumber: p.PRNumber}
+	for turn := 1; turn <= 2; turn++ {
+		if turn == 2 {
+			intent.FeedbackID = "review-second"
+		}
+		if reserved, err := e.ReserveReviewRepair(ctx, a.ID, intent); err != nil || !reserved {
+			t.Fatalf("reserve turn %d: %v, %v", turn, reserved, err)
+		}
+		fence, err := e.ClaimReviewRepair(ctx, a.ID, Owner{RunID: "repair-" + intent.FeedbackID, RunAttempt: 1}, Counters{ModelCalls: 1, RuntimeSeconds: 600})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.FailReviewRepair(ctx, fence); err != nil {
+			t.Fatal(err)
+		}
+		got := snapshot(t, e, a.ID)
+		wantPhase := Draft
+		if turn == 2 {
+			wantPhase = Blocked
+		}
+		if got.Phase != wantPhase || got.Repair != nil || got.Owner != nil || got.Counts.Repairs != int64(turn) || got.Counts.ModelCalls != int64(turn) || got.Publication == nil || *got.Publication != p {
+			t.Fatalf("turn %d lost identity or charged counters: %+v", turn, got)
+		}
+		if _, err := e.ReserveReviewRepair(ctx, a.ID, intent); !errors.Is(err, ErrConflict) {
+			t.Fatalf("replayed feedback was not a conflict on turn %d: %v", turn, err)
+		}
+	}
+}
+
 func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
 	ctx := context.Background()
 	e := engine()

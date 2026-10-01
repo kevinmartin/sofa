@@ -38,6 +38,8 @@ type Config struct {
 
 // Lifecycle is opt-in so existing delivery-only consumers retain their v1 policy.
 // Statuses maps canonical lifecycle names to this Project's display names.
+// Zero and omitted PollMinutes, DiscoveryWIP, and DeliveryWIP both use the
+// defaults below; setting WIP to zero does not disable Discovery or delivery.
 type Lifecycle struct {
 	Statuses          map[string]string `yaml:"statuses" json:"statuses" validate:"len=10"`
 	PollMinutes       int               `yaml:"poll_minutes,omitempty" json:"poll_minutes,omitempty" validate:"oneof=0 10 60"`

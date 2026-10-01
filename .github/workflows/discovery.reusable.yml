@@ -188,7 +188,7 @@ jobs:
           name: sofa-discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate/specification.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
   publish:
     name: Revalidate and post unapproved specification

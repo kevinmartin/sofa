@@ -340,6 +340,44 @@ func TestFailedDiscoveryResetRequiresLaterOwnerTransition(t *testing.T) {
 	}
 }
 
+func TestFirstDiscoveryRejectsUnsupersededLegacyDraft(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	legacy := admitted(t, e)
+	f := claimed(t, e, legacy.ID)
+	if err := e.Advance(ctx, f, Validating); err != nil {
+		t.Fatal(err)
+	}
+	p := Publication{Branch: "sofa/task", ExpectedHead: legacy.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64)}
+	if err := e.BeginPublication(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	p.HeadSHA, p.PRNumber, p.PRURL = strings.Repeat("e", 40), 7, "https://github.com/owner/consumer/pull/7"
+	if err := e.MarkPublished(ctx, f, p); err != nil {
+		t.Fatal(err)
+	}
+	first := discoveryAdmission("I_7", 7)
+	first.Repository = legacy.Admission.Repository
+	first.ProjectID = legacy.Admission.ProjectID
+	first.ProjectItemID = legacy.Admission.ProjectItemID
+	if _, created, err := e.AdmitDiscovery(ctx, first, 2, 2); created || !errors.Is(err, ErrAdmissionChanged) || !strings.Contains(err.Error(), "legacy delivery attempt") {
+		t.Fatalf("first Discovery silently displaced legacy draft: created=%v err=%v", created, err)
+	}
+	s, err := e.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.State.Discoveries) != 0 || s.State.Attempts[legacy.ID].Phase != Draft || !s.State.Attempts[legacy.ID].SupersededAt.IsZero() {
+		t.Fatal("rejected first Discovery changed the legacy draft")
+	}
+	ready := legacy.Admission
+	ready.SpecDigest = strings.Repeat("f", 64)
+	ready.StatusUpdatedAt = ready.StatusUpdatedAt.Add(time.Hour)
+	if _, _, err := e.Admit(ctx, ready, legacy.Limits); !errors.Is(err, ErrAdmissionChanged) {
+		t.Fatalf("unapproved Ready revision admitted after rejected Discovery: %v", err)
+	}
+}
+
 func TestUnapprovedLaterRevisionRestoresLastApprovedSpec(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)

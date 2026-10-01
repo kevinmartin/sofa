@@ -284,7 +284,20 @@ func (c *Client) RetainedCandidateAvailable(ctx context.Context, repo string, ch
 	if !repositoryPattern.MatchString(repo) || checkpoint.Phase != state.Validating || checkpoint.Producer.RunAttempt < 1 || checkpoint.ArtifactID != fmt.Sprintf("sofa-verified-candidate-%s-%d", checkpoint.Producer.RunID, checkpoint.Producer.RunAttempt) {
 		return false, errors.New("invalid retained candidate identity")
 	}
-	id, err := strconv.ParseInt(checkpoint.Producer.RunID, 10, 64)
+	return c.runArtifactAvailable(ctx, repo, checkpoint.Producer, checkpoint.ArtifactID)
+}
+
+// DiscoveryCandidateAvailable verifies that the exact producer's candidate is
+// still downloadable before a recovered publication is dispatched.
+func (c *Client) DiscoveryCandidateAvailable(ctx context.Context, repo string, producer state.Owner) (bool, error) {
+	if !repositoryPattern.MatchString(repo) || producer.RunAttempt < 1 {
+		return false, errors.New("invalid Discovery candidate identity")
+	}
+	return c.runArtifactAvailable(ctx, repo, producer, fmt.Sprintf("sofa-discovery-candidate-%s-%d", producer.RunID, producer.RunAttempt))
+}
+
+func (c *Client) runArtifactAvailable(ctx context.Context, repo string, producer state.Owner, name string) (bool, error) {
+	id, err := strconv.ParseInt(producer.RunID, 10, 64)
 	if err != nil || id <= 0 {
 		return false, errors.New("invalid retained candidate run ID")
 	}
@@ -299,7 +312,7 @@ func (c *Client) RetainedCandidateAvailable(ctx context.Context, repo string, ch
 			} `json:"workflow_run"`
 		} `json:"artifacts"`
 	}
-	path := fmt.Sprintf("/repos/%s/actions/runs/%d/artifacts?per_page=2&name=%s", repo, id, url.QueryEscape(checkpoint.ArtifactID))
+	path := fmt.Sprintf("/repos/%s/actions/runs/%d/artifacts?per_page=2&name=%s", repo, id, url.QueryEscape(name))
 	if err := c.Request(ctx, http.MethodGet, path, nil, &listing); err != nil {
 		return false, err
 	}
@@ -310,7 +323,7 @@ func (c *Client) RetainedCandidateAvailable(ctx context.Context, repo string, ch
 		return false, errors.New("retained candidate artifact listing ambiguous")
 	}
 	artifact := listing.Artifacts[0]
-	if artifact.ID <= 0 || artifact.Name != checkpoint.ArtifactID || artifact.Expired == nil || artifact.WorkflowRun.ID != id {
+	if artifact.ID <= 0 || artifact.Name != name || artifact.Expired == nil || artifact.WorkflowRun.ID != id {
 		return false, errors.New("retained candidate artifact identity mismatch")
 	}
 	return !*artifact.Expired, nil

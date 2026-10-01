@@ -173,6 +173,14 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 		if active >= maxActive {
 			return false, ErrLimit
 		}
+		// Legacy delivery attempts have no Discovery revision to bind to this
+		// first task. Do not silently coexist with one: a later Ready approval
+		// could not prove an authorized supersession or carry its counters.
+		for _, attempt := range s.Attempts {
+			if attempt.Admission.Repository == task.Repository && attempt.Admission.Issue == task.Issue && attempt.SupersededAt.IsZero() {
+				return false, fmt.Errorf("%w: legacy delivery attempt requires operator reconciliation before first Discovery", ErrAdmissionChanged)
+			}
+		}
 		if s.Discoveries == nil {
 			s.Discoveries = map[string]DiscoveryTask{}
 		}

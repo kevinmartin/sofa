@@ -77,13 +77,13 @@ func (e Engine) ReserveReviewRepair(ctx context.Context, id string, intent Repai
 			}
 			return false, ErrAdmissionChanged
 		}
-		if a.Phase != Draft || a.Counts.Repairs >= a.Limits.Repairs {
-			return false, ErrLimit
-		}
 		for _, prior := range s.Observations {
 			if prior.ID == intent.FeedbackID {
 				return false, ErrConflict
 			}
+		}
+		if a.Phase != Draft || a.Counts.Repairs >= a.Limits.Repairs {
+			return false, ErrLimit
 		}
 		a.Counts.Repairs++
 		a.Repair = &intent
@@ -166,6 +166,33 @@ func (e Engine) MarkReviewRepairPublished(ctx context.Context, fence Fence, publ
 		a.Publication = &published
 		a.Repair = nil
 		a.Phase = Draft
+		return nil
+	})
+}
+
+// FailReviewRepair releases an unprepared repair so a different owner review
+// can be admitted if budget remains. A prepared commit must be reconciled;
+// replaying a failed stage may not silently discard its publication intent.
+func (e Engine) FailReviewRepair(ctx context.Context, fence Fence) error {
+	return e.mutateOwned(ctx, fence, func(a *Attempt) error {
+		if a.Repair == nil || a.Publication == nil {
+			return ErrInvalid
+		}
+		a.Failure = "validation"
+		if a.Repair.CandidateSHA != "" {
+			a.Phase = Blocked
+			return nil
+		}
+		a.Repair = nil
+		a.Owner = nil
+		a.Checkpoint = nil
+		if a.Counts.Repairs >= a.Limits.Repairs || a.Counts.ModelCalls >= a.Limits.ModelCalls || a.Counts.RuntimeSeconds >= a.Limits.RuntimeSeconds {
+			a.Phase = Blocked
+			a.Failure = "budget"
+		} else {
+			a.Phase = Draft
+			a.Failure = ""
+		}
 		return nil
 	})
 }

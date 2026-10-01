@@ -255,6 +255,9 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 			return err
 		}
 		if err := engine.RecoverDiscovery(ctx, task.IssueID, proof); err != nil {
+			if errors.Is(err, state.ErrActive) {
+				return writeJSON(statusPath, discoveryStatus{Reason: "already-active"})
+			}
 			return err
 		}
 		old := *task.Owner
@@ -275,6 +278,13 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	// run was interrupted before writing a replacement manifest.
 	if task.Publication != nil {
 		producer := task.Publication.Producer
+		available, err := store.Client.DiscoveryCandidateAvailable(ctx, c.Repository, producer)
+		if err != nil {
+			return err
+		}
+		if !available {
+			return writeJSON(statusPath, discoveryStatus{Reason: "candidate-artifact-unavailable"})
+		}
 		recovery = &producer
 	}
 	fence, err := engine.ClaimDiscovery(ctx, task.IssueID, owner)
