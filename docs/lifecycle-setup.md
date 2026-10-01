@@ -13,6 +13,14 @@ unfiltered view for audit. Lifecycle decisions keep blocked reason and next
 action separate from the stage. Backlog suggestions also appear in the poll
 result and Actions run summary. Moving a blocked item to a special column
 would hide its handoff.
+Create two Project text fields named `Blocked reason` and `Next action` for
+item-level advice. These are the default names; configure
+`lifecycle.blocked_reason_field` and `lifecycle.next_action_field` together if
+the Project uses different names. The controller resolves both field IDs and
+checks that they are text fields before reconciliation. Existing Projects
+without either default field continue without board advice; a partial pair or
+missing explicitly configured field is a setup error. Status remains the
+lifecycle position.
 
 Only Kevin, another explicitly designated owner, and the trusted factory
 controller credential should have Project write access. GitHub Projects does

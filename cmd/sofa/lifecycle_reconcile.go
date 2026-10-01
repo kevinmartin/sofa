@@ -137,6 +137,11 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			return errors.New("configured Project Status option unavailable")
 		}
 	}
+	blockedField, nextField := c.Lifecycle.EffectiveAdviceFields()
+	adviceFields, err := projects.ProjectAdviceFields(ctx, c.ProjectID, blockedField, nextField, c.Lifecycle.BlockedReasonField != "")
+	if err != nil {
+		return err
+	}
 	policy, err := discoveryPolicy(c)
 	if err != nil {
 		return err
@@ -351,6 +356,32 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	result.Ready = readyForDelivery(c, items, ledger.State, authority, statuses, result.Held)
 	result.Held = uniqueInts(result.Held)
 	result.Moved = uniqueInts(result.Moved)
+	desiredAdvice := completeLifecycleAdvisories(&result, items, statuses)
+	moved := make(map[int]bool, len(result.Moved))
+	for _, number := range result.Moved {
+		moved[number] = true
+	}
+	for _, item := range items {
+		if adviceFields.BlockedReasonID == "" {
+			break // Default advice fields are optional for existing Projects.
+		}
+		issue := item.Issue
+		stage, known := statuses.StageFor(issue.CurrentStatus)
+		if moved[issue.Number] || recovering[issue.IssueID] || (known && stage == lifecycle.Done && !donePatrol[issue.IssueID]) {
+			continue // Initial Project status is stale or this Done item was not patrolled.
+		}
+		advice := desiredAdvice[issue.Number]
+		if item.BlockedReason == advice.BlockedReason && item.NextAction == advice.NextAction {
+			continue
+		}
+		if err := projects.SetProjectAdviceIfCurrent(ctx, issue, adviceFields, advice.BlockedReason, advice.NextAction); err != nil {
+			// A stale item or transient failure is isolated to this issue. Never
+			// reuse its result or Project item identity for another candidate.
+			result.Held = append(result.Held, issue.Number)
+		}
+	}
+	result.Held = uniqueInts(result.Held)
+	completeLifecycleAdvisories(&result, items, statuses)
 	return writeJSON(opts.outPath, result)
 }
 
@@ -437,11 +468,70 @@ func fixedHoldAdvice(effect lifecycle.Effect) lifecycleAdvisory {
 	case "release verification missing or failed":
 		advice.BlockedReason = "release verification missing or failed"
 		advice.NextAction = "observe release checks for merged commit"
+	case "specification proposal or source changed":
+		return revisedBacklogAdvice(effect.IssueNumber)
+	case "owner-managed Project field invalid":
+		advice.BlockedReason = "owner-managed Project field invalid"
+		advice.NextAction = "correct the configured dependency or priority field"
+	case "owner-managed dependencies unavailable":
+		advice.BlockedReason = "owner-managed dependencies unavailable"
+		advice.NextAction = "set the configured dependencies field to none or same-repository issue references"
+	case "owner-managed priority unavailable":
+		advice.BlockedReason = "owner-managed priority unavailable"
+		advice.NextAction = "set the configured priority field to P0 through P4"
+	case "owner-managed dependencies invalid":
+		advice.BlockedReason = "owner-managed dependencies invalid"
+		advice.NextAction = "correct the configured dependencies field"
+	case "dependencies have not reached Done":
+		advice.BlockedReason = "dependencies have not reached Done"
+		advice.NextAction = "wait for dependencies to reach Done or revise the owner-managed field"
 	default:
 		advice.BlockedReason = "lifecycle item held"
 		advice.NextAction = "inspect trusted lifecycle evidence"
 	}
 	return advice
+}
+
+// completeLifecycleAdvisories gives every held item fixed, separate reason and
+// next-action text. Earlier approval, read, or mutation failures may have only
+// appended an issue number; they must not leave a stale board explanation or
+// copy the raw error into the public result.
+func completeLifecycleAdvisories(result *lifecycleReconcileResult, items []github.ProjectWorkItem, statuses lifecycle.Statuses) map[int]lifecycleAdvisory {
+	held := make(map[int]bool, len(result.Held))
+	for _, number := range result.Held {
+		held[number] = true
+	}
+	backlog := make(map[int]lifecycleAdvisory, len(result.BacklogAdvisories))
+	for _, advice := range result.BacklogAdvisories {
+		backlog[advice.IssueNumber] = advice
+	}
+	other := make(map[int]lifecycleAdvisory, len(result.HoldAdvisories))
+	for _, advice := range result.HoldAdvisories {
+		other[advice.IssueNumber] = advice
+	}
+	result.BacklogAdvisories = []lifecycleAdvisory{}
+	result.HoldAdvisories = []lifecycleAdvisory{}
+	desired := make(map[int]lifecycleAdvisory, len(items))
+	for _, item := range items {
+		number := item.Issue.Number
+		advice := lifecycleAdvisory{IssueNumber: number}
+		if held[number] {
+			stage, _ := statuses.StageFor(item.Issue.CurrentStatus)
+			if stage == lifecycle.Backlog {
+				advice = backlog[number]
+			} else {
+				advice = other[number]
+			}
+			advice = fixedHoldAdvice(lifecycle.Effect{IssueNumber: number, BlockedReason: advice.BlockedReason})
+			if stage == lifecycle.Backlog {
+				result.BacklogAdvisories = append(result.BacklogAdvisories, advice)
+			} else {
+				result.HoldAdvisories = append(result.HoldAdvisories, advice)
+			}
+		}
+		desired[number] = advice
+	}
+	return desired
 }
 
 // backlogOwnerFieldAdvice reports only configured, owner-controlled metadata.

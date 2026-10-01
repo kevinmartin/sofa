@@ -21,6 +21,9 @@ lifecycle:
   poll_minutes: 10
   discovery_wip: 2
   delivery_wip: 1
+  # Optional overrides for the default Project text fields:
+  # blocked_reason_field: Blocked reason
+  # next_action_field: Next action
   spec_author_id: MDM6Qm90NDE4OTgyODI= # github-actions[bot] issue-comment author
   release:
     required_checks: []

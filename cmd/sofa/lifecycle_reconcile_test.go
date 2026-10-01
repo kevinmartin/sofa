@@ -81,6 +81,44 @@ func TestFixedHoldAdviceSeparatesIssueAndRedactsUntrustedDetails(t *testing.T) {
 	}
 }
 
+func TestCompleteLifecycleAdvisoriesIsolatesHoldsAndClearsResolvedItems(t *testing.T) {
+	items := []github.ProjectWorkItem{
+		{Issue: admission.Snapshot{IssueID: "backlog", Number: 7, CurrentStatus: "Backlog"}},
+		{Issue: admission.Snapshot{IssueID: "review", Number: 8, CurrentStatus: "Review"}},
+		{Issue: admission.Snapshot{IssueID: "done", Number: 9, CurrentStatus: "Done"}},
+		{Issue: admission.Snapshot{IssueID: "ready", Number: 10, CurrentStatus: "Ready"}},
+	}
+	result := lifecycleReconcileResult{
+		Held:              []int{7, 8, 10, 7},
+		BacklogAdvisories: []lifecycleAdvisory{revisedBacklogAdvice(7)},
+		HoldAdvisories: []lifecycleAdvisory{{
+			IssueNumber:   8,
+			BlockedReason: "TOP_SECRET untrusted failure",
+			NextAction:    "TOP_SECRET untrusted comment",
+		}},
+	}
+	statuses := lifecycle.Statuses{
+		lifecycle.Backlog: "Backlog",
+		lifecycle.Ready:   "Ready",
+		lifecycle.Review:  "Review",
+		lifecycle.Done:    "Done",
+	}
+	for range 2 {
+		desired := completeLifecycleAdvisories(&result, items, statuses)
+		if desired[7] != revisedBacklogAdvice(7) || desired[9].BlockedReason != "" || desired[9].NextAction != "" {
+			t.Fatalf("backlog or resolved-item advice changed: %+v", desired)
+		}
+		if desired[8].BlockedReason != "lifecycle item held" || desired[10].BlockedReason != "lifecycle item held" ||
+			len(result.BacklogAdvisories) != 1 || len(result.HoldAdvisories) != 2 {
+			t.Fatalf("held issue advice leaked or crossed identities: %+v %+v", desired, result)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil || strings.Contains(string(encoded), "TOP_SECRET") {
+			t.Fatalf("untrusted text reached the result: %v %s", err, encoded)
+		}
+	}
+}
+
 func TestReadyForDeliveryHonorsApprovalDependenciesAndWIP(t *testing.T) {
 	c := config.Config{
 		Repository: "kevinmartin/sofa-disposable",

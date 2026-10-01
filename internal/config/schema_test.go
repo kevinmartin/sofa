@@ -141,6 +141,21 @@ func TestConfigurationSchema(t *testing.T) {
 			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  priority_field: 'Priority '"),
 		},
 		{
+			name:         "named advice fields",
+			text:         replace("  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Hold\n  next_action_field: Follow up"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name:        "unpaired advice field",
+			text:        replace("  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Hold"),
+			schemaValid: true,
+		},
+		{
+			name: "padded advice field",
+			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: ' Hold'\n  next_action_field: Follow up"),
+		},
+		{
 			name: "unknown profile field",
 			text: replace("  agent: copilot", "  agent: copilot\n  unknown: true"),
 		},

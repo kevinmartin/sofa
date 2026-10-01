@@ -27,6 +27,10 @@ func TestStrictConfiguration(t *testing.T) {
 	if c.Lifecycle == nil || c.Lifecycle.EffectivePollMinutes() != 10 || c.Lifecycle.EffectiveDiscoveryWIP() != 2 || c.Lifecycle.EffectiveDeliveryWIP() != 1 {
 		t.Fatal("lifecycle defaults or mapping unavailable")
 	}
+	blockedField, nextField := c.Lifecycle.EffectiveAdviceFields()
+	if blockedField != "Blocked reason" || nextField != "Next action" {
+		t.Fatalf("default advice fields = %q, %q", blockedField, nextField)
+	}
 	d1, err := c.Digest()
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +59,10 @@ func TestStrictConfiguration(t *testing.T) {
 		"invalid poll interval":    strings.Replace(text, "poll_minutes: 10", "poll_minutes: 1", 1),
 		"unbounded discovery":      strings.Replace(text, "discovery_wip: 2", "discovery_wip: 21", 1),
 		"untrusted release check":  strings.Replace(text, "required_checks: []", "required_checks: [{name: smoke, app_id: 0}]", 1),
+		"unpaired advice field":    strings.Replace(text, "  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Blocked reason", 1),
+		"duplicate advice field":   strings.Replace(text, "  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Advice\n  next_action_field: Advice", 1),
+		"status advice field":      strings.Replace(text, "  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Status\n  next_action_field: Next action", 1),
+		"owner field collides":     strings.Replace(text, "  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: Blocked reason", 1),
 	}
 	for name, text := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -62,6 +70,18 @@ func TestStrictConfiguration(t *testing.T) {
 				t.Fatal("accepted invalid policy")
 			}
 		})
+	}
+}
+
+func TestConfiguredProjectAdviceFields(t *testing.T) {
+	text := strings.Replace(fixture(t), "  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Hold\n  next_action_field: Follow up", 1)
+	c, err := Decode(strings.NewReader(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, next := c.Lifecycle.EffectiveAdviceFields()
+	if blocked != "Hold" || next != "Follow up" {
+		t.Fatalf("configured advice fields = %q, %q", blocked, next)
 	}
 }
 

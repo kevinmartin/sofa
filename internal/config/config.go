@@ -41,18 +41,29 @@ type Config struct {
 // Zero and omitted PollMinutes, DiscoveryWIP, and DeliveryWIP both use the
 // defaults below; setting WIP to zero does not disable Discovery or delivery.
 type Lifecycle struct {
-	Statuses          map[string]string `yaml:"statuses" json:"statuses" validate:"len=10"`
-	PollMinutes       int               `yaml:"poll_minutes,omitempty" json:"poll_minutes,omitempty" validate:"oneof=0 10 60"`
-	DiscoveryWIP      int               `yaml:"discovery_wip,omitempty" json:"discovery_wip,omitempty" validate:"min=0,max=20"`
-	DeliveryWIP       int               `yaml:"delivery_wip,omitempty" json:"delivery_wip,omitempty" validate:"min=0,max=20"`
-	SpecAuthorID      string            `yaml:"spec_author_id,omitempty" json:"spec_author_id,omitempty"`
-	DependenciesField string            `yaml:"dependencies_field,omitempty" json:"dependencies_field,omitempty"`
-	PriorityField     string            `yaml:"priority_field,omitempty" json:"priority_field,omitempty"`
-	Release           Release           `yaml:"release,omitempty" json:"release,omitempty"`
+	Statuses           map[string]string `yaml:"statuses" json:"statuses" validate:"len=10"`
+	PollMinutes        int               `yaml:"poll_minutes,omitempty" json:"poll_minutes,omitempty" validate:"oneof=0 10 60"`
+	DiscoveryWIP       int               `yaml:"discovery_wip,omitempty" json:"discovery_wip,omitempty" validate:"min=0,max=20"`
+	DeliveryWIP        int               `yaml:"delivery_wip,omitempty" json:"delivery_wip,omitempty" validate:"min=0,max=20"`
+	SpecAuthorID       string            `yaml:"spec_author_id,omitempty" json:"spec_author_id,omitempty"`
+	DependenciesField  string            `yaml:"dependencies_field,omitempty" json:"dependencies_field,omitempty"`
+	PriorityField      string            `yaml:"priority_field,omitempty" json:"priority_field,omitempty"`
+	BlockedReasonField string            `yaml:"blocked_reason_field,omitempty" json:"blocked_reason_field,omitempty"`
+	NextActionField    string            `yaml:"next_action_field,omitempty" json:"next_action_field,omitempty"`
+	Release            Release           `yaml:"release,omitempty" json:"release,omitempty"`
 }
 
 type Release struct {
 	RequiredChecks []RequiredCheck `yaml:"required_checks,omitempty" json:"required_checks,omitempty" validate:"max=20,dive"`
+}
+
+// EffectiveAdviceFields preserves existing lifecycle configuration digests while
+// providing the board's default text fields. Explicit names must be paired.
+func (l Lifecycle) EffectiveAdviceFields() (string, string) {
+	if l.BlockedReasonField == "" && l.NextActionField == "" {
+		return "Blocked reason", "Next action"
+	}
+	return l.BlockedReasonField, l.NextActionField
 }
 
 type RequiredCheck struct {
@@ -242,13 +253,24 @@ func (c Config) Validate() error {
 		if l.SpecAuthorID != "" && (len(l.SpecAuthorID) > 128 || strings.ContainsAny(l.SpecAuthorID, " \t\r\n\x00")) {
 			return errors.New("invalid specification author identity")
 		}
-		for _, field := range []string{l.DependenciesField, l.PriorityField} {
+		for _, field := range []string{l.DependenciesField, l.PriorityField, l.BlockedReasonField, l.NextActionField} {
 			if len(field) > 100 || strings.ContainsAny(field, "\r\n\x00") || field != "" && strings.TrimSpace(field) != field {
-				return errors.New("invalid lifecycle owner field name")
+				return errors.New("invalid lifecycle Project field name")
 			}
 		}
-		if l.DependenciesField != "" && l.DependenciesField == l.PriorityField {
-			return errors.New("lifecycle owner fields must be distinct")
+		if (l.BlockedReasonField == "") != (l.NextActionField == "") {
+			return errors.New("lifecycle advice fields must be configured together")
+		}
+		blockedField, nextField := l.EffectiveAdviceFields()
+		seenFields := map[string]bool{"Status": true}
+		for _, field := range []string{l.DependenciesField, l.PriorityField, blockedField, nextField} {
+			if field == "" {
+				continue
+			}
+			if seenFields[field] {
+				return errors.New("lifecycle Project fields must be distinct")
+			}
+			seenFields[field] = true
 		}
 		seenChecks := map[RequiredCheck]bool{}
 		for _, check := range l.Release.RequiredChecks {

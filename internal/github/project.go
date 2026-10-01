@@ -17,6 +17,8 @@ import (
 
 type ProjectWorkItem struct {
 	Issue             admission.Snapshot
+	BlockedReason     string
+	NextAction        string
 	Dependencies      []int
 	DependenciesKnown bool
 	Priority          string
@@ -28,7 +30,7 @@ type ProjectWorkItem struct {
 // ProjectIssues is the metadata-only scan used by lifecycle polling. It does
 // not read optional owner-managed fields unless the richer API is requested.
 func (c *Client) ProjectIssues(ctx context.Context, policy config.Config) ([]admission.Snapshot, error) {
-	items, err := c.projectWorkItems(ctx, policy, "", "")
+	items, err := c.projectWorkItems(ctx, policy, "", "", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -43,19 +45,20 @@ func (c *Client) ProjectIssues(ctx context.Context, policy config.Config) ([]adm
 // A missing configured value remains unknown and must block related admission.
 func (c *Client) ProjectWorkItems(ctx context.Context, policy config.Config) ([]ProjectWorkItem, error) {
 	if policy.Lifecycle == nil {
-		return c.projectWorkItems(ctx, policy, "", "")
+		return c.projectWorkItems(ctx, policy, "", "", "", "")
 	}
-	return c.projectWorkItems(ctx, policy, policy.Lifecycle.DependenciesField, policy.Lifecycle.PriorityField)
+	blockedField, nextField := policy.Lifecycle.EffectiveAdviceFields()
+	return c.projectWorkItems(ctx, policy, policy.Lifecycle.DependenciesField, policy.Lifecycle.PriorityField, blockedField, nextField)
 }
 
 // projectWorkItems lists only issues from the configured repository in the
 // configured private Project. A partial page or ambiguous issue identity is
 // an error: callers must never use an incomplete poll to authorize work.
-func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dependencyField, priorityField string) ([]ProjectWorkItem, error) {
+func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dependencyField, priorityField, blockedField, nextField string) ([]ProjectWorkItem, error) {
 	if err := policy.Validate(); err != nil {
 		return nil, err
 	}
-	const query = `query($id:ID!,$after:String,$dependencyName:String!,$priorityName:String!,$hasDependencies:Boolean!,$hasPriority:Boolean!){node(id:$id){... on ProjectV2{id public items(first:100,after:$after){nodes{id isArchived content{... on Issue{id number title body state lastEditedAt repository{id nameWithOwner defaultBranchRef{target{oid}}}}} fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name optionId updatedAt}} dependencies:fieldValueByName(name:$dependencyName) @include(if:$hasDependencies){... on ProjectV2ItemFieldTextValue{text}} priority:fieldValueByName(name:$priorityName) @include(if:$hasPriority){... on ProjectV2ItemFieldSingleSelectValue{name optionId} ... on ProjectV2ItemFieldTextValue{text}}} pageInfo{hasNextPage endCursor}}}}}`
+	const query = `query($id:ID!,$after:String,$dependencyName:String!,$priorityName:String!,$blockedName:String!,$nextName:String!,$hasDependencies:Boolean!,$hasPriority:Boolean!,$hasAdvice:Boolean!){node(id:$id){... on ProjectV2{id public items(first:100,after:$after){nodes{id isArchived content{... on Issue{id number title body state lastEditedAt repository{id nameWithOwner defaultBranchRef{target{oid}}}}} fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name optionId updatedAt}} dependencies:fieldValueByName(name:$dependencyName) @include(if:$hasDependencies){... on ProjectV2ItemFieldTextValue{text}} priority:fieldValueByName(name:$priorityName) @include(if:$hasPriority){... on ProjectV2ItemFieldSingleSelectValue{name optionId} ... on ProjectV2ItemFieldTextValue{text}} blockedReason:fieldValueByName(name:$blockedName) @include(if:$hasAdvice){... on ProjectV2ItemFieldTextValue{text}} nextAction:fieldValueByName(name:$nextName) @include(if:$hasAdvice){... on ProjectV2ItemFieldTextValue{text}}} pageInfo{hasNextPage endCursor}}}}}`
 	items := make([]ProjectWorkItem, 0)
 	seen := make(map[string]bool)
 	seenItems := make(map[string]bool)
@@ -91,12 +94,14 @@ func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dep
 							Name string
 							Text string
 						}
+						BlockedReason *struct{ Text string }
+						NextAction    *struct{ Text string }
 					}
 					PageInfo pageInfo
 				}
 			}
 		}
-		if err := c.GraphQL(ctx, query, map[string]any{"id": policy.ProjectID, "after": cursor, "dependencyName": dependencyField, "priorityName": priorityField, "hasDependencies": dependencyField != "", "hasPriority": priorityField != ""}, &data); err != nil {
+		if err := c.GraphQL(ctx, query, map[string]any{"id": policy.ProjectID, "after": cursor, "dependencyName": dependencyField, "priorityName": priorityField, "blockedName": blockedField, "nextName": nextField, "hasDependencies": dependencyField != "", "hasPriority": priorityField != "", "hasAdvice": blockedField != "" && nextField != ""}, &data); err != nil {
 			return pageInfo{}, err
 		}
 		if data.Node == nil || data.Node.ID != policy.ProjectID || data.Node.Public == nil || *data.Node.Public {
@@ -138,6 +143,12 @@ func (c *Client) projectWorkItems(ctx context.Context, policy config.Config, dep
 			}
 			workItem := ProjectWorkItem{
 				Issue: snapshot,
+			}
+			if item.BlockedReason != nil {
+				workItem.BlockedReason = item.BlockedReason.Text
+			}
+			if item.NextAction != nil {
+				workItem.NextAction = item.NextAction.Text
 			}
 			if dependencyField == "" {
 				workItem.DependenciesKnown = true

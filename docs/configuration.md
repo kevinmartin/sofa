@@ -21,6 +21,13 @@ malformed or unavailable field values block dependent work. When configured,
 priority must be an exact owner-set `P0`, `P1`, `P2`, `P3`, or `P4` value, ordered
 highest to lowest before issue number. Blank or unknown values hold that item;
 the model never assigns priority.
+The controller uses separate Project text fields named `Blocked reason` and
+`Next action` by default. Create both fields on the private Project to enable
+durable board advice. Existing Projects without either field retain their
+current behavior; a partial pair is a setup error. To use other names, set
+`blocked_reason_field` and `next_action_field` together; both must exist as
+distinct text fields. Omitted names retain the default without changing the
+trusted configuration digest of existing lifecycle consumers.
 `spec_author_id` pins the trusted bot that publishes versioned specification
 comments; hosted Discovery blocks when its identity is unavailable. This is a
 public node ID, never a credential.
