@@ -86,6 +86,15 @@ func TestProjectAdviceFieldsRequireTwoPrivateTextFields(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "optional defaults with wrong field types",
+			fields: []any{
+				map[string]any{"id": "F_blocked", "name": "Blocked reason", "dataType": "SINGLE_SELECT"},
+				map[string]any{"id": "F_next", "name": "Next action", "dataType": "ITERATION"},
+			},
+			optional: true,
+			wantErr:  true,
+		},
+		{
 			name:   "public Project",
 			public: true,
 			fields: []any{
@@ -96,7 +105,14 @@ func TestProjectAdviceFieldsRequireTwoPrivateTextFields(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client, err := New("fixture-token", roundTripFunc(func(*http.Request) (*http.Response, error) {
+			client, err := New("fixture-token", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				var request struct{ Query string }
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(request.Query, "... on ProjectV2FieldCommon{id name dataType}") {
+					t.Fatal("Project advice query must select every field type")
+				}
 				return jsonResponse(200, map[string]any{"data": map[string]any{"node": map[string]any{
 					"id": "P_1", "public": tc.public,
 					"fields": map[string]any{"nodes": tc.fields, "pageInfo": map[string]any{"hasNextPage": false}},

@@ -28,7 +28,7 @@ func (c *Client) ProjectAdviceFields(ctx context.Context, projectID, blockedName
 	}
 	fields.BlockedName = blockedName
 	fields.NextName = nextName
-	const query = `query($id:ID!,$after:String){node(id:$id){... on ProjectV2{id public fields(first:100,after:$after){nodes{... on ProjectV2Field{id name dataType}} pageInfo{hasNextPage endCursor}}}}}`
+	const query = `query($id:ID!,$after:String){node(id:$id){... on ProjectV2{id public fields(first:100,after:$after){nodes{... on ProjectV2FieldCommon{id name dataType}} pageInfo{hasNextPage endCursor}}}}}`
 	err := paginate(ctx, func(cursor any) (pageInfo, error) {
 		var data struct {
 			Node *struct {
