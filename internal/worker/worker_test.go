@@ -72,7 +72,7 @@ func TestAgentChangeProducesBoundedCandidate(t *testing.T) {
 		if len(c.AllowedPaths) != 1 || c.AllowedPaths[0] != "fixture/main.go" || !strings.Contains(p, "Make Greet return hello") {
 			t.Fatal("worker did not constrain prompt and allowed files")
 		}
-		if c.Command != "/usr/local/bin/node" || strings.Join(c.Args, " ") != "/copilot-package/package/index.js --acp --stdio" {
+		if c.Command != "/usr/local/bin/node" || strings.Join(c.Args, " ") != "/copilot-package/package/index.js --acp --stdio --available-tools=view,edit,apply_patch,grep,glob --disable-builtin-mcps" {
 			t.Fatal("worker did not use the checked Copilot package entrypoint")
 		}
 		for _, v := range c.Env {
