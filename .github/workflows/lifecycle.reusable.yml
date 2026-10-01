@@ -98,9 +98,9 @@ jobs:
           jq -e --arg sha "$SOFA_TOOLKIT_SHA" \
             '.schema == "sofa-controller-v1" and .toolkit_sha == $sha and .goos == "linux" and .goarch == "amd64" and .cgo_enabled == false and (.binary_sha256 | test("^[0-9a-f]{64}$"))' \
             controller-manifest.json >/dev/null
-          unzip -p controller.zip sofa > sofa
-          test "$(sha256sum sofa | cut -d ' ' -f 1)" = "$(jq -r .binary_sha256 controller-manifest.json)"
-          chmod 700 sofa
+          unzip -p controller.zip sofa > sofa-controller
+          test "$(sha256sum sofa-controller | cut -d ' ' -f 1)" = "$(jq -r .binary_sha256 controller-manifest.json)"
+          chmod 700 sofa-controller
       - name: Reconcile due Project work without inference
         shell: bash
         env:
@@ -109,7 +109,7 @@ jobs:
           SOFA_WAKE_ID: ${{ inputs.wake_id }}
         run: |
           mkdir -p transport
-          ./sofa lifecycle reconcile --config consumer/.sofa.yml --wake-id "$SOFA_WAKE_ID" --out transport/lifecycle.json
+          ./sofa-controller lifecycle reconcile --config consumer/.sofa.yml --wake-id "$SOFA_WAKE_ID" --out transport/lifecycle.json
       - name: Summarize lifecycle holds and Backlog review suggestions
         shell: bash
         env:
