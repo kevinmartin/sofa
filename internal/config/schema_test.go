@@ -185,6 +185,11 @@ func TestConfigurationSchema(t *testing.T) {
 			text: replace("argv: [go, test, ./...]", "argv: [go, '"+strings.Repeat("x", 4097)+"']"),
 		},
 		{
+			name:        "UTF-8 argument byte limit",
+			text:        replace("argv: [go, test, ./...]", "argv: [go, '"+strings.Repeat("é", 2049)+"']"),
+			schemaValid: true,
+		},
+		{
 			name: "unbounded check timeout",
 			text: replace("timeout_seconds: 120", "timeout_seconds: 0"),
 		},

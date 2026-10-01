@@ -340,6 +340,45 @@ func TestFailedDiscoveryResetRequiresLaterOwnerTransition(t *testing.T) {
 	}
 }
 
+func TestChangedSourceResetsOwnerlessPendingDiscoveryAtWIPLimit(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	e := Engine{Store: &MemoryStore{}, Now: func() time.Time { return now }}
+	first := discoveryAdmission("I_1", 1)
+	if _, _, err := e.AdmitDiscovery(ctx, first, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	owner := Owner{RunID: "42", RunAttempt: 1}
+	fence, err := e.ClaimDiscovery(ctx, first.IssueID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RecoverDiscovery(ctx, first.IssueID, RunProof{Owner: owner, Status: "completed", Conclusion: "cancelled", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	changed := first
+	changed.StatusUpdatedAt = first.StatusUpdatedAt.Add(time.Hour)
+	changed.SourceDigest = strings.Repeat("b", 64)
+	task, created, err := e.AdmitDiscovery(ctx, changed, 1, 2)
+	if err != nil || !created || task.Phase != DiscoveryPending || task.ModelCalls != 1 || task.Generation <= fence.Generation || task.SourceDigest != changed.SourceDigest {
+		t.Fatalf("pending source reset lost ownership or budget: %+v, created=%v, err=%v", task, created, err)
+	}
+	s, err := e.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := s.State.DiscoveryResetHistory[first.IssueID]
+	if len(history) != 1 || history[0].Phase != DiscoveryPending || history[0].Owner != nil || history[0].SourceDigest != first.SourceDigest {
+		t.Fatalf("pending reset did not preserve source history: %+v", history)
+	}
+	if err := e.AssertDiscoveryOwner(ctx, fence); !errors.Is(err, ErrStale) {
+		t.Fatalf("old worker retained authority after reset: %v", err)
+	}
+	if _, created, err := e.AdmitDiscovery(ctx, changed, 1, 2); err != nil || created {
+		t.Fatalf("changed source replay was not idempotent: created=%v err=%v", created, err)
+	}
+}
+
 func TestFirstDiscoveryRejectsUnsupersededLegacyDraft(t *testing.T) {
 	ctx := context.Background()
 	e := engine()

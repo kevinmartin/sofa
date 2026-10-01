@@ -100,7 +100,7 @@ type Limits struct {
 
 type Check struct {
 	ID             string   `yaml:"id" json:"id"`
-	Argv           []string `yaml:"argv" json:"argv" validate:"min=1,max=32,dive,max=4096"`
+	Argv           []string `yaml:"argv" json:"argv" validate:"min=1,max=32"`
 	TimeoutSeconds int      `yaml:"timeout_seconds" json:"timeout_seconds"`
 }
 

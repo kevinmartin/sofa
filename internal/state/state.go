@@ -519,7 +519,7 @@ func (s State) Validate() error {
 			return fmt.Errorf("%w: orphaned Discovery reset history", ErrInvalid)
 		}
 		for i, task := range history {
-			if id != task.IssueID || !task.valid() || task.Phase != DiscoveryReview && task.Phase != DiscoveryBlocked || task.Repository != current.Repository || task.Issue != current.Issue || task.ProjectID != current.ProjectID || task.ProjectItemID != current.ProjectItemID || task.Revision > current.Revision || !current.StatusUpdatedAt.After(task.StatusUpdatedAt) || current.ModelCalls < task.ModelCalls {
+			if id != task.IssueID || !task.valid() || task.Phase != DiscoveryReview && task.Phase != DiscoveryBlocked && (task.Phase != DiscoveryPending || task.Owner != nil || task.Publication != nil) || task.Repository != current.Repository || task.Issue != current.Issue || task.ProjectID != current.ProjectID || task.ProjectItemID != current.ProjectItemID || task.Revision > current.Revision || !current.StatusUpdatedAt.After(task.StatusUpdatedAt) || current.ModelCalls < task.ModelCalls {
 				return fmt.Errorf("%w: Discovery reset history", ErrInvalid)
 			}
 			if i > 0 && (!task.StatusUpdatedAt.After(history[i-1].StatusUpdatedAt) || task.ModelCalls < history[i-1].ModelCalls || task.Revision < history[i-1].Revision) {

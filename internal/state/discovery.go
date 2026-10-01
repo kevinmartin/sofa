@@ -75,7 +75,7 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 				task = previous
 				return true, nil
 			}
-			if previous.Phase != DiscoveryReview && previous.Phase != DiscoveryBlocked || !task.StatusUpdatedAt.After(previous.StatusUpdatedAt) || task.MaxModelCalls < previous.MaxModelCalls || previous.Publication != nil {
+			if previous.Phase != DiscoveryReview && previous.Phase != DiscoveryBlocked && (previous.Phase != DiscoveryPending || previous.Owner != nil) || !task.StatusUpdatedAt.After(previous.StatusUpdatedAt) || task.MaxModelCalls < previous.MaxModelCalls || previous.Publication != nil {
 				return false, ErrAdmissionChanged
 			}
 			record, hasRecord := s.Specs[task.IssueID]
@@ -96,7 +96,7 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 			}
 			active := 0
 			for _, other := range s.Discoveries {
-				if other.Repository == task.Repository && (other.Phase == DiscoveryPending || other.Phase == DiscoveryRunning) {
+				if other.IssueID != task.IssueID && other.Repository == task.Repository && (other.Phase == DiscoveryPending || other.Phase == DiscoveryRunning) {
 					active++
 				}
 			}

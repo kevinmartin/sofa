@@ -562,6 +562,10 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 		if !admitted.StatusUpdatedAt.After(task.StatusUpdatedAt) || task.Publication != nil || cap < task.MaxModelCalls || cap <= task.ModelCalls {
 			continue
 		}
+		if task.Phase == state.DiscoveryPending && task.Owner == nil {
+			pending = append(pending, issue.Number)
+			continue
+		}
 		record, hasRecord := ledger.Specs[issue.IssueID]
 		approvedCurrent := task.Phase == state.DiscoveryReview && hasRecord && record.ApprovedDigest == task.SpecDigest && record.Revision == task.Revision
 		if approvedCurrent && task.SourceDigest != admitted.SourceDigest && admitted.StatusUpdatedAt.After(record.BacklogUpdatedAt) ||

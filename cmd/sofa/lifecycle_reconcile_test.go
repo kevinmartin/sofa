@@ -582,6 +582,14 @@ func TestReadyForDiscoveryRequiresLaterOwnerMoveForReviewOrBlockedReset(t *testi
 	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 0 {
 		t.Fatalf("blocked work re-dispatched without later owner move: %v", got)
 	}
+	task.Phase = state.DiscoveryPending
+	task.Owner = nil
+	task.Publication = nil
+	ledger.Discoveries[issue.IssueID] = task
+	items[0].Issue.StatusUpdatedAt = when.Add(time.Minute)
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != issue.Number {
+		t.Fatalf("changed ownerless pending task was not queued at WIP limit: %v", got)
+	}
 }
 
 func TestReadyForDeliveryPreservesPendingWIPBeforeNewPriority(t *testing.T) {
