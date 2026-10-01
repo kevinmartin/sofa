@@ -159,6 +159,10 @@ func Evaluate(attempt state.Attempt, pull github.PullSnapshot, defaultHead strin
 	return d, nil
 }
 
+// evaluateChecks selects the latest valid check for each required name/App pair,
+// using the larger source ID to break timestamp ties. Failures take precedence
+// over missing or pending results; an empty requirement list returns "done".
+// Only invalid or excessive requirements return an error.
 func evaluateChecks(required []RequiredCheck, checks []github.CommitCheck) (string, error) {
 	if len(required) > 20 {
 		return "", errors.New("too many required release checks")

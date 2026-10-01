@@ -41,6 +41,7 @@ type discoveryStatus struct {
 	RecoveryAttempt int    `json:"recovery_run_attempt,omitempty"`
 }
 
+// newDiscoveryCommand wires the separate admission, generation, publication, and failure stages.
 func newDiscoveryCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "discovery",
@@ -96,6 +97,9 @@ func newDiscoveryCommand() *cobra.Command {
 	return root
 }
 
+// readDiscoveryManifest accepts manifests up to 192 KiB and validates transport identities
+// and bounds. A nonnil c also binds the manifest to trusted configuration; neither
+// mode verifies live Project authority. Read and validation errors are returned.
 func readDiscoveryManifest(path string, c *config.Config) (discoveryManifest, error) {
 	var m discoveryManifest
 	if err := readJSON(path, 192<<10, &m); err != nil {
@@ -113,6 +117,8 @@ func readDiscoveryManifest(path string, c *config.Config) (discoveryManifest, er
 	return m, nil
 }
 
+// discoveryClients builds separate Project and ledger clients from their credential
+// environment variables, returning an error if either client cannot be configured.
 func discoveryClients(c config.Config) (*github.Client, github.StateStore, error) {
 	projects, err := clientFromEnv("SOFA_PROJECTS_TOKEN")
 	if err != nil {
@@ -128,6 +134,8 @@ func discoveryClients(c config.Config) (*github.Client, github.StateStore, error
 	}, nil
 }
 
+// currentCheckoutSHA reads HEAD from an absolute checkout path. It returns an error
+// for relative paths, failed Git commands, or an unexpected response length.
 func currentCheckoutSHA(ctx context.Context, root string) (string, error) {
 	if !filepath.IsAbs(root) {
 		return "", errors.New("discovery workspace must be absolute")
@@ -162,6 +170,11 @@ func relatedDiscoveryIssues(source admission.Snapshot, items []github.ProjectWor
 	return related, nil
 }
 
+// runDiscoveryAdmit verifies the live idea and checkout, gathers bounded facts,
+// and reserves Discovery work. It writes status.json and, when dispatched, a fenced
+// manifest.json to outDir. Active or terminal work and unavailable recovery artifacts
+// produce nondispatch statuses. Other errors propagate; claims may already be durable
+// when writing the output fails.
 func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, workspace, outDir string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -317,6 +330,9 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	return writeJSON(statusPath, status)
 }
 
+// runDiscoveryGenerate runs the admitted model turn and writes a versioned JSON
+// specification candidate to out. It rejects privileged credentials and recovery
+// manifests; manifest, generation, and output errors are returned.
 func runDiscoveryGenerate(ctx context.Context, manifestPath, out string) error {
 	if err := forbidPrivilegedEnv("SOFA_MODEL_TOKEN", false); err != nil {
 		return err
@@ -350,6 +366,9 @@ func runDiscoveryGenerate(ctx context.Context, manifestPath, out string) error {
 	})
 }
 
+// runDiscoveryPublish revalidates the manifest and live Discovery source, then
+// posts or recovers the specification comment and records it in the ledger.
+// Validation, GitHub, and state errors propagate, including failures after a POST.
 func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidatePath string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -420,6 +439,9 @@ func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidat
 	return err
 }
 
+// runDiscoveryFail validates the manifest against configuration and records kind
+// under its ownership fence. Configuration, manifest, credential, and ledger errors
+// are returned, including refusal to discard a pending publication intent.
 func runDiscoveryFail(ctx context.Context, configPath, manifestPath, kind string) error {
 	c, err := readConfig(configPath)
 	if err != nil {

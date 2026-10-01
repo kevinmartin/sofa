@@ -21,7 +21,9 @@ type DiscoveryAdmission struct {
 
 // AdmitDiscovery reserves WIP atomically. The caller must have checked the
 // private, owner-writable Project's current Discovery status; issue creation
-// alone never reaches this method. Existing tasks are replayed, not reset.
+// alone never reaches this method. Identical admissions replay existing tasks;
+// a later owner transition may reset or revise work while retaining call usage.
+// created reports a new or reset task, not a budget increase on an existing task.
 func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission, maxActive int, maxModelCalls int64) (task DiscoveryTask, created bool, err error) {
 	if maxActive < 1 || maxActive > 20 || maxModelCalls < 1 || maxModelCalls > 20 {
 		return task, false, fmt.Errorf("%w: discovery limits", ErrInvalid)
@@ -202,6 +204,7 @@ type DiscoveryFence struct {
 
 // ClaimDiscovery reserves one prompt before invoking the model. Lost work
 // still consumes its reservation; a retry cannot inflate the call budget.
+// Recovery with a publication intent claims ownership without charging a prompt.
 func (e Engine) ClaimDiscovery(ctx context.Context, issueID string, owner Owner) (fence DiscoveryFence, err error) {
 	if !reference(issueID) || !validOwner(owner) {
 		return fence, fmt.Errorf("%w: discovery owner", ErrInvalid)
@@ -235,6 +238,8 @@ func (e Engine) ClaimDiscovery(ctx context.Context, issueID string, owner Owner)
 	return
 }
 
+// ownedDiscovery returns the running task matching fence, or ErrNotFound if
+// absent and ErrStale if its phase, owner, or generation differs.
 func ownedDiscovery(s *State, fence DiscoveryFence) (DiscoveryTask, error) {
 	d, ok := s.Discoveries[fence.IssueID]
 	if !ok {
@@ -246,6 +251,8 @@ func ownedDiscovery(s *State, fence DiscoveryFence) (DiscoveryTask, error) {
 	return d, nil
 }
 
+// AssertDiscoveryOwner checks the stored task's running ownership fence without
+// changing it. Store errors, ErrNotFound, and ErrStale are returned to the caller.
 func (e Engine) AssertDiscoveryOwner(ctx context.Context, fence DiscoveryFence) error {
 	snapshot, err := e.Store.Load(ctx)
 	if err != nil {
@@ -313,6 +320,10 @@ func (e Engine) MarkDiscoveryPostAttempt(ctx context.Context, fence DiscoveryFen
 	return first, err
 }
 
+// CompleteDiscovery records the published comment, enters the ledger's Spec Review
+// phase, and releases the worker and intent. The caller must verify the remote comment.
+// Invalid metadata yields ErrInvalid; a missing or different publication digest
+// yields ErrConflict. Ownership and store errors are propagated.
 func (e Engine) CompleteDiscovery(ctx context.Context, fence DiscoveryFence, specDigest string, commentID int64, authorID string, commentCreatedAt, commentUpdatedAt time.Time) error {
 	if !digestPattern.MatchString(specDigest) || commentID < 1 || !reference(authorID) || commentCreatedAt.IsZero() || commentUpdatedAt.Before(commentCreatedAt) {
 		return fmt.Errorf("%w: specification comment identity", ErrInvalid)
@@ -339,6 +350,10 @@ func (e Engine) CompleteDiscovery(ctx context.Context, fence DiscoveryFence, spe
 	})
 }
 
+// FailDiscovery blocks owned work and releases its worker while preserving call
+// usage. kind must be authority, validation, authentication, quota, or infrastructure.
+// An existing publication intent must be reconciled first and causes an error;
+// invalid kinds, ownership failures, and store errors are returned.
 func (e Engine) FailDiscovery(ctx context.Context, fence DiscoveryFence, kind string) error {
 	if kind != "authority" && kind != "validation" && kind != "authentication" && kind != "quota" && kind != "infrastructure" {
 		return fmt.Errorf("%w: discovery failure", ErrInvalid)
@@ -360,6 +375,10 @@ func (e Engine) FailDiscovery(ctx context.Context, fence DiscoveryFence, kind st
 	})
 }
 
+// RecoverDiscovery fences a proven stopped worker and retains consumed calls and
+// publication intent. Work becomes pending unless its budget is exhausted without
+// an intent, in which case it is blocked. Unproven termination returns ErrActive;
+// missing tasks, changed ownership, and store failures are returned as errors.
 func (e Engine) RecoverDiscovery(ctx context.Context, issueID string, proof RunProof) error {
 	if !proof.terminal(e.now()) {
 		return ErrActive
@@ -386,6 +405,9 @@ func (e Engine) RecoverDiscovery(ctx context.Context, issueID string, proof RunP
 	})
 }
 
+// CancelDiscovery cancels unfinished work and invalidates its ownership fence.
+// Repeated cancellation is a no-op. Completed work or a publication intent causes
+// an error; a missing task yields ErrNotFound, and store errors are propagated.
 func (e Engine) CancelDiscovery(ctx context.Context, issueID string) error {
 	return e.update(ctx, func(s *State) (bool, error) {
 		d, ok := s.Discoveries[issueID]

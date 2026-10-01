@@ -218,6 +218,7 @@ func Scan(input ScanInput) ([]Effect, error) {
 	return effects, nil
 }
 
+// String summarizes the issue number, effect kind, and proposed stage transition.
 func (e Effect) String() string {
 	return fmt.Sprintf("issue #%d: %s %s→%s", e.IssueNumber, e.Kind, e.From, e.To)
 }

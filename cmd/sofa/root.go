@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// newRootCommand assembles the CLI with bounded parser errors and explicit help routing.
 func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "sofa",

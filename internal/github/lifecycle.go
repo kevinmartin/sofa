@@ -36,6 +36,9 @@ type PullSnapshot struct {
 	UpdatedAt      time.Time
 }
 
+// Pull reads a PR whose head and base both belong to repository (owner/name).
+// It rejects forks, mismatched identities, and incomplete revision or merge data,
+// and propagates request errors.
 func (c *Client) Pull(ctx context.Context, repository string, number int64) (PullSnapshot, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || number < 1 {
 		return PullSnapshot{}, errors.New("invalid pull request identity")
@@ -105,6 +108,10 @@ type PullReview struct {
 	Comments    []PullReviewComment
 }
 
+// PullReviews returns submitted reviews with author IDs, excluding pending
+// reviews and deleted authors. Bodies are retained even when oversized so newer
+// reviews can supersede older ones; inline comments require PullReviewComments.
+// Invalid identities, request failures, or 20 full 100-item pages return an error.
 func (c *Client) PullReviews(ctx context.Context, repository string, number int64) ([]PullReview, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || number < 1 {
 		return nil, errors.New("invalid pull request identity")
@@ -159,6 +166,10 @@ type CommitCheck struct {
 	SourceID  int64
 }
 
+// CommitChecks reads check runs for an exact 40-character lowercase commit SHA.
+// State is the conclusion for completed runs and the status otherwise; UpdatedAt
+// uses completion time when present, falling back to start time. Invalid data,
+// request failures, or a history that fills 20 pages return an error.
 func (c *Client) CommitChecks(ctx context.Context, repository, sha string) ([]CommitCheck, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || !lifecycleSHAPattern.MatchString(sha) {
 		return nil, errors.New("invalid commit check identity")
@@ -216,6 +227,9 @@ func (c *Client) CommitChecks(ctx context.Context, repository, sha string) ([]Co
 	return nil, errors.New("commit check history exceeds bound")
 }
 
+// IsAncestor reports whether ancestor equals or precedes descendant in repository.
+// Diverged or reversed ancestry returns false without error. Invalid repository
+// or SHA inputs, request failures, and unknown comparison states return errors.
 func (c *Client) IsAncestor(ctx context.Context, repository, ancestor, descendant string) (bool, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || !lifecycleSHAPattern.MatchString(ancestor) || !lifecycleSHAPattern.MatchString(descendant) {
 		return false, errors.New("invalid commit ancestry identity")

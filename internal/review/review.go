@@ -107,6 +107,9 @@ func EvaluateReserved(attempt state.Attempt, pull github.PullSnapshot, submitted
 	return decision, nil
 }
 
+// evaluateFeedback binds an owner's change request to the open published PR and
+// hashes its bounded feedback. The caller must supply a nonnil publication and
+// check repair eligibility; identity and feedback validation errors are returned.
 func evaluateFeedback(attempt state.Attempt, pull github.PullSnapshot, submitted github.PullReview, ownerID string) (Decision, error) {
 	p := attempt.Publication
 	repo := attempt.Admission.Repository

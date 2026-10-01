@@ -66,6 +66,13 @@ type Result struct {
 	NoChange                 bool             `json:"no_change"`
 }
 
+// Execute edits the disposable checkout using an applicable gofmt recipe or one
+// ACP turn, then returns a sealed, validated candidate. ReviewFeedback is bounded
+// task data for the ACP prompt; it does not expand the configured file scope.
+// No edits yields NoChange with no bundle. Validation failures wrap ErrValidation;
+// runner errors are propagated with available telemetry, and a missing model token
+// outside recipe execution returns agent.ErrAuthentication. Errors do not roll back
+// checkout edits; callers must separately run checks and authorize publication.
 func Execute(ctx context.Context, in Input) (Result, error) {
 	var out Result
 	if err := in.Config.Validate(); err != nil {

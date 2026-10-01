@@ -23,6 +23,7 @@ type issueCommentJSON struct {
 	} `json:"user"`
 }
 
+// commentPath returns the issue-comment endpoint or an error for an invalid target.
 func commentPath(repository string, issue int64) (string, error) {
 	if !repositoryPattern.MatchString(repository) || issue < 1 {
 		return "", errors.New("invalid issue comment target")
@@ -30,6 +31,8 @@ func commentPath(repository string, issue int64) (string, error) {
 	return "/repos/" + repository + "/issues/" + strconv.FormatInt(issue, 10) + "/comments", nil
 }
 
+// commentSnapshot binds a response to the expected issue and returns its comment
+// metadata and body. Invalid identities, timestamps, or bodies over 64 KiB fail.
 func commentSnapshot(repository string, issue int64, raw issueCommentJSON) (discovery.SpecComment, error) {
 	expected := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d", repository, issue)
 	if raw.ID < 1 || !strings.EqualFold(raw.IssueURL, expected) || raw.User.NodeID == "" || raw.CreatedAt.IsZero() || raw.UpdatedAt.Before(raw.CreatedAt) || len(raw.Body) > 64<<10 {

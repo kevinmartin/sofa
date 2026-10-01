@@ -37,31 +37,42 @@ type SpecComment struct {
 	UpdatedAt time.Time
 }
 
+// valid checks comment identity and timestamp ordering, without parsing its body.
 func (c SpecComment) valid() bool {
 	return c.ID > 0 && c.AuthorID != "" && len(c.AuthorID) <= 512 && !strings.ContainsAny(c.AuthorID, "\x00\r\n\t ") && !c.CreatedAt.IsZero() && !c.UpdatedAt.Before(c.CreatedAt)
 }
 
+// valid checks required policy fields and distinct adjacent approval statuses.
 func (p Policy) valid() bool {
 	return p.Repository != "" && p.RepositoryID != "" && p.ProjectID != "" && p.DiscoveryStatus != "" && p.SpecReviewStatus != "" && p.BacklogStatus != "" && p.ReadyStatus != "" && p.DiscoveryStatus != p.SpecReviewStatus && p.SpecReviewStatus != p.BacklogStatus && p.BacklogStatus != p.ReadyStatus
 }
 
+// trusted reports whether an open issue belongs to the configured private
+// Project and has an observed revision of the requested display status.
 func (p Policy) trusted(s admission.Snapshot, status string) bool {
 	return p.valid() && s.Complete && s.Open && strings.EqualFold(s.Repository, p.Repository) && s.RepositoryID == p.RepositoryID && s.ProjectID == p.ProjectID && s.ProjectPrivate && s.IssueID != "" && s.Number > 0 && s.ProjectItemID != "" && s.CurrentStatus == status && s.StatusOptionID != "" && !s.StatusUpdatedAt.IsZero()
 }
 
+// matches binds a specification record to the snapshot's issue and Project item.
 func (p Policy) matches(s admission.Snapshot, r state.SpecRecord) bool {
 	return strings.EqualFold(r.Repository, p.Repository) && r.IssueID == s.IssueID && r.Issue == int64(s.Number) && r.ProjectID == s.ProjectID && r.ProjectItemID == s.ProjectItemID
 }
 
+// sameComment compares a valid comment's identity and timestamps, not its body.
 func sameComment(c SpecComment, id int64, author string, createdAt, updatedAt time.Time) bool {
 	return c.valid() && c.ID == id && c.AuthorID == author && c.CreatedAt.Equal(createdAt) && c.UpdatedAt.Equal(updatedAt)
 }
 
+// sourceDigest hashes the canonical issue title and idea body, returning any
+// canonicalization error.
 func sourceDigest(s admission.Snapshot) (string, error) {
 	_, digest, err := admission.CanonicalSpec(s.Title, s.Body)
 	return digest, err
 }
 
+// commentDigest returns the canonical title/specification bytes and their digest.
+// Invalid comment metadata or specification syntax yields ErrRevision; canonical
+// encoding errors are returned directly.
 func commentDigest(s admission.Snapshot, c SpecComment) ([]byte, string, error) {
 	if !c.valid() {
 		return nil, "", ErrRevision
@@ -114,6 +125,8 @@ func ReviewCommentReadyForMove(p Policy, s admission.Snapshot, c SpecComment, ta
 
 // CaptureReview records the versioned bot-authored comment already visible in
 // Spec Review. A copied marker from another commenter has no authority.
+// It returns the proposed record, canonical snapshot, and whether the record
+// changed; an unchanged replay returns a nil snapshot. It does not persist them.
 func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.DiscoveryTask, prior *state.SpecRecord) (state.SpecRecord, []byte, bool, error) {
 	if !p.trusted(s, p.SpecReviewStatus) || task.Phase != state.DiscoveryReview || task.IssueID != s.IssueID || task.Issue != int64(s.Number) || !strings.EqualFold(task.Repository, p.Repository) || task.ProjectID != p.ProjectID || task.ProjectItemID != s.ProjectItemID || !sameComment(c, task.CommentID, task.CommentAuthorID, task.CommentCreatedAt, task.CommentUpdatedAt) {
 		return state.SpecRecord{}, nil, false, ErrAuthority
@@ -163,6 +176,8 @@ func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.Dis
 	return record, canonical, prior == nil || *prior != record, nil
 }
 
+// currentRevision verifies the recorded source and comment revision.
+// Invalid source or specification content is treated as a revision mismatch.
 func currentRevision(s admission.Snapshot, c SpecComment, r state.SpecRecord) bool {
 	source, err := sourceDigest(s)
 	if err != nil || source != r.SourceDigest || (!s.IssueLastEditedAt.IsZero() && s.IssueLastEditedAt.After(r.CommentCreatedAt)) || !sameComment(c, r.CommentID, r.CommentAuthorID, r.CommentCreatedAt, r.CommentUpdatedAt) {

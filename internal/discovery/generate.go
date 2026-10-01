@@ -18,12 +18,14 @@ type Runner interface {
 
 type RunnerFunc func(context.Context, agent.Config, string) (agent.Result, error)
 
+// Run delegates to f and returns its result and error unchanged.
 func (f RunnerFunc) Run(ctx context.Context, config agent.Config, prompt string) (agent.Result, error) {
 	return f(ctx, config, prompt)
 }
 
 type NativeRunner struct{}
 
+// Run invokes the ACP adapter with the supplied workspace and capability limits.
 func (NativeRunner) Run(ctx context.Context, config agent.Config, prompt string) (agent.Result, error) {
 	return agent.Run(ctx, config, prompt)
 }

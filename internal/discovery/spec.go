@@ -49,10 +49,13 @@ type Specification struct {
 	DeliverySlices string
 }
 
+// fields returns section contents in the required rendering and parsing order.
 func (s Specification) fields() []string {
 	return []string{s.Problem, s.Evidence, s.Goals, s.NonGoals, s.Constraints, s.Dependencies, s.Acceptance, s.Validation, s.Risks, s.Questions, s.DeliverySlices}
 }
 
+// Validate rejects unsupported versions, empty or ambiguous sections, and invalid
+// UTF-8. Trimmed sections may contain at most 16 KiB each and 60 KiB in total.
 func (s Specification) Validate() error {
 	if s.Version != SpecificationVersion {
 		return errors.New("unsupported specification version")
@@ -91,6 +94,9 @@ func WithPublicationKey(body, key string) (string, error) {
 	return strings.Replace(body, marker, marker+"\n"+publicationKeyPrefix+key+" -->", 1), nil
 }
 
+// PublicationKey extracts the first publication marker's 64-character lowercase
+// hex key, or returns an empty string if absent or malformed. It does not validate
+// the surrounding specification.
 func PublicationKey(body string) string {
 	start := strings.Index(body, publicationKeyPrefix)
 	if start < 0 {

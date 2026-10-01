@@ -7,6 +7,8 @@ import (
 	"github.com/kevinmartin/sofa/internal/discovery"
 )
 
+// discoveryPolicy extracts approval identities and status names from trusted
+// configuration. It errors when lifecycle policy is absent; c must already be validated.
 func discoveryPolicy(c config.Config) (discovery.Policy, error) {
 	if c.Lifecycle == nil {
 		return discovery.Policy{}, errors.New("lifecycle configuration is unavailable")

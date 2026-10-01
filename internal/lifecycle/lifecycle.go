@@ -33,6 +33,8 @@ var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // A display name must identify exactly one stage.
 type Statuses map[Stage]string
 
+// Validate requires every canonical stage to have a distinct, nonempty display
+// name of at most 100 bytes, without surrounding whitespace or NUL/CR/LF.
 func (m Statuses) Validate() error {
 	if len(m) != len(Stages) {
 		return errors.New("lifecycle requires every canonical Project status")
@@ -48,6 +50,8 @@ func (m Statuses) Validate() error {
 	return nil
 }
 
+// StageFor finds an exact display-name match, returning false when absent.
+// Call Validate first to exclude ambiguous mappings.
 func (m Statuses) StageFor(name string) (Stage, bool) {
 	for stage, display := range m {
 		if name == display {
@@ -66,6 +70,10 @@ type PollPlan struct {
 	Missed int64
 }
 
+// PlanPoll schedules one scan when last is zero, an interval has elapsed, or a
+// new nonempty wake ID arrives. Missed counts whole intervals since last; Next
+// is in UTC. It rejects a zero now, backward time, intervals outside one minute
+// to 24 hours, and wake IDs over 512 bytes or containing NUL/CR/LF.
 func PlanPoll(now, last time.Time, interval time.Duration, lastWakeID, wakeID string) (PollPlan, error) {
 	if now.IsZero() || interval < time.Minute || interval > 24*time.Hour || len(wakeID) > 512 || strings.ContainsAny(wakeID, "\x00\r\n") {
 		return PollPlan{}, errors.New("invalid poll schedule")
@@ -97,8 +105,8 @@ func PlanPoll(now, last time.Time, interval time.Duration, lastWakeID, wakeID st
 	return plan, nil
 }
 
-// SelectOpenSlots limits new work deterministically. Candidates are already
-// authorized by the caller and sorted by stable issue number; this function
+// SelectOpenSlots limits new work deterministically. Candidates must already be
+// authorized by the caller; the function sorts a copy by issue number. It
 // never treats mere presence in a Project as admission.
 func SelectOpenSlots(candidates []int, active, limit int) ([]int, error) {
 	if active < 0 || limit < 1 || limit > 100 || len(candidates) > 10000 {

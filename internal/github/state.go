@@ -287,8 +287,8 @@ func (c *Client) RetainedCandidateAvailable(ctx context.Context, repo string, ch
 	return c.runArtifactAvailable(ctx, repo, checkpoint.Producer, checkpoint.ArtifactID)
 }
 
-// DiscoveryCandidateAvailable verifies that the exact producer's candidate is
-// still downloadable before a recovered publication is dispatched.
+// DiscoveryCandidateAvailable checks for an unexpired candidate artifact from
+// the exact producer before a recovered publication is dispatched.
 func (c *Client) DiscoveryCandidateAvailable(ctx context.Context, repo string, producer state.Owner) (bool, error) {
 	if !repositoryPattern.MatchString(repo) || producer.RunAttempt < 1 {
 		return false, errors.New("invalid Discovery candidate identity")
@@ -296,6 +296,9 @@ func (c *Client) DiscoveryCandidateAvailable(ctx context.Context, repo string, p
 	return c.runArtifactAvailable(ctx, repo, producer, fmt.Sprintf("sofa-discovery-candidate-%s-%d", producer.RunID, producer.RunAttempt))
 }
 
+// runArtifactAvailable reports whether the named producer artifact exists and is
+// unexpired. Absence or expiry returns false without error; request failures and
+// ambiguous or mismatched listings return errors, so callers retain recovery state.
 func (c *Client) runArtifactAvailable(ctx context.Context, repo string, producer state.Owner, name string) (bool, error) {
 	id, err := strconv.ParseInt(producer.RunID, 10, 64)
 	if err != nil || id <= 0 {

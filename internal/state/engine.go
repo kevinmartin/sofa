@@ -227,6 +227,8 @@ func (e Engine) Claim(ctx context.Context, id string, owner Owner) (fence Fence,
 	return
 }
 
+// owned returns the attempt matching the ownership fence. Missing attempts yield
+// ErrNotFound; superseded attempts or changed ownership yield ErrStale.
 func owned(s *State, f Fence) (Attempt, error) {
 	a, ok := s.Attempts[f.AttemptID]
 	if !ok {

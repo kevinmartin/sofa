@@ -54,10 +54,12 @@ func (e Engine) ObserveBoard(ctx context.Context, observed BoardProjection) erro
 	})
 }
 
+// sameBoardRevision compares status and timestamp, excluding identity and pending intent.
 func sameBoardRevision(a, b BoardProjection) bool {
 	return a.Stage == b.Stage && a.OptionID == b.OptionID && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
+// ownerTransition recognizes Discovery resets and the Spec Review/Backlog/Ready handoffs.
 func ownerTransition(from, to string) bool {
 	switch {
 	case from != "discovery" && to == "discovery":
@@ -99,6 +101,8 @@ func (e Engine) BeginBoardMove(ctx context.Context, expected BoardProjection, ta
 	})
 }
 
+// factoryTransition recognizes system-owned progress, re-review, and repair moves.
+// It checks stage pairs only; callers must independently verify authority and evidence.
 func factoryTransition(from, to string) bool {
 	if to == "spec_review" {
 		return from == "discovery" || from == "backlog"

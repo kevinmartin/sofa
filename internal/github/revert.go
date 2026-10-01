@@ -94,6 +94,8 @@ func (c *Client) VerifiedRevert(ctx context.Context, repository, mergedSHA, reve
 	return true, nil
 }
 
+// fileTree indexes non-directory tree entries by path for exact revert comparison.
+// It propagates tree retrieval errors and rejects incomplete or duplicate entries.
 func (c *Client) fileTree(ctx context.Context, repository, sha string) (map[string]treeEntry, error) {
 	entries, err := c.tree(ctx, repository, sha)
 	if err != nil {

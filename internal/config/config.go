@@ -62,6 +62,7 @@ type RequiredCheck struct {
 
 var lifecycleStages = []string{"inbox", "discovery", "spec_review", "backlog", "ready", "building", "verification", "review", "release", "done"}
 
+// EffectivePollMinutes returns the poll interval in minutes, using 10 for zero.
 func (l Lifecycle) EffectivePollMinutes() int {
 	if l.PollMinutes == 0 {
 		return 10
@@ -69,6 +70,7 @@ func (l Lifecycle) EffectivePollMinutes() int {
 	return l.PollMinutes
 }
 
+// EffectiveDiscoveryWIP returns the active Discovery limit, using 2 for zero.
 func (l Lifecycle) EffectiveDiscoveryWIP() int {
 	if l.DiscoveryWIP == 0 {
 		return 2
@@ -76,6 +78,7 @@ func (l Lifecycle) EffectiveDiscoveryWIP() int {
 	return l.DiscoveryWIP
 }
 
+// EffectiveDeliveryWIP returns the active delivery limit, using 1 for zero.
 func (l Lifecycle) EffectiveDeliveryWIP() int {
 	if l.DeliveryWIP == 0 {
 		return 1
@@ -158,6 +161,9 @@ func Decode(r io.Reader) (Config, error) {
 	return c, nil
 }
 
+// Validate checks configuration bounds, identities, paths, and cross-field policy.
+// It returns the first violation without including rejected values and does not
+// verify credentials or remote GitHub state.
 func (c Config) Validate() error {
 	// Static field bounds are declarative; policy involving multiple fields or
 	// runtime identities remains explicit below. Never include rejected values.

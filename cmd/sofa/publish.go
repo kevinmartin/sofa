@@ -43,6 +43,10 @@ func newPublishCommand() *cobra.Command {
 	return cmd
 }
 
+// runPublish revalidates authority and check evidence, persists publication intent,
+// and creates or recovers the draft PR. It acknowledges the PR in the ledger and
+// writes publication.json in the current directory. Errors propagate from validation,
+// GitHub, state, and file operations; an error may occur after remote publication.
 func runPublish(ctx context.Context, opts publishOptions) error {
 	c, err := readConfig(opts.configPath)
 	if err != nil {

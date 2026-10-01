@@ -175,18 +175,28 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 	}, nil
 }
 
+// repairPullMatches checks the published PR identity and its exact previous head.
 func repairPullMatches(pr PullSnapshot, repository string, p state.Publication, baseBranch string) bool {
 	return repairPullIdentity(pr, repository, p, baseBranch) && pr.HeadSHA == p.HeadSHA
 }
 
+// repairPullIdentity checks that the original PR is still open on the expected
+// repository and branches, without comparing commit revisions.
 func repairPullIdentity(pr PullSnapshot, repository string, p state.Publication, baseBranch string) bool {
 	return pr.Number == p.PRNumber && pr.URL == p.PRURL && pr.HeadRef == p.Branch && pr.BaseRef == baseBranch && pr.State == "open" && !pr.Merged && strings.EqualFold(pr.HeadRepository, repository) && strings.EqualFold(pr.BaseRepository, repository)
 }
 
+// prepareRepairCommit prepares a child commit against the bundle's GitHub repository.
+// On success, the caller must invoke the returned cleanup after using the push callback.
 func (c *Client) prepareRepairCommit(ctx context.Context, b integrity.Bundle, branch, marker string) (string, func() error, func(), error) {
 	return c.prepareRepairCommitAtURL(ctx, b, branch, marker, "https://github.com/"+b.Repository+".git")
 }
 
+// prepareRepairCommitAtURL fetches branch and builds a deterministic child of
+// b.BaseSHA in a temporary repository. It returns the commit SHA, a callback that
+// pushes only while the remote head equals b.BaseSHA, and a required cleanup.
+// Preparation does not push; errors clean up temporary files. Git preparation and
+// each push use separate two-minute timeouts, subject to earlier context cancellation.
 func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundle, branch, marker, repositoryURL string) (string, func() error, func(), error) {
 	if !c.Authenticated() || !safeBranch(branch) || !strings.HasPrefix(branch, "sofa/") || !lifecycleSHAPattern.MatchString(b.BaseSHA) {
 		return "", nil, nil, errors.New("invalid repair Git identity")
@@ -287,6 +297,9 @@ func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundl
 	return commit, push, cleanup, nil
 }
 
+// runRepairGit runs Git with the supplied directory, environment, and input.
+// It returns trimmed stdout, rejects output over 1024 bytes, and replaces process
+// errors with an operation-only error. args must contain a Git operation.
 func runRepairGit(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

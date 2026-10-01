@@ -35,6 +35,7 @@ type lifecycleReconcileResult struct {
 	Moved       []int `json:"moved_issue_numbers"`
 }
 
+// newLifecycleCommand exposes reconciliation with a stable optional event wake ID.
 func newLifecycleCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "lifecycle",
@@ -54,6 +55,7 @@ func newLifecycleCommand() *cobra.Command {
 	return cmd
 }
 
+// lifecycleStatuses copies the configured display-name mapping; Lifecycle must be nonnil.
 func lifecycleStatuses(c config.Config) lifecycle.Statuses {
 	result := make(lifecycle.Statuses, len(c.Lifecycle.Statuses))
 	for name, display := range c.Lifecycle.Statuses {
@@ -62,6 +64,11 @@ func lifecycleStatuses(c config.Config) lifecycle.Statuses {
 	return result
 }
 
+// runLifecycleReconcile claims a due poll, records approvals and release evidence,
+// and applies justified Project moves before writing the dispatch plan to opts.outPath.
+// Item-specific failures become held issue numbers; configuration, poll, scan, shared
+// read, and output failures return errors. A failed scan does not undo its poll claim
+// or earlier writes.
 func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) error {
 	c, err := readConfig(opts.configPath)
 	if err != nil {
@@ -334,6 +341,9 @@ func doneCorrectionPatrol(items []github.ProjectWorkItem, statuses lifecycle.Sta
 	return selected
 }
 
+// recoverDiscoveryReview verifies the durable published comment and resumes the
+// Discovery-to-Spec Review move. Comment reads, revision checks, ledger writes, and
+// Project move errors are returned.
 func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, policy discovery.Policy, statuses lifecycle.Statuses, issue admission.Snapshot, task state.DiscoveryTask) error {
 	comment, err := client.IssueComment(ctx, c.Repository, int64(issue.Number), task.CommentID)
 	if err != nil {
@@ -355,6 +365,9 @@ func recoverDiscoveryReview(ctx context.Context, client *github.Client, engine s
 	return applyBoardMove(ctx, client, engine, c, statuses, effect, issue)
 }
 
+// attemptForItem returns the current approved attempt bound to the Project item.
+// No attempt returns false without error; ambiguous, mismatched, or unmatched
+// unsuperseded attempts return an error.
 func attemptForItem(ledger state.State, repository string, issue admission.Snapshot) (state.Attempt, bool, error) {
 	selected, found, err := state.CurrentAttemptForIssue(ledger, issue.IssueID)
 	if err != nil {
@@ -375,6 +388,7 @@ func attemptForItem(ledger state.State, repository string, issue admission.Snaps
 	return state.Attempt{}, false, nil
 }
 
+// boardFromSnapshot captures the issue's exact status revision under the supplied policy and stage.
 func boardFromSnapshot(c config.Config, stage lifecycle.Stage, item admission.Snapshot) state.BoardProjection {
 	return state.BoardProjection{
 		Repository:    c.Repository,
@@ -387,6 +401,7 @@ func boardFromSnapshot(c config.Config, stage lifecycle.Stage, item admission.Sn
 	}
 }
 
+// uniqueInts sorts and deduplicates values in place, returning a slice sharing its storage.
 func uniqueInts(values []int) []int {
 	sort.Ints(values)
 	result := values[:0]
@@ -398,6 +413,9 @@ func uniqueInts(values []int) []int {
 	return result
 }
 
+// observeRelease reads merge ancestry and configured checks, records the release
+// outcome, and updates observed after recording succeeds. Blocked or failed release
+// outcomes are evidence, not errors; retrieval, evaluation, and ledger errors propagate.
 func observeRelease(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, attempt state.Attempt, pull github.PullSnapshot, defaultHead string, observed *lifecycle.DeliveryEvidence) error {
 	onDefault, err := client.IsAncestor(ctx, c.Repository, pull.MergeCommitSHA, defaultHead)
 	if err != nil {
@@ -470,6 +488,8 @@ func observeCompletionCorrections(ctx context.Context, reader completionReader, 
 	return nil
 }
 
+// revertMessageReferences finds a case-insensitive standard revert-message prefix
+// for mergedSHA. The text is only a search hint, not proof of an inverse commit.
 func revertMessageReferences(message, mergedSHA string) bool {
 	return strings.Contains(strings.ToLower(message), "this reverts commit "+strings.ToLower(mergedSHA))
 }
@@ -593,6 +613,10 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 	return result
 }
 
+// readyForDelivery selects authorized Ready issues with known metadata and Done
+// dependencies. Pending recoveries precede new work; each group is ordered by
+// priority then issue number within available WIP. Invalid or ambiguous candidates
+// are skipped. Lifecycle must be configured; this function does not reserve slots.
 func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger state.State, authority map[string]bool, statuses lifecycle.Statuses, held []int) []int {
 	type candidate struct {
 		number int
@@ -679,6 +703,9 @@ func readyForDelivery(c config.Config, items []github.ProjectWorkItem, ledger st
 	return selected
 }
 
+// applyBoardMove persists or verifies the exact move intent, updates the Project,
+// and records a fresh observation. Read, write, and revision errors are returned;
+// the pending intent remains recoverable if the remote write or acknowledgement fails.
 func applyBoardMove(ctx context.Context, client *github.Client, engine state.Engine, c config.Config, statuses lifecycle.Statuses, effect lifecycle.Effect, item admission.Snapshot) error {
 	_, options, err := client.ProjectStatusField(ctx, c.ProjectID)
 	if err != nil {

@@ -37,6 +37,11 @@ func newAdmitCommand() *cobra.Command {
 	return cmd
 }
 
+// runAdmit validates live approval, persists admission, and claims or recovers
+// bounded delivery work. It writes status.json and, for dispatched work, manifest.json
+// in opts.outDir. Active, completed, or blocked work produces a nondispatch status;
+// run-proof read failures also leave owned work active. Other validation, state,
+// GitHub, and file errors propagate and may follow a durable reservation.
 func runAdmit(ctx context.Context, opts admitOptions) error {
 	c, err := readConfig(opts.configPath)
 	if err != nil {
