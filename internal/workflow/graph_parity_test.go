@@ -107,7 +107,7 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 // The hosted fake has no publication credential. In production, only the
 // publisher may mint a repository-scoped App token or use the legacy token.
 func appPublisherBoundary(job contractJob) bool {
-	var mint, publish int
+	var mint, appPublish, legacyPublish int
 	for _, step := range job.Steps {
 		switch step.Name {
 		case "Mint repository-scoped publisher App token":
@@ -115,14 +115,19 @@ func appPublisherBoundary(job contractJob) bool {
 			if !strings.HasPrefix(step.Uses, "actions/create-github-app-token@") || step.If != "steps.publisher-auth.outputs.mode == 'app'" || step.With["owner"] != "" || step.With["repositories"] != "" || step.With["permission-contents"] != "write" || step.With["permission-pull-requests"] != "write" {
 				return false
 			}
-		case "Revalidate live authority and publish one draft PR":
-			publish++
-			if !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "steps.publisher-app.outputs.token") || !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "secrets.SOFA_PUBLISH_TOKEN") {
+		case "Revalidate live authority and publish one draft PR with App":
+			appPublish++
+			if step.If != "steps.publisher-auth.outputs.mode == 'app'" || step.Env["SOFA_PUBLISH_TOKEN"] != "${{ steps.publisher-app.outputs.token }}" {
+				return false
+			}
+		case "Revalidate live authority and publish one draft PR with legacy token":
+			legacyPublish++
+			if step.If != "steps.publisher-auth.outputs.mode == 'legacy'" || step.Env["SOFA_PUBLISH_TOKEN"] != "${{ secrets.SOFA_PUBLISH_TOKEN }}" {
 				return false
 			}
 		}
 	}
-	return mint == 1 && publish == 1
+	return mint == 1 && appPublish == 1 && legacyPublish == 1
 }
 
 func jobNames(w contractWorkflow) []string {

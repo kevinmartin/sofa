@@ -382,11 +382,23 @@ jobs:
           permission-pull-requests: write
       # The command re-reads the Project, approved spec, owner review, PR, and
       # ledger fence before a leased push; no model or candidate code runs here.
-      - name: Publish verified repair on the same PR
+      - name: Publish verified repair on the same PR with App
+        if: steps.publisher-auth.outputs.mode == 'app'
         shell: bash
         env:
           SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
-          SOFA_PUBLISH_TOKEN: ${{ steps.publisher-app.outputs.token || secrets.SOFA_PUBLISH_TOKEN }}
+          SOFA_PUBLISH_TOKEN: ${{ steps.publisher-app.outputs.token }}
+          SOFA_BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ./sofa review-repair publish --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --bundle candidate/bundle.json \
+            --evidence evidence/checks.json --base-branch "$SOFA_BASE_BRANCH"
+      - name: Publish verified repair on the same PR with legacy token
+        if: steps.publisher-auth.outputs.mode == 'legacy'
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_PUBLISH_TOKEN: ${{ secrets.SOFA_PUBLISH_TOKEN }}
           SOFA_BASE_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           ./sofa review-repair publish --config consumer/.sofa.yml \

@@ -122,19 +122,29 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 			}
 		}
 	}
-	var appMint, publication int
+	var appMint, appPublication, legacyPublication int
 	for _, step := range w.Jobs["publish"].Steps {
 		if strings.HasPrefix(step.Uses, "actions/create-github-app-token@") {
 			appMint++
 		}
 		if strings.Contains(step.Run, "./sofa review-repair publish") {
-			publication++
-			if !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "steps.publisher-app.outputs.token") || !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "secrets.SOFA_PUBLISH_TOKEN") {
-				t.Error("repair publisher lost App and legacy token selection")
+			switch step.If {
+			case "steps.publisher-auth.outputs.mode == 'app'":
+				appPublication++
+				if step.Env["SOFA_PUBLISH_TOKEN"] != "${{ steps.publisher-app.outputs.token }}" {
+					t.Error("App repair publication may fall back to another identity")
+				}
+			case "steps.publisher-auth.outputs.mode == 'legacy'":
+				legacyPublication++
+				if step.Env["SOFA_PUBLISH_TOKEN"] != "${{ secrets.SOFA_PUBLISH_TOKEN }}" {
+					t.Error("legacy repair publication uses unexpected identity")
+				}
+			default:
+				t.Error("repair publication lacks exclusive credential mode")
 			}
 		}
 	}
-	if appMint != 1 || publication != 1 {
+	if appMint != 1 || appPublication != 1 || legacyPublication != 1 {
 		t.Fatal("repair publisher App or command missing")
 	}
 	for _, edge := range []struct{ producer, consumer, artifact string }{
