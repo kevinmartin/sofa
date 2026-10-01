@@ -153,6 +153,9 @@ type RevertScanCursor struct {
 	NextPage      int    `json:"next_page,omitempty"`
 }
 
+// valid checks commit SHA formats and requires either an idle completed head or
+// an active comparison starting at that head (the merge on the first scan), with
+// a distinct target and a positive, one-based next page. It does not check ancestry.
 func (c RevertScanCursor) valid() bool {
 	if !shaPattern.MatchString(c.MergeSHA) || c.CompletedHead != "" && !shaPattern.MatchString(c.CompletedHead) {
 		return false

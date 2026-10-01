@@ -91,6 +91,10 @@ type projectAdviceSnapshot struct {
 	NextAction    string
 }
 
+// projectAdvice reads the issue's active item in the private Project, including
+// its status revision and advice selected by field name. Missing text is empty.
+// Missing, ambiguous, or invalid item metadata returns an error, as do GraphQL
+// and pagination failures; no partial snapshot is returned.
 func (c *Client) projectAdvice(ctx context.Context, issueID, projectID string, fields ProjectAdviceFields) (projectAdviceSnapshot, error) {
 	var found projectAdviceSnapshot
 	const query = `query($id:ID!,$after:String,$blockedName:String!,$nextName:String!){node(id:$id){... on Issue{projectItems(first:100,after:$after){nodes{id isArchived project{id public} fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{optionId updatedAt}} blockedReason:fieldValueByName(name:$blockedName){... on ProjectV2ItemFieldTextValue{text}} nextAction:fieldValueByName(name:$nextName){... on ProjectV2ItemFieldTextValue{text}}} pageInfo{hasNextPage endCursor}}}}}`
@@ -154,6 +158,9 @@ func (c *Client) projectAdvice(ctx context.Context, issueID, projectID string, f
 // A fresh exact status check precedes each changed field. GitHub has no
 // conditional field mutation, so a manual move in the final read/write gap
 // remains a Project API race, as with Status updates.
+// Empty text clears a field; unchanged text skips its write. Invalid input,
+// stale status, or API failures return an error, possibly after the first field
+// has been updated.
 func (c *Client) SetProjectAdviceIfCurrent(ctx context.Context, issue admission.Snapshot, fields ProjectAdviceFields, blockedReason, nextAction string) error {
 	if !issue.Complete || !issue.ProjectPrivate || !validAdviceIdentity(issue.IssueID) || !validAdviceIdentity(issue.ProjectID) || !validAdviceIdentity(issue.ProjectItemID) || !validAdviceIdentity(issue.StatusOptionID) || issue.StatusUpdatedAt.IsZero() || !validAdviceIdentity(fields.BlockedReasonID) || !validAdviceIdentity(fields.NextActionID) || fields.BlockedReasonID == fields.NextActionID || !validAdviceName(fields.BlockedName) || !validAdviceName(fields.NextName) || fields.BlockedName == fields.NextName || !validAdviceText(blockedReason) || !validAdviceText(nextAction) {
 		return errors.New("invalid Project advice identity or text")
@@ -206,14 +213,19 @@ func (c *Client) SetProjectAdviceIfCurrent(ctx context.Context, issue admission.
 	return nil
 }
 
+// validAdviceIdentity accepts 1–128 bytes excluding spaces, tabs, CR, LF, and NUL.
 func validAdviceIdentity(value string) bool {
 	return value != "" && len(value) <= 128 && !strings.ContainsAny(value, " \t\r\n\x00")
 }
 
+// validAdviceName accepts 1–100 bytes with no surrounding whitespace or CR, LF,
+// or NUL characters; internal spaces are allowed.
 func validAdviceName(value string) bool {
 	return value != "" && len(value) <= 100 && strings.TrimSpace(value) == value && !strings.ContainsAny(value, "\r\n\x00")
 }
 
+// validAdviceText accepts up to 256 bytes without CR, LF, or NUL, including empty
+// text used to clear an advice field.
 func validAdviceText(value string) bool {
 	return len(value) <= 256 && !strings.ContainsAny(value, "\r\n\x00")
 }

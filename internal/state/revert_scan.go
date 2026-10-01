@@ -32,6 +32,8 @@ func (e Engine) AdvanceRevertScan(ctx context.Context, attemptID string, expecte
 	})
 }
 
+// recordedDoneForMerge reports whether the ledger contains a release completion
+// for the exact attempt and merge SHA, regardless of later observations.
 func recordedDoneForMerge(s State, attemptID, mergeSHA string) bool {
 	for _, observation := range s.Observations {
 		if observation.AttemptID == attemptID && observation.Stage == "release" && observation.Outcome == "done" && observation.Revision == mergeSHA {
@@ -41,6 +43,7 @@ func recordedDoneForMerge(s State, attemptID, mergeSHA string) bool {
 	return false
 }
 
+// sameRevertCursor compares cursor values, treating two absent cursors as equal.
 func sameRevertCursor(a, b *RevertScanCursor) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -48,6 +51,10 @@ func sameRevertCursor(a, b *RevertScanCursor) bool {
 	return *a == *b
 }
 
+// validRevertScanStep checks initialization, starting a new comparison, advancing
+// one page, or completing the active comparison without changing the merge SHA.
+// A nil previous cursor starts at the merge; callers must validate cursor fields
+// separately.
 func validRevertScanStep(previous *RevertScanCursor, next RevertScanCursor) bool {
 	if previous == nil {
 		return next.CompletedHead == next.MergeSHA && next.ActiveHead == "" || next.CompletedHead == "" && next.ActiveBase == next.MergeSHA && next.NextPage == 1

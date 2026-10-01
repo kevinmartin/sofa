@@ -421,6 +421,8 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	return writeJSON(opts.outPath, result)
 }
 
+// hasRecordedCompletion reports whether a current-schema release completion was
+// recorded for this attempt and merge SHA, even if later release checks failed.
 func hasRecordedCompletion(ledger state.State, attemptID, mergeSHA string) bool {
 	for _, observation := range ledger.Observations {
 		if observation.Version == state.Version && observation.AttemptID == attemptID && observation.Stage == "release" && observation.Outcome == "done" && observation.Revision == mergeSHA {
@@ -460,6 +462,8 @@ func backlogSourceChanges(c config.Config, items []github.ProjectWorkItem, specs
 	return changed
 }
 
+// revisedBacklogAdvice returns fixed guidance to obtain a new specification and
+// approval for the issue after its proposal or source changes.
 func revisedBacklogAdvice(number int) lifecycleAdvisory {
 	return lifecycleAdvisory{
 		IssueNumber:   number,
@@ -762,6 +766,9 @@ type completionReader interface {
 // observeCompletionCorrections links later reports and strict inverse commits
 // to one already completed PR. Commit messages only narrow the bounded search;
 // they are never sufficient evidence for a revert event.
+// Each call scans at most one comparison page and persists its progress for retry.
+// Unverified revert candidates are skipped; other reader and ledger errors
+// propagate, and earlier observations or cursor writes may already be persisted.
 func observeCompletionCorrections(ctx context.Context, reader completionReader, engine state.Engine, attempt state.Attempt, pull github.PullSnapshot, defaultHead string) error {
 	if attempt.Publication == nil || pull.Number != attempt.Publication.PRNumber || pull.URL != attempt.Publication.PRURL || pull.HeadSHA != attempt.Publication.HeadSHA || pull.HeadRef != attempt.Publication.Branch || !strings.EqualFold(pull.HeadRepository, attempt.Admission.Repository) || !strings.EqualFold(pull.BaseRepository, attempt.Admission.Repository) || !pull.Merged || pull.State != "closed" || pull.MergedAt.IsZero() || pull.MergeCommitSHA == "" {
 		return errors.New("completed PR identity changed")

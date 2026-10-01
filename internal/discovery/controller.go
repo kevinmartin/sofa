@@ -33,6 +33,11 @@ func VerifyApprovedRevision(ctx context.Context, reader CommentReader, store sta
 	return approvedRevision(ctx, reader, store, policy, source, false)
 }
 
+// approvedRevision returns source with its body replaced by the verified approved
+// comment. requireReady also requires a Ready transition after Backlog approval.
+// Missing or mismatched approval authority yields ErrAuthority; changed source,
+// comment, or approval timing yields ErrRevision. Nil dependencies return an
+// availability error; ledger and comment read errors propagate unchanged.
 func approvedRevision(ctx context.Context, reader CommentReader, store state.Store, policy Policy, source admission.Snapshot, requireReady bool) (admission.Snapshot, error) {
 	if reader == nil || store == nil {
 		return admission.Snapshot{}, errors.New("approved specification source unavailable")
