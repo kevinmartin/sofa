@@ -71,7 +71,8 @@ jobs:
           repo_id=$(gh api "repos/$SOFA_REPOSITORY" --jq .id)
           artifact_name="sofa-controller-$SOFA_TOOLKIT_SHA"
           artifact=$(gh api "repos/$SOFA_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" |
-            jq -c --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | sort_by(.id) | last // empty')
+            jq -c --arg name "$artifact_name" --arg branch "$SOFA_DEFAULT_BRANCH" --argjson repo_id "$repo_id" \
+              '[.artifacts[] | select(.name == $name and .expired == false and .workflow_run.head_branch == $branch and .workflow_run.repository_id == $repo_id and .workflow_run.head_repository_id == $repo_id)] | sort_by(.id) | last // empty')
           test -n "$artifact" || { echo 'No unexpired pinned controller artifact; dispatch the secretless controller build' >&2; exit 1; }
           artifact_id=$(jq -r .id <<< "$artifact")
           archive_digest=$(jq -r .digest <<< "$artifact")
