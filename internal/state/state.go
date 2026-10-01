@@ -122,23 +122,45 @@ func (r RepairIntent) valid(p *Publication) bool {
 }
 
 type Attempt struct {
-	ID                     string        `json:"id"`
-	Admission              Admission     `json:"admission"`
-	SpecRevision           int64         `json:"spec_revision,omitempty"`
-	SupersededAt           time.Time     `json:"superseded_at,omitempty"`
-	SupersededSourceDigest string        `json:"superseded_source_digest,omitempty"`
-	Phase                  Phase         `json:"phase"`
-	Generation             int64         `json:"generation"`
-	Owner                  *Owner        `json:"owner,omitempty"`
-	Dispatch               string        `json:"dispatch"`
-	Limits                 Limits        `json:"limits"`
-	Counts                 Counters      `json:"counts"`
-	Checkpoint             *Checkpoint   `json:"checkpoint,omitempty"`
-	Publication            *Publication  `json:"publication,omitempty"`
-	Repair                 *RepairIntent `json:"repair,omitempty"`
-	Failure                string        `json:"failure,omitempty"`
-	CreatedAt              time.Time     `json:"created_at"`
-	UpdatedAt              time.Time     `json:"updated_at"`
+	ID                     string            `json:"id"`
+	Admission              Admission         `json:"admission"`
+	SpecRevision           int64             `json:"spec_revision,omitempty"`
+	SupersededAt           time.Time         `json:"superseded_at,omitempty"`
+	SupersededSourceDigest string            `json:"superseded_source_digest,omitempty"`
+	Phase                  Phase             `json:"phase"`
+	Generation             int64             `json:"generation"`
+	Owner                  *Owner            `json:"owner,omitempty"`
+	Dispatch               string            `json:"dispatch"`
+	Limits                 Limits            `json:"limits"`
+	Counts                 Counters          `json:"counts"`
+	Checkpoint             *Checkpoint       `json:"checkpoint,omitempty"`
+	Publication            *Publication      `json:"publication,omitempty"`
+	Repair                 *RepairIntent     `json:"repair,omitempty"`
+	RevertScan             *RevertScanCursor `json:"revert_scan,omitempty"`
+	Failure                string            `json:"failure,omitempty"`
+	CreatedAt              time.Time         `json:"created_at"`
+	UpdatedAt              time.Time         `json:"updated_at"`
+}
+
+// RevertScanCursor resumes a bounded default-branch comparison for one
+// completed attempt. ActiveBase and ActiveHead are immutable while paging;
+// CompletedHead advances only after every page of that range was processed.
+type RevertScanCursor struct {
+	MergeSHA      string `json:"merge_sha"`
+	CompletedHead string `json:"completed_head,omitempty"`
+	ActiveBase    string `json:"active_base,omitempty"`
+	ActiveHead    string `json:"active_head,omitempty"`
+	NextPage      int    `json:"next_page,omitempty"`
+}
+
+func (c RevertScanCursor) valid() bool {
+	if !shaPattern.MatchString(c.MergeSHA) || c.CompletedHead != "" && !shaPattern.MatchString(c.CompletedHead) {
+		return false
+	}
+	if c.ActiveBase == "" && c.ActiveHead == "" && c.NextPage == 0 {
+		return c.CompletedHead != ""
+	}
+	return shaPattern.MatchString(c.ActiveBase) && shaPattern.MatchString(c.ActiveHead) && c.ActiveBase != c.ActiveHead && c.NextPage > 0 && (c.CompletedHead == "" && c.ActiveBase == c.MergeSHA || c.CompletedHead != "" && c.ActiveBase == c.CompletedHead)
 }
 
 // Observation is compact machine-observed metadata, not model-generated prose.
@@ -459,6 +481,9 @@ func (s State) Validate() error {
 		if a.Repair != nil && !a.Repair.valid(a.Publication) {
 			return fmt.Errorf("%w: repair intent", ErrInvalid)
 		}
+		if a.RevertScan != nil && (!a.RevertScan.valid() || a.Publication == nil) {
+			return fmt.Errorf("%w: revert scan cursor", ErrInvalid)
+		}
 	}
 	for id, record := range s.Specs {
 		if id != record.IssueID || !record.valid() || record.Revision != int64(len(s.SpecHistory[id])) {
@@ -559,6 +584,11 @@ func (s State) Validate() error {
 			return fmt.Errorf("%w: observation attempt", ErrInvalid)
 		}
 		seen[o.ID] = true
+	}
+	for id, attempt := range s.Attempts {
+		if attempt.RevertScan != nil && !recordedDoneForMerge(s, id, attempt.RevertScan.MergeSHA) {
+			return fmt.Errorf("%w: revert scan completion", ErrInvalid)
+		}
 	}
 	return nil
 }

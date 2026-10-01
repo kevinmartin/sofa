@@ -257,7 +257,11 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		// Avoid a fresh remote ledger read for every historical Project item;
 		// candidates with a record still get full live revision validation.
 		if _, recorded := ledger.State.Specs[issue.IssueID]; !recorded {
-			result.Held = append(result.Held, issue.Number)
+			// A delivery-only Done item has no Discovery specification to
+			// validate. Let the advice projection clear any stale hold text.
+			if stage != lifecycle.Done {
+				result.Held = append(result.Held, issue.Number)
+			}
 			continue
 		}
 		if stage == lifecycle.Ready {
@@ -299,9 +303,11 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			observed.ReleaseRequired = true
 			if err := observeRelease(ctx, projects, engine, c, attempt, pull, issue.BaseSHA, &observed); err != nil {
 				result.Held = append(result.Held, issue.Number)
-			} else if stage == lifecycle.Done && observed.ReleasePassed {
-				// Completion corrections are observations only. A failed comment or
-				// commit read holds this item without rewriting its prior Done event.
+			}
+			if stage == lifecycle.Done && hasRecordedCompletion(ledger.State, attempt.ID, pull.MergeCommitSHA) {
+				// Later feedback and reversions remain observable after a release
+				// check regresses. The prior exact-merge Done record, rather than
+				// the current check result, authorizes this correction patrol.
 				if err := observeCompletionCorrections(ctx, projects, engine, attempt, pull, issue.BaseSHA); err != nil {
 					result.Held = append(result.Held, issue.Number)
 				}
@@ -383,6 +389,15 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	result.Held = uniqueInts(result.Held)
 	completeLifecycleAdvisories(&result, items, statuses)
 	return writeJSON(opts.outPath, result)
+}
+
+func hasRecordedCompletion(ledger state.State, attemptID, mergeSHA string) bool {
+	for _, observation := range ledger.Observations {
+		if observation.Version == state.Version && observation.AttemptID == attemptID && observation.Stage == "release" && observation.Outcome == "done" && observation.Revision == mergeSHA {
+			return true
+		}
+	}
+	return false
 }
 
 // backlogSourceChanges compares trusted, recorded proposal sources with the
@@ -709,7 +724,8 @@ func observeRelease(ctx context.Context, client *github.Client, engine state.Eng
 
 type completionReader interface {
 	IssueComments(context.Context, string, int64) ([]discovery.SpecComment, error)
-	RecentDefaultCommits(context.Context, string, string) ([]github.DefaultCommit, error)
+	DefaultCommitComparisonPage(context.Context, string, string, string, int) (github.DefaultCommitPage, error)
+	IsAncestor(context.Context, string, string, string) (bool, error)
 	release.RevertVerifier
 }
 
@@ -732,11 +748,62 @@ func observeCompletionCorrections(ctx context.Context, reader completionReader, 
 			return err
 		}
 	}
-	commits, err := reader.RecentDefaultCommits(ctx, attempt.Admission.Repository, defaultHead)
+	snapshot, err := engine.Store.Load(ctx)
 	if err != nil {
 		return err
 	}
-	for _, commit := range commits {
+	current, ok := snapshot.State.Attempts[attempt.ID]
+	if !ok || current.Admission != attempt.Admission || current.Publication == nil || *current.Publication != *attempt.Publication {
+		return errors.New("completed attempt identity changed")
+	}
+	cursor := current.RevertScan
+	if cursor != nil && cursor.MergeSHA != pull.MergeCommitSHA {
+		return errors.New("completed merge identity changed")
+	}
+	if cursor == nil {
+		next := state.RevertScanCursor{MergeSHA: pull.MergeCommitSHA}
+		if pull.MergeCommitSHA == defaultHead {
+			next.CompletedHead = defaultHead
+		} else {
+			next.ActiveBase, next.ActiveHead, next.NextPage = pull.MergeCommitSHA, defaultHead, 1
+		}
+		if err := engine.AdvanceRevertScan(ctx, attempt.ID, nil, next); err != nil {
+			return err
+		}
+		cursor = &next
+	}
+	if cursor.ActiveHead == "" && cursor.CompletedHead != defaultHead {
+		onDefault, err := reader.IsAncestor(ctx, attempt.Admission.Repository, cursor.CompletedHead, defaultHead)
+		if err != nil {
+			return err
+		}
+		if !onDefault {
+			return errors.New("completed default head no longer reaches scan cursor")
+		}
+		next := *cursor
+		next.ActiveBase, next.ActiveHead, next.NextPage = cursor.CompletedHead, defaultHead, 1
+		if err := engine.AdvanceRevertScan(ctx, attempt.ID, cursor, next); err != nil {
+			return err
+		}
+		cursor = &next
+	}
+	if cursor.ActiveHead == "" {
+		return nil
+	}
+	if cursor.ActiveHead != defaultHead {
+		onDefault, err := reader.IsAncestor(ctx, attempt.Admission.Repository, cursor.ActiveHead, defaultHead)
+		if err != nil {
+			return err
+		}
+		if !onDefault {
+			return errors.New("active default head no longer reaches observed head")
+		}
+	}
+	page, err := reader.DefaultCommitComparisonPage(ctx, attempt.Admission.Repository, cursor.ActiveBase, cursor.ActiveHead, cursor.NextPage)
+	if err != nil {
+		return err
+	}
+	for _, commit := range page.Commits {
 		if !revertMessageReferences(commit.Message, pull.MergeCommitSHA) {
 			continue
 		}
@@ -747,7 +814,14 @@ func observeCompletionCorrections(ctx context.Context, reader completionReader, 
 			return err
 		}
 	}
-	return nil
+	next := *cursor
+	if page.Final {
+		next.CompletedHead = cursor.ActiveHead
+		next.ActiveBase, next.ActiveHead, next.NextPage = "", "", 0
+	} else {
+		next.NextPage++
+	}
+	return engine.AdvanceRevertScan(ctx, attempt.ID, cursor, next)
 }
 
 // revertMessageReferences finds a case-insensitive standard revert-message prefix

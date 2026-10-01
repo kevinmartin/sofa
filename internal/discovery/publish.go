@@ -81,6 +81,44 @@ func matchingPublishedComment(comments []SpecComment, body, key, author string) 
 	return match, found, nil
 }
 
+// MatchPublicationIntent checks an uncertain POST using only its durable
+// intent. The publication key hashes the original candidate bytes, so removing
+// the inserted key line and recomputing it proves the exact body without
+// downloading an artifact or treating the comment's key as authority. The
+// digest additionally binds the current issue title and published spec.
+func MatchPublicationIntent(comments []SpecComment, task state.DiscoveryTask, title, author string) (SpecComment, bool, error) {
+	if task.Publication == nil || !task.Publication.PostAttempted || !keyPattern.MatchString(task.Publication.Key) || !keyPattern.MatchString(task.Publication.Digest) || author == "" {
+		return SpecComment{}, false, ErrAuthority
+	}
+	key := task.Publication.Key
+	keyedMarker := marker + "\n" + publicationKeyPrefix + key + " -->"
+	var match SpecComment
+	found := false
+	for _, comment := range comments {
+		if PublicationKey(comment.Body) != key || comment.AuthorID != author {
+			continue
+		}
+		if !comment.valid() || !strings.HasPrefix(comment.Body, keyedMarker) {
+			return SpecComment{}, false, errors.New("discovery bot comment with this key changed")
+		}
+		candidate := strings.Replace(comment.Body, keyedMarker, marker, 1)
+		body, err := WithPublicationKey(candidate, key)
+		if err != nil || body != comment.Body || publicationKey(task, candidate) != key {
+			return SpecComment{}, false, errors.New("discovery bot comment with this key changed")
+		}
+		_, digest, err := admission.CanonicalSpec(title, comment.Body)
+		if err != nil || digest != task.Publication.Digest {
+			return SpecComment{}, false, errors.New("discovery bot comment digest changed")
+		}
+		if found {
+			return SpecComment{}, false, errors.New("multiple Discovery bot comments share one publication key")
+		}
+		match = comment
+		found = true
+	}
+	return match, found, nil
+}
+
 // PublishSpecification persists the spec snapshot and comment intent before
 // posting. A transport-ambiguous POST cannot be repeated: recovery either
 // finds the exact bot comment or blocks for investigation.

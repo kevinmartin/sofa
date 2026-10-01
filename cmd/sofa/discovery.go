@@ -290,6 +290,18 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	// worker artifact. Its producer remains durable even if a recovering admit
 	// run was interrupted before writing a replacement manifest.
 	if task.Publication != nil {
+		if task.Publication.PostAttempted {
+			// IssueComments fails closed if the bounded history is incomplete.
+			// The state credential has issue-read scope in the admission job.
+			comments, err := store.Client.IssueComments(ctx, c.Repository, int64(issue))
+			if err != nil {
+				return err
+			}
+			_, found, err := discovery.MatchPublicationIntent(comments, task, current.Title, c.Lifecycle.SpecAuthorID)
+			if err != nil || !found {
+				return writeJSON(statusPath, discoveryStatus{Reason: "publication-outcome-uncertain"})
+			}
+		}
 		producer := task.Publication.Producer
 		available, err := store.Client.DiscoveryCandidateAvailable(ctx, c.Repository, producer)
 		if err != nil {

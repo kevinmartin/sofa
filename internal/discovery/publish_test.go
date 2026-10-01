@@ -177,6 +177,52 @@ func TestAmbiguousPostWithoutMatchingBotCommentBlocksRetry(t *testing.T) {
 	}
 }
 
+func TestAdmissionMatchesOnlyExactAttemptedPublication(t *testing.T) {
+	ctx := context.Background()
+	engine, store, source, _, in := discoveryPublishFixture(t)
+	publisher := &fakeCommentPublisher{failPost: true}
+	if _, err := PublishSpecification(ctx, engine, store, publisher, in); err == nil {
+		t.Fatal("ambiguous POST unexpectedly succeeded")
+	}
+	ledger, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := ledger.State.Discoveries[source.IssueID]
+	if task.Publication == nil || !task.Publication.PostAttempted {
+		t.Fatalf("missing durable POST intent: %+v", task)
+	}
+	original := publisher.comments[0]
+	for _, tc := range []struct {
+		name     string
+		comments []SpecComment
+		found    bool
+	}{
+		{name: "exact", comments: []SpecComment{original}, found: true},
+		{name: "missing"},
+		{name: "wrong author", comments: []SpecComment{func() SpecComment { c := original; c.AuthorID = "other"; return c }()}},
+		{name: "edited body", comments: []SpecComment{func() SpecComment { c := original; c.Body += " "; return c }()}},
+		{name: "edited title", comments: []SpecComment{original}},
+		{name: "duplicate", comments: []SpecComment{original, func() SpecComment { c := original; c.ID++; return c }()}},
+		{name: "invalid timestamp", comments: []SpecComment{func() SpecComment { c := original; c.UpdatedAt = c.CreatedAt.Add(-time.Second); return c }()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			title := source.Title
+			if tc.name == "edited title" {
+				title += " changed"
+			}
+			comment, found, err := MatchPublicationIntent(tc.comments, task, title, in.ExpectedAuthorID)
+			if tc.found {
+				if err != nil || !found || comment.ID != original.ID {
+					t.Fatalf("exact publication rejected: %+v, found=%v, err=%v", comment, found, err)
+				}
+			} else if found {
+				t.Fatalf("untrusted publication accepted: %+v", comment)
+			}
+		})
+	}
+}
+
 func TestObservedSpecReviewAndBacklogPersistExactSnapshot(t *testing.T) {
 	ctx := context.Background()
 	engine, store, source, _, in := discoveryPublishFixture(t)

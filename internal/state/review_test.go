@@ -147,6 +147,79 @@ func TestFailedUnpreparedReviewRepairReturnsToDraftUntilBudgetExhausted(t *testi
 	}
 }
 
+func TestReviewRepairClaimReleasesReservationWhenFullChargeExceedsBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		limits Limits
+	}{
+		{
+			name: "model calls",
+			limits: Limits{
+				ModelCalls:            1,
+				Repairs:               2,
+				InfrastructureRetries: 2,
+				RuntimeSeconds:        1200,
+			},
+		},
+		{
+			name: "runtime",
+			limits: Limits{
+				ModelCalls:            2,
+				Repairs:               2,
+				InfrastructureRetries: 2,
+				RuntimeSeconds:        600,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			e := engine()
+			a, created, err := e.Admit(ctx, admission(), tc.limits)
+			if err != nil || !created {
+				t.Fatalf("admit: %v, %v", created, err)
+			}
+			fence := claimed(t, e, a.ID)
+			if err := e.Charge(ctx, fence, Counters{ModelCalls: 1, RuntimeSeconds: 600}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Advance(ctx, fence, Validating); err != nil {
+				t.Fatal(err)
+			}
+			publication := Publication{
+				Branch:          "sofa/task",
+				ExpectedHead:    a.Admission.BaseSHA,
+				CandidateDigest: strings.Repeat("d", 64),
+			}
+			if err := e.BeginPublication(ctx, fence, publication); err != nil {
+				t.Fatal(err)
+			}
+			publication.HeadSHA = strings.Repeat("e", 40)
+			publication.PRNumber = 7
+			publication.PRURL = "https://github.com/owner/consumer/pull/7"
+			if err := e.MarkPublished(ctx, fence, publication); err != nil {
+				t.Fatal(err)
+			}
+			intent := RepairIntent{
+				FeedbackID:   "review-budget",
+				FeedbackHash: strings.Repeat("f", 64),
+				PRBaseSHA:    strings.Repeat("b", 40),
+				PRHeadSHA:    publication.HeadSHA,
+				PRNumber:     publication.PRNumber,
+			}
+			if reserved, err := e.ReserveReviewRepair(ctx, a.ID, intent); err != nil || !reserved {
+				t.Fatalf("reserve: %v, %v", reserved, err)
+			}
+			if _, err := e.ClaimReviewRepair(ctx, a.ID, Owner{RunID: "repair", RunAttempt: 1}, Counters{ModelCalls: 1, RuntimeSeconds: 600}); !errors.Is(err, ErrLimit) {
+				t.Fatalf("exhausted claim: %v", err)
+			}
+			got := snapshot(t, e, a.ID)
+			if got.Phase != Blocked || got.Failure != "budget" || got.Repair != nil || got.Owner != nil || got.Dispatch != "pending" || got.Counts.Repairs != 1 || got.Counts.ModelCalls != 1 || got.Counts.RuntimeSeconds != 600 || got.Publication == nil || *got.Publication != publication {
+				t.Fatalf("exhausted reservation still holds WIP or lost identity: %+v", got)
+			}
+		})
+	}
+}
+
 func TestReviewRepairClaimAndChargeSurviveTerminalRunRecovery(t *testing.T) {
 	ctx := context.Background()
 	e := engine()

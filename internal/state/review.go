@@ -12,7 +12,9 @@ func (e Engine) ClaimReviewRepair(ctx context.Context, id string, owner Owner, c
 	if !validOwner(owner) || charge.ModelCalls != 1 || charge.RuntimeSeconds <= 0 || charge.Repairs != 0 || charge.InfrastructureRetries != 0 {
 		return fence, fmt.Errorf("%w: repair owner or charge", ErrInvalid)
 	}
+	exhausted := false
 	err = e.update(ctx, func(s *State) (bool, error) {
+		exhausted = false
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
@@ -33,7 +35,15 @@ func (e Engine) ClaimReviewRepair(ctx context.Context, id string, owner Owner, c
 			RuntimeSeconds:        a.Counts.RuntimeSeconds + charge.RuntimeSeconds,
 		}
 		if !a.Limits.permits(next) {
-			return false, ErrLimit
+			// The reservation already consumed a repair slot. Releasing it here
+			// prevents a permanently Pending attempt from holding delivery WIP.
+			a.Repair = nil
+			a.Phase = Blocked
+			a.Failure = "budget"
+			a.UpdatedAt = e.now()
+			s.Attempts[id] = a
+			exhausted = true
+			return true, nil
 		}
 		a.Counts = next
 		a.Generation++
@@ -49,6 +59,9 @@ func (e Engine) ClaimReviewRepair(ctx context.Context, id string, owner Owner, c
 		}
 		return true, nil
 	})
+	if err == nil && exhausted {
+		return Fence{}, ErrLimit
+	}
 	return
 }
 

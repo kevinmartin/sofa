@@ -504,8 +504,12 @@ func (f *correctionFixture) IssueComments(context.Context, string, int64) ([]dis
 	return nil, nil
 }
 
-func (f *correctionFixture) RecentDefaultCommits(context.Context, string, string) ([]github.DefaultCommit, error) {
-	return f.commits, nil
+func (f *correctionFixture) DefaultCommitComparisonPage(context.Context, string, string, string, int) (github.DefaultCommitPage, error) {
+	return github.DefaultCommitPage{Commits: f.commits, Final: true}, nil
+}
+
+func (f *correctionFixture) IsAncestor(context.Context, string, string, string) (bool, error) {
+	return true, nil
 }
 
 func (f *correctionFixture) VerifiedRevert(_ context.Context, _, _, revertSHA, _ string) (bool, error) {
@@ -571,6 +575,9 @@ func TestCompletionCorrectionSkipsPartialRevertButKeepsAPIFailureFatal(t *testin
 		BaseRepository: "owner/repo",
 		MergeCommitSHA: merged,
 	}
+	if err := engine.Observe(ctx, state.Observation{Version: state.Version, ID: "done-revert-test", AttemptID: attempt.ID, Stage: "release", Outcome: "done", Revision: merged, RecordedAt: pull.MergedAt}); err != nil {
+		t.Fatal(err)
+	}
 	fixture := &correctionFixture{
 		commits: []github.DefaultCommit{
 			{SHA: partial, Message: "This reverts commit " + merged},
@@ -583,13 +590,16 @@ func TestCompletionCorrectionSkipsPartialRevertButKeepsAPIFailureFatal(t *testin
 		t.Fatal(err)
 	}
 	loaded, err = engine.Store.Load(ctx)
-	if err != nil || len(fixture.seen) != 2 || len(loaded.State.Observations) != 1 || loaded.State.Observations[0].Revision != exact {
+	if err != nil || len(fixture.seen) != 2 || len(loaded.State.Observations) != 2 || loaded.State.Observations[1].Revision != exact {
 		t.Fatalf("later exact revert was lost: seen=%v observations=%+v err=%v", fixture.seen, loaded.State.Observations, err)
 	}
 	apiFailure := errors.New("transient GitHub failure")
 	fixture.seen = nil
 	fixture.failure[partial] = apiFailure
-	if err := observeCompletionCorrections(ctx, fixture, engine, attempt, pull, exact); !errors.Is(err, apiFailure) || len(fixture.seen) != 1 {
+	// A fully processed range is not rescanned. A later observed head starts a
+	// new comparison and must still surface verifier API failures.
+	laterHead := strings.Repeat("3", 40)
+	if err := observeCompletionCorrections(ctx, fixture, engine, attempt, pull, laterHead); !errors.Is(err, apiFailure) || len(fixture.seen) != 1 {
 		t.Fatalf("transport failure was skipped: seen=%v err=%v", fixture.seen, err)
 	}
 }
