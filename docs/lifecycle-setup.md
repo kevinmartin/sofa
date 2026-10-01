@@ -87,12 +87,16 @@ before doing work. If a board item was moved manually, inspect its status and
 ledger before changing it; do not repeatedly force the expected column. If a
 Backlog specification or source changed, the controller holds it and suggests
 an owner move to Discovery. A new versioned proposal then returns to Spec
-Review and requires a fresh owner Backlog gesture. The controller never makes
-either approval move. A missing or stale required gate leaves the candidate
-draft and blocked in Verification. After merge, observe the actual merge/default
-branch commit and configured release checks before Done. A failed release
-remains Release with a linked correction; it does not grant deployment or
-rollback authority.
+Review and requires a fresh owner Backlog gesture. Earlier bot comments stay
+on the issue for audit; review the latest proposal associated with the current
+Spec Review move. The `specification v1` comment marker identifies the document
+format, not the proposal number. The controller binds the exact current comment
+and content digest rather than trusting that visible marker for approval. The
+controller never makes either approval move. A missing or stale required gate
+leaves the candidate draft and blocked in Verification. After merge, observe
+the actual merge/default branch commit and configured release checks before
+Done. A failed release remains Release with a linked correction; it does not
+grant deployment or rollback authority.
 
 The delegated disposable Project is
 [sofa disposable canary](https://github.com/users/kevinmartin/projects/2).
