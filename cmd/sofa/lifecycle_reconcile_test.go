@@ -607,10 +607,16 @@ func TestReadyForDiscoveryRequiresLaterOwnerMoveForReviewOrBlockedReset(t *testi
 		ModelCalls:      1,
 		MaxModelCalls:   2,
 	}
+	if !recoverableDiscoveryReview(issue, ledger.Discoveries[issue.IssueID]) {
+		t.Fatal("exact admitted Discovery revision was not recoverable")
+	}
 	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 0 {
 		t.Fatalf("unchanged Discovery review re-dispatched: %v", got)
 	}
 	items[0].Issue.StatusUpdatedAt = when.Add(time.Minute)
+	if recoverableDiscoveryReview(items[0].Issue, ledger.Discoveries[issue.IssueID]) {
+		t.Fatal("later owner move was mistaken for interrupted factory move")
+	}
 	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != 9 {
 		t.Fatalf("later owner Discovery revision not dispatched: %v", got)
 	}
@@ -632,6 +638,15 @@ func TestReadyForDiscoveryRequiresLaterOwnerMoveForReviewOrBlockedReset(t *testi
 	items[0].Issue.StatusUpdatedAt = when.Add(time.Minute)
 	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != issue.Number {
 		t.Fatalf("changed ownerless pending task was not queued at WIP limit: %v", got)
+	}
+	c.Limits.MaxAgentTurns = 1
+	items[0].Issue.StatusUpdatedAt = when
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != issue.Number {
+		t.Fatalf("lower config cap stranded reserved pending work: %v", got)
+	}
+	items[0].Issue.StatusUpdatedAt = when.Add(time.Minute)
+	if got := readyForDiscovery(c, items, ledger, policy, statuses, nil); len(got) != 1 || got[0] != issue.Number {
+		t.Fatalf("lower config cap stranded pending owner revision: %v", got)
 	}
 }
 

@@ -74,8 +74,8 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 		for _, a := range s.Attempts {
 			if a.Admission.Repository == admission.Repository && a.Admission.Issue == admission.Issue {
 				if prior == nil || a.SpecRevision > prior.SpecRevision {
-					copy := a
-					prior = &copy
+					candidate := a
+					prior = &candidate
 				} else if a.SpecRevision == prior.SpecRevision {
 					return false, ErrAdmissionChanged
 				}
@@ -89,8 +89,8 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 				if approved != nil {
 					return false, ErrAdmissionChanged
 				}
-				copy := record
-				approved = &copy
+				candidate := record
+				approved = &candidate
 			}
 		}
 		if approved != nil {

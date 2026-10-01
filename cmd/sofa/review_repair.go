@@ -536,7 +536,9 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		return err
 	}
 	if _, err := approvedRepairSource(ctx, c, projects, store, currentSource, attempt); err != nil {
-		_ = engine.Fail(ctx, fence, "authority")
+		// A failed GitHub read is not proof that approval was revoked. Keep it
+		// recoverable; only a verified authority or revision mismatch blocks it.
+		_ = engine.Fail(ctx, fence, repairSourceFailureKind(err))
 		return err
 	}
 	currentPull, err := ledger.Pull(ctx, c.Repository, pull.Number)
@@ -685,7 +687,7 @@ func writeRepairStatus(outDir string, dispatch bool, reason, attemptID string) e
 func approvedRepairSource(ctx context.Context, c config.Config, reader discovery.CommentReader, store state.Store, source admission.Snapshot, attempt state.Attempt) (json.RawMessage, error) {
 	policy, err := discoveryPolicy(c)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", discovery.ErrAuthority, err)
 	}
 	approved, err := discovery.VerifyApprovedRevision(ctx, reader, store, policy, source)
 	if err != nil {
@@ -694,28 +696,38 @@ func approvedRepairSource(ctx context.Context, c config.Config, reader discovery
 	return validateRepairSource(c, approved, attempt)
 }
 
+// repairSourceFailureKind distinguishes a verified revocation from an
+// unavailable ledger or GitHub comment. Unknown errors fail closed for this
+// run, but remain eligible for bounded infrastructure recovery.
+func repairSourceFailureKind(err error) string {
+	if errors.Is(err, discovery.ErrAuthority) || errors.Is(err, discovery.ErrRevision) {
+		return "authority"
+	}
+	return "infrastructure"
+}
+
 // validateRepairSource returns canonical specification bytes only for the admitted
 // scope and configuration in Building, Verification, or Review. snapshot must already
 // contain the approved comment body; identity, stage, or digest changes return errors.
 func validateRepairSource(c config.Config, snapshot admission.Snapshot, attempt state.Attempt) (json.RawMessage, error) {
 	if c.Lifecycle == nil || !snapshot.Complete || !snapshot.Open || !strings.EqualFold(snapshot.Repository, c.Repository) || snapshot.RepositoryID != c.RepositoryID || snapshot.Number != int(attempt.Admission.Issue) || snapshot.ProjectID != c.ProjectID || !snapshot.ProjectPrivate || snapshot.ProjectItemID != attempt.Admission.ProjectItemID {
-		return nil, errors.New("repair issue or restricted Project identity changed")
+		return nil, fmt.Errorf("%w: repair issue or restricted Project identity changed", discovery.ErrAuthority)
 	}
 	status := snapshot.CurrentStatus
 	allowed := status == c.Lifecycle.Statuses["review"] || status == c.Lifecycle.Statuses["verification"] || status == c.Lifecycle.Statuses["building"]
 	if !allowed {
-		return nil, errors.New("repair issue is outside the authorized delivery lifecycle")
+		return nil, fmt.Errorf("%w: repair issue is outside the authorized delivery lifecycle", discovery.ErrAuthority)
 	}
 	configDigest, err := c.Digest()
 	if err != nil {
 		return nil, err
 	}
 	if configDigest != attempt.Admission.ConfigDigest {
-		return nil, errors.New("repair configuration changed since admission")
+		return nil, fmt.Errorf("%w: repair configuration changed since admission", discovery.ErrAuthority)
 	}
 	spec, digest, err := admission.CanonicalSpec(snapshot.Title, snapshot.Body)
 	if err != nil || digest != attempt.Admission.SpecDigest {
-		return nil, errors.New("approved repair specification changed")
+		return nil, fmt.Errorf("%w: approved repair specification changed", discovery.ErrRevision)
 	}
 	return spec, nil
 }

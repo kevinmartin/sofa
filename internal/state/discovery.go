@@ -53,7 +53,7 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 				return false, ErrAdmissionChanged
 			}
 			if previous.StatusOptionID == task.StatusOptionID && previous.StatusUpdatedAt.Equal(task.StatusUpdatedAt) && previous.SourceDigest == task.SourceDigest {
-				if previous.MaxModelCalls == task.MaxModelCalls {
+				if previous.MaxModelCalls == task.MaxModelCalls || previous.Phase == DiscoveryPending && previous.Owner == nil {
 					task = previous
 					return false, nil
 				}
@@ -76,6 +76,11 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 				s.Discoveries[task.IssueID] = previous
 				task = previous
 				return true, nil
+			}
+			if previous.Phase == DiscoveryPending && previous.Owner == nil && task.MaxModelCalls < previous.MaxModelCalls {
+				// A reserved, ownerless task keeps its original aggregate budget
+				// through a later owner source revision even if config decreases.
+				task.MaxModelCalls = previous.MaxModelCalls
 			}
 			if previous.Phase != DiscoveryReview && previous.Phase != DiscoveryBlocked && (previous.Phase != DiscoveryPending || previous.Owner != nil) || !task.StatusUpdatedAt.After(previous.StatusUpdatedAt) || task.MaxModelCalls < previous.MaxModelCalls || previous.Publication != nil {
 				return false, ErrAdmissionChanged

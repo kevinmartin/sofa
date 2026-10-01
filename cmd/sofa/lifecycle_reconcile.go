@@ -213,7 +213,7 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			continue
 		}
 		task, exists := ledger.State.Discoveries[item.Issue.IssueID]
-		if !exists || task.Phase != state.DiscoveryReview {
+		if !exists || !recoverableDiscoveryReview(item.Issue, task) {
 			continue
 		}
 		recovering[item.Issue.IssueID] = true
@@ -531,6 +531,12 @@ func recoverDiscoveryReview(ctx context.Context, client *github.Client, store di
 	return nil
 }
 
+// A later owner move back to Discovery is a revision request, not an interrupted
+// factory move. Only the exact admitted Project revision may be recovered.
+func recoverableDiscoveryReview(issue admission.Snapshot, task state.DiscoveryTask) bool {
+	return task.Phase == state.DiscoveryReview && task.StatusOptionID == issue.StatusOptionID && task.StatusUpdatedAt.Equal(issue.StatusUpdatedAt)
+}
+
 // attemptForItem returns the current approved attempt bound to the Project item.
 // No attempt returns false without error; ambiguous, mismatched, or unmatched
 // unsuperseded attempts return an error.
@@ -738,18 +744,23 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 		}
 		sameSource := task.SourceDigest == admitted.SourceDigest && task.StatusOptionID == admitted.StatusOptionID && task.StatusUpdatedAt.Equal(admitted.StatusUpdatedAt)
 		if sameSource {
-			if task.Phase == state.DiscoveryPending && task.Owner == nil && (task.Publication != nil || task.ModelCalls < cap) && task.MaxModelCalls == cap {
+			if task.Phase == state.DiscoveryPending && task.Owner == nil && (task.Publication != nil || task.ModelCalls < task.MaxModelCalls) {
 				pending = append(pending, issue.Number)
 			} else if task.Phase == state.DiscoveryBlocked && task.Failure == "budget" && cap > task.MaxModelCalls {
 				fresh = append(fresh, issue.Number)
 			}
 			continue
 		}
-		if !admitted.StatusUpdatedAt.After(task.StatusUpdatedAt) || task.Publication != nil || cap < task.MaxModelCalls || cap <= task.ModelCalls {
+		if !admitted.StatusUpdatedAt.After(task.StatusUpdatedAt) || task.Publication != nil {
 			continue
 		}
 		if task.Phase == state.DiscoveryPending && task.Owner == nil {
-			pending = append(pending, issue.Number)
+			if task.ModelCalls < task.MaxModelCalls {
+				pending = append(pending, issue.Number)
+			}
+			continue
+		}
+		if cap < task.MaxModelCalls || cap <= task.ModelCalls {
 			continue
 		}
 		record, hasRecord := ledger.Specs[issue.IssueID]

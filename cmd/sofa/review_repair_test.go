@@ -195,10 +195,13 @@ func TestReservedRepairAdmissionKeepsOriginalReviewAndTerminalFence(t *testing.T
 	}
 }
 
-type repairCommentReader struct{ comment discovery.SpecComment }
+type repairCommentReader struct {
+	comment discovery.SpecComment
+	err     error
+}
 
 func (r repairCommentReader) IssueComment(_ context.Context, _ string, _, _ int64) (discovery.SpecComment, error) {
-	return r.comment, nil
+	return r.comment, r.err
 }
 
 func TestRepairReadsExactApprovedCommentInsteadOfIssueIdea(t *testing.T) {
@@ -301,14 +304,104 @@ func TestRepairReadsExactApprovedCommentInsteadOfIssueIdea(t *testing.T) {
 	if err != nil || string(got) != string(canonical) {
 		t.Fatalf("exact approved comment was not used: %v", err)
 	}
+	transport := errors.New("temporary issue-comment API failure")
+	reader.err = transport
+	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); !errors.Is(err, transport) || repairSourceFailureKind(err) != "infrastructure" {
+		t.Fatalf("transient comment read became a permanent authority failure: %v", err)
+	}
+	reader.err = nil
 	reader.comment.Body = strings.Replace(reader.comment.Body, "expected output", "different output", 1)
-	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); err == nil {
-		t.Fatal("changed acceptance criteria inherited approval")
+	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); !errors.Is(err, discovery.ErrRevision) || repairSourceFailureKind(err) != "authority" {
+		t.Fatalf("changed acceptance criteria inherited approval: %v", err)
 	}
 	reader.comment = comment
 	issue.Body = "A different source idea"
-	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); err == nil {
-		t.Fatal("changed issue idea inherited approval")
+	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); !errors.Is(err, discovery.ErrRevision) || repairSourceFailureKind(err) != "authority" {
+		t.Fatalf("changed issue idea inherited approval: %v", err)
+	}
+	issue.Body = "Investigate the fixture before specifying the change."
+	issue.CurrentStatus = c.Lifecycle.Statuses["backlog"]
+	if _, err := approvedRepairSource(context.Background(), c, reader, store, issue, attempt); !errors.Is(err, discovery.ErrAuthority) || repairSourceFailureKind(err) != "authority" {
+		t.Fatalf("unauthorized lifecycle status remained repairable: %v", err)
+	}
+}
+
+func TestRepairSourceFailureKeepsTransportRecoverable(t *testing.T) {
+	ctx := context.Background()
+	m, _, _ := repairFixture(t)
+	for _, tc := range []struct {
+		name, failure, phase string
+		err                  error
+	}{
+		{
+			name:    "transient read",
+			failure: "infrastructure",
+			phase:   string(state.Deferred),
+			err:     errors.New("temporary GitHub failure"),
+		},
+		{
+			name:    "revoked approval",
+			failure: "authority",
+			phase:   string(state.Blocked),
+			err:     discovery.ErrRevision,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := state.Engine{Store: &state.MemoryStore{}}
+			a, _, err := engine.Admit(ctx, m.Admission, state.Limits{
+				ModelCalls: 2, Repairs: 1, InfrastructureRetries: 1, RuntimeSeconds: 1200,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := engine.Store.Load(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.Phase = state.Draft
+			a.Publication = &m.Publication
+			snapshot.State.Attempts[a.ID] = a
+			if err := engine.Store.CompareAndSwap(ctx, snapshot.Revision, snapshot.State); err != nil {
+				t.Fatal(err)
+			}
+			if reserved, err := engine.ReserveReviewRepair(ctx, a.ID, m.Repair); err != nil || !reserved {
+				t.Fatalf("reserve: %v, %v", reserved, err)
+			}
+			fence, err := engine.ClaimReviewRepair(ctx, a.ID, m.Fence.Owner, state.Counters{ModelCalls: 1, RuntimeSeconds: 600})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Fail(ctx, fence, repairSourceFailureKind(tc.err)); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err = engine.Store.Load(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a = snapshot.State.Attempts[a.ID]
+			if a.Failure != tc.failure || string(a.Phase) != tc.phase || a.Repair == nil || *a.Repair != m.Repair {
+				t.Fatalf("failure lost repair identity or used wrong recovery class: %+v", a)
+			}
+			proof := state.RunProof{Owner: m.Fence.Owner, Status: "completed", Conclusion: "failure", ObservedAt: time.Now().UTC()}
+			err = engine.Recover(ctx, a.ID, proof)
+			if tc.failure == "authority" {
+				if !errors.Is(err, state.ErrClaimed) {
+					t.Fatalf("revoked approval was recoverable: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("transient read could not be recovered: %v", err)
+			}
+			snapshot, err = engine.Store.Load(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a = snapshot.State.Attempts[a.ID]
+			if a.Phase != state.Pending || a.Owner != nil || a.Repair == nil || *a.Repair != m.Repair || a.Counts.InfrastructureRetries != 1 {
+				t.Fatalf("recovered repair lost its bounded reservation: %+v", a)
+			}
+		})
 	}
 }
 

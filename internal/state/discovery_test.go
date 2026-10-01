@@ -379,6 +379,46 @@ func TestChangedSourceResetsOwnerlessPendingDiscoveryAtWIPLimit(t *testing.T) {
 	}
 }
 
+func TestPendingDiscoveryKeepsReservedBudgetAcrossConfigChanges(t *testing.T) {
+	for _, changedSource := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same-source", true: "later-owner-source"}[changedSource], func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+			engine := Engine{Store: &MemoryStore{}, Now: func() time.Time { return now }}
+			first := discoveryAdmission("I_1", 1)
+			if _, _, err := engine.AdmitDiscovery(ctx, first, 1, 2); err != nil {
+				t.Fatal(err)
+			}
+			owner := Owner{RunID: "42", RunAttempt: 1}
+			fence, err := engine.ClaimDiscovery(ctx, first.IssueID, owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.RecoverDiscovery(ctx, first.IssueID, RunProof{Owner: owner, Status: "completed", Conclusion: "cancelled", ObservedAt: now}); err != nil {
+				t.Fatal(err)
+			}
+			next := first
+			if changedSource {
+				next.StatusUpdatedAt = first.StatusUpdatedAt.Add(time.Minute)
+				next.SourceDigest = strings.Repeat("b", 64)
+			}
+			task, created, err := engine.AdmitDiscovery(ctx, next, 1, 1)
+			if err != nil || created != changedSource || task.MaxModelCalls != 2 || task.ModelCalls != 1 || task.Phase != DiscoveryPending || task.Owner != nil {
+				t.Fatalf("replay changed reserved budget or lost pending task: task=%+v created=%t err=%v", task, created, err)
+			}
+			if _, created, err := engine.AdmitDiscovery(ctx, next, 1, 3); err != nil || created {
+				t.Fatalf("increased config cap changed pending budget: created=%t err=%v", created, err)
+			}
+			if err := engine.AssertDiscoveryOwner(ctx, fence); !errors.Is(err, ErrStale) {
+				t.Fatalf("recovered worker retained authority: %v", err)
+			}
+			if _, err := engine.ClaimDiscovery(ctx, next.IssueID, Owner{RunID: "43", RunAttempt: 1}); err != nil {
+				t.Fatalf("pending task was not claimable: %v", err)
+			}
+		})
+	}
+}
+
 func TestFirstDiscoveryRejectsUnsupersededLegacyDraft(t *testing.T) {
 	ctx := context.Background()
 	e := engine()

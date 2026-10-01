@@ -65,9 +65,10 @@ jobs:
           SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_REPOSITORY: ${{ github.repository }}
           SOFA_CALLER_SHA: ${{ github.sha }}
-          SOFA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SOFA_DEFAULT_BRANCH: ${{ github.event_name == 'schedule' && github.ref_name || github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          test -n "$SOFA_DEFAULT_BRANCH" || { echo 'Default branch unavailable for controller artifact lookup' >&2; exit 1; }
           repo_id=$(gh api "repos/$SOFA_REPOSITORY" --jq .id)
           artifact_name="sofa-controller-$SOFA_TOOLKIT_SHA"
           artifact=$(gh api "repos/$SOFA_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" |

@@ -43,7 +43,9 @@ ten minutes, or hourly using `lifecycle.poll_minutes: 60`. Manual and event
 wakeups use the same ledger and coalesce missed ticks. A poll reads metadata
 only; no model is started for unchanged items. Before the first poll at a new
 Sofa `toolkit_sha`, dispatch the consumer's default-branch, secretless
-controller-build caller. It invokes `controller-build.reusable.yml` with that
+controller-build caller at exactly `.github/workflows/sofa-controller-build.yml`.
+The poll rejects artifacts from another workflow path. The caller invokes
+`controller-build.reusable.yml` with that
 same full SHA and uploads a controller artifact in the consumer repository.
 The poll finds the artifact by exact SHA and verifies its producer, archive,
 manifest, and binary before fetching the Project credential. The artifact
