@@ -110,12 +110,23 @@ func TestProjectAdviceFieldsRequireTwoPrivateTextFields(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Fatal(err)
 				}
-				if !strings.Contains(request.Query, "... on ProjectV2FieldCommon{id name dataType}") {
-					t.Fatal("Project advice query must select every field type")
+				responseFields := tc.fields
+				if strings.Contains(request.Query, "... on ProjectV2Field{") {
+					// GitHub returns empty nodes for single-select and iteration
+					// fields when a query selects only the concrete text-field type.
+					responseFields = make([]any, len(tc.fields))
+					for i, field := range tc.fields {
+						value := field.(map[string]any)
+						if value["dataType"] == "TEXT" {
+							responseFields[i] = value
+						} else {
+							responseFields[i] = map[string]any{}
+						}
+					}
 				}
 				return jsonResponse(200, map[string]any{"data": map[string]any{"node": map[string]any{
 					"id": "P_1", "public": tc.public,
-					"fields": map[string]any{"nodes": tc.fields, "pageInfo": map[string]any{"hasNextPage": false}},
+					"fields": map[string]any{"nodes": responseFields, "pageInfo": map[string]any{"hasNextPage": false}},
 				}}}), nil
 			}))
 			if err != nil {
