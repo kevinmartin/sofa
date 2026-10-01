@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -144,6 +145,64 @@ func TestFailedUnpreparedReviewRepairReturnsToDraftUntilBudgetExhausted(t *testi
 		if _, err := e.ReserveReviewRepair(ctx, a.ID, intent); !errors.Is(err, ErrConflict) {
 			t.Fatalf("replayed feedback was not a conflict on turn %d: %v", turn, err)
 		}
+	}
+}
+
+func TestSupersededUnpreparedRepairReleasesOnlyExactOwnerlessReservation(t *testing.T) {
+	for _, maxRepairs := range []int64{1, 2} {
+		t.Run(fmt.Sprint(maxRepairs), func(t *testing.T) {
+			ctx := context.Background()
+			e := engine()
+			allowed := limits()
+			allowed.Repairs = maxRepairs
+			a, _, err := e.Admit(ctx, admission(), allowed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			published := Publication{Branch: "sofa/task", ExpectedHead: a.Admission.BaseSHA, CandidateDigest: strings.Repeat("d", 64), HeadSHA: strings.Repeat("e", 40), PRNumber: 7, PRURL: "https://github.com/owner/consumer/pull/7"}
+			s, err := e.Store.Load(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.Phase, a.Publication = Draft, &published
+			s.State.Attempts[a.ID] = a
+			if err := e.Store.CompareAndSwap(ctx, s.Revision, s.State); err != nil {
+				t.Fatal(err)
+			}
+			intent := RepairIntent{FeedbackID: "review-superseded", FeedbackHash: strings.Repeat("f", 64), PRBaseSHA: strings.Repeat("b", 40), PRHeadSHA: published.HeadSHA, PRNumber: published.PRNumber}
+			if reserved, err := e.ReserveReviewRepair(ctx, a.ID, intent); err != nil || !reserved {
+				t.Fatalf("reserve: %v, %v", reserved, err)
+			}
+			pending := snapshot(t, e, a.ID)
+			active := pending
+			owner := Owner{RunID: "active", RunAttempt: 1}
+			active.Owner = &owner
+			if err := e.ReleaseSupersededReviewRepair(ctx, active); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("active owner was releasable: %v", err)
+			}
+			prepared := pending
+			candidate := *pending.Repair
+			candidate.CandidateSHA = strings.Repeat("1", 40)
+			candidate.CandidateDigest = strings.Repeat("2", 64)
+			prepared.Repair = &candidate
+			if err := e.ReleaseSupersededReviewRepair(ctx, prepared); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("prepared candidate was releasable: %v", err)
+			}
+			if err := e.ReleaseSupersededReviewRepair(ctx, pending); err != nil {
+				t.Fatal(err)
+			}
+			got := snapshot(t, e, a.ID)
+			wantPhase := Draft
+			if maxRepairs == 1 {
+				wantPhase = Blocked
+			}
+			if got.Phase != wantPhase || got.Repair != nil || got.Owner != nil || got.Checkpoint != nil || got.Counts.Repairs != 1 || got.Counts.ModelCalls != 0 || got.Generation != pending.Generation+1 || got.Publication == nil || *got.Publication != published {
+				t.Fatalf("superseded reservation changed authority or budget: %+v", got)
+			}
+			if err := e.ReleaseSupersededReviewRepair(ctx, pending); !errors.Is(err, ErrStale) {
+				t.Fatalf("stale release replay succeeded: %v", err)
+			}
+		})
 	}
 }
 

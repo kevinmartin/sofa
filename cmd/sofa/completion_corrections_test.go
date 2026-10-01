@@ -32,6 +32,47 @@ type pagedCompletionReader struct {
 	calls []int
 }
 
+type countingCompletionStore struct {
+	state.Store
+	loads int
+}
+
+func (s *countingCompletionStore) Load(ctx context.Context) (state.Snapshot, error) {
+	s.loads++
+	return s.Store.Load(ctx)
+}
+
+func TestCompletionCorrectionReplayDoesNotReloadLedgerPerKnownComment(t *testing.T) {
+	ctx := context.Background()
+	store := &countingCompletionStore{Store: &state.MemoryStore{}}
+	engine := state.Engine{Store: store}
+	attempt, pull := completionAttempt(t, engine, 17, strings.Repeat("a", 40))
+	pull.MergeCommitSHA = strings.Repeat("b", 40)
+	if err := engine.Observe(ctx, state.Observation{Version: state.Version, ID: "done-17", AttemptID: attempt.ID, Stage: "release", Outcome: "done", Revision: pull.MergeCommitSHA, RecordedAt: pull.MergedAt}); err != nil {
+		t.Fatal(err)
+	}
+	comments := make([]discovery.SpecComment, 0, 26)
+	for i := int64(1); i <= 25; i++ {
+		comments = append(comments, discovery.SpecComment{ID: i, Body: fmt.Sprintf("Report %d", i), CreatedAt: pull.MergedAt.Add(time.Minute), UpdatedAt: pull.MergedAt.Add(time.Minute)})
+	}
+	comments = append(comments, comments[0])
+	reader := completionFixtureReader{repository: "owner/repo", defaultSHA: pull.MergeCommitSHA, comments: map[int64][]discovery.SpecComment{17: comments}}
+	if err := observeCompletionCorrections(ctx, reader, engine, attempt, pull, pull.MergeCommitSHA); err != nil {
+		t.Fatal(err)
+	}
+	store.loads = 0
+	if err := observeCompletionCorrections(ctx, reader, engine, attempt, pull, pull.MergeCommitSHA); err != nil {
+		t.Fatal(err)
+	}
+	if store.loads > 2 {
+		t.Fatalf("known comments caused %d ledger reads on replay", store.loads)
+	}
+	snapshot, err := engine.Store.Load(ctx)
+	if err != nil || len(snapshot.State.Observations) != 26 {
+		t.Fatalf("replay duplicated feedback: %d observations, %v", len(snapshot.State.Observations), err)
+	}
+}
+
 func (r *pagedCompletionReader) DefaultCommitComparisonPage(_ context.Context, repository, base, head string, page int) (github.DefaultCommitPage, error) {
 	if repository != r.repository || head != r.defaultSHA || base != r.mergedSHA || page < 1 {
 		return github.DefaultCommitPage{}, errors.New("other PR comparison")

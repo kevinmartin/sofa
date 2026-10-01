@@ -178,6 +178,18 @@ func TestReservedRepairAdmissionKeepsOriginalReviewAndTerminalFence(t *testing.T
 	}, m.Admission.Repository, a); !errors.Is(err, state.ErrActive) {
 		t.Fatalf("active owner released: %v", err)
 	}
+	outDir := t.TempDir()
+	if err := releaseSupersededReviewRepair(ctx, engine, repairProofReader{proof: active}, m.Admission.Repository, a, outDir); err != nil {
+		t.Fatal(err)
+	}
+	var status struct {
+		Dispatch  bool   `json:"dispatch"`
+		Reason    string `json:"reason"`
+		AttemptID string `json:"attempt_id"`
+	}
+	if err := readJSON(filepath.Join(outDir, "status.json"), 1024, &status); err != nil || status.Dispatch || status.Reason != "already-active" {
+		t.Fatalf("active repair did not remain fenced: %+v, %v", status, err)
+	}
 	terminal := state.RunProof{
 		Owner:      firstOwner,
 		Status:     "completed",
@@ -192,6 +204,20 @@ func TestReservedRepairAdmissionKeepsOriginalReviewAndTerminalFence(t *testing.T
 	}
 	if selected, _ := selectRepairReview(recovered, pull, []github.PullReview{newer}, reviews[0].UserID); selected.FeedbackID != "" {
 		t.Fatal("new review authorized recovered repair")
+	}
+	if err := releaseSupersededReviewRepair(ctx, engine, repairProofReader{err: errors.New("ownerless reservation must not read proof")}, m.Admission.Repository, recovered, outDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := readJSON(filepath.Join(outDir, "status.json"), 1024, &status); err != nil || status.Dispatch || status.Reason != "reservation-superseded" {
+		t.Fatalf("superseded review dispatched: %+v, %v", status, err)
+	}
+	snapshot, err = engine.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := snapshot.State.Attempts[a.ID]
+	if released.Phase != state.Blocked || released.Failure != "budget" || released.Repair != nil || released.Owner != nil || released.Counts.Repairs != 1 || released.Counts.ModelCalls != 1 || released.Counts.InfrastructureRetries != 1 || released.Publication == nil || *released.Publication != m.Publication {
+		t.Fatalf("superseded reservation lost charges or publication: %+v", released)
 	}
 }
 

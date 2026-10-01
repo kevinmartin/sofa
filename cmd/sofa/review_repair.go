@@ -487,7 +487,7 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	selected, selectedReview := selectRepairReview(attempt, pull, reviews, c.OwnerID)
 	if selected.FeedbackID == "" {
 		if attempt.Repair != nil {
-			return errors.New("reserved owner review or exact PR identity changed")
+			return releaseSupersededReviewRepair(ctx, engine, ledger, c.Repository, attempt, outDir)
 		}
 		return writeRepairStatus(outDir, false, "no-current-owner-review", attempt.ID)
 	}
@@ -579,6 +579,25 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		return err
 	}
 	return writeRepairStatus(outDir, true, "repair-admitted", attempt.ID)
+}
+
+// A newer owner review can supersede an unprepared reservation, but cannot
+// release an active run without exact terminal proof or discard a candidate.
+func releaseSupersededReviewRepair(ctx context.Context, engine state.Engine, proofReader repairRunProofReader, repository string, attempt state.Attempt, outDir string) error {
+	if attempt.Repair == nil || attempt.Repair.CandidateSHA != "" || attempt.Repair.CandidateDigest != "" {
+		return errors.New("reserved owner review or exact PR identity changed")
+	}
+	recovered, err := recoverReservedReviewRepair(ctx, engine, proofReader, repository, attempt)
+	if errors.Is(err, state.ErrActive) {
+		return writeRepairStatus(outDir, false, "already-active", attempt.ID)
+	}
+	if err != nil {
+		return err
+	}
+	if err := engine.ReleaseSupersededReviewRepair(ctx, recovered); err != nil {
+		return err
+	}
+	return writeRepairStatus(outDir, false, "reservation-superseded", attempt.ID)
 }
 
 // selectRepairReview evaluates the newest noninformational owner review against

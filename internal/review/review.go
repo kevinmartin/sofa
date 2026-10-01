@@ -35,6 +35,12 @@ type Decision struct {
 	FeedbackText string // untrusted task data; never a policy or credential grant
 }
 
+// LaterFeedbackID binds one comment body and GitHub comment ID to its attempt.
+func LaterFeedbackID(attemptID string, comment discovery.SpecComment) string {
+	h := sha256.Sum256([]byte(comment.Body))
+	return fmt.Sprintf("later-feedback-%s-%d-%s", attemptID, comment.ID, hex.EncodeToString(h[:8]))
+}
+
 // RecordLaterFeedback links a post-merge PR comment to the completed attempt
 // without treating it as a new repair grant. Only bounded metadata and the
 // comment reference enter the ledger; raw comment text remains external data.
@@ -45,10 +51,9 @@ func RecordLaterFeedback(ctx context.Context, engine state.Engine, attempt state
 	if !strings.EqualFold(pull.HeadRepository, attempt.Admission.Repository) || !strings.EqualFold(pull.BaseRepository, attempt.Admission.Repository) {
 		return errors.New("later feedback repository identity changed")
 	}
-	h := sha256.Sum256([]byte(comment.Body))
 	observation := state.Observation{
 		Version:     state.Version,
-		ID:          fmt.Sprintf("later-feedback-%s-%d-%s", attempt.ID, comment.ID, hex.EncodeToString(h[:8])),
+		ID:          LaterFeedbackID(attempt.ID, comment),
 		AttemptID:   attempt.ID,
 		Stage:       "later-feedback",
 		Outcome:     "reported",

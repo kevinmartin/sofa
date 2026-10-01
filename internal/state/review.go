@@ -125,6 +125,41 @@ func (e Engine) ReserveReviewRepair(ctx context.Context, id string, intent Repai
 	return reserved, nil
 }
 
+// ReleaseSupersededReviewRepair clears only the exact ownerless, unprepared
+// reservation supplied by the caller. Its repair charge remains consumed; a
+// prepared candidate or an active owner must be reconciled instead.
+func (e Engine) ReleaseSupersededReviewRepair(ctx context.Context, expected Attempt) error {
+	if expected.Repair == nil || expected.Publication == nil || expected.Owner != nil || expected.Phase != Pending || expected.Repair.CandidateSHA != "" || expected.Repair.CandidateDigest != "" {
+		return ErrInvalid
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[expected.ID]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() || a.Generation != expected.Generation || a.Counts != expected.Counts || a.Admission != expected.Admission || a.Publication == nil || *a.Publication != *expected.Publication || a.Repair == nil || *a.Repair != *expected.Repair {
+			return false, ErrStale
+		}
+		if a.Owner != nil || a.Phase != Pending || a.Repair.CandidateSHA != "" || a.Repair.CandidateDigest != "" {
+			return false, ErrClaimed
+		}
+		a.Repair = nil
+		a.Owner = nil
+		a.Checkpoint = nil
+		a.Generation++
+		if a.Counts.Repairs >= a.Limits.Repairs || a.Counts.ModelCalls >= a.Limits.ModelCalls || a.Counts.RuntimeSeconds >= a.Limits.RuntimeSeconds {
+			a.Phase = Blocked
+			a.Failure = "budget"
+		} else {
+			a.Phase = Draft
+			a.Failure = ""
+		}
+		a.UpdatedAt = e.now()
+		s.Attempts[expected.ID] = a
+		return true, nil
+	})
+}
+
 // BeginRepairPublication records the exact verified child commit before a
 // leased branch push. A crash after the push can reconcile this intent rather
 // than manufacturing another candidate or overwriting a changed branch.

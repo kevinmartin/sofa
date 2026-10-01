@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -740,17 +741,48 @@ func observeCompletionCorrections(ctx context.Context, reader completionReader, 
 	if err != nil {
 		return err
 	}
+	snapshot, err := engine.Store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	known := make(map[string]state.Observation, len(snapshot.State.Observations))
+	for _, observation := range snapshot.State.Observations {
+		known[observation.ID] = observation
+	}
+	newFeedback := false
 	for _, comment := range comments {
 		if comment.CreatedAt.Before(pull.MergedAt) {
+			continue
+		}
+		if comment.ID < 1 || len(comment.Body) > 64<<10 {
+			return errors.New("later feedback comment is invalid")
+		}
+		id := review.LaterFeedbackID(attempt.ID, comment)
+		expected := state.Observation{
+			ID:          id,
+			AttemptID:   attempt.ID,
+			Stage:       "later-feedback",
+			Outcome:     "reported",
+			Revision:    pull.MergeCommitSHA,
+			EvidenceRef: fmt.Sprintf("https://github.com/%s/pull/%d#issuecomment-%d", attempt.Admission.Repository, pull.Number, comment.ID),
+		}
+		if prior, exists := known[id]; exists {
+			if prior.AttemptID != expected.AttemptID || prior.Stage != expected.Stage || prior.Outcome != expected.Outcome || prior.Revision != expected.Revision || prior.EvidenceRef != expected.EvidenceRef {
+				return state.ErrConflict
+			}
 			continue
 		}
 		if err := review.RecordLaterFeedback(ctx, engine, attempt, pull, comment); err != nil {
 			return err
 		}
+		known[id] = expected
+		newFeedback = true
 	}
-	snapshot, err := engine.Store.Load(ctx)
-	if err != nil {
-		return err
+	if newFeedback {
+		snapshot, err = engine.Store.Load(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	current, ok := snapshot.State.Attempts[attempt.ID]
 	if !ok || current.Admission != attempt.Admission || current.Publication == nil || *current.Publication != *attempt.Publication {
