@@ -113,6 +113,14 @@ func TestConfigurationSchema(t *testing.T) {
 			text: replace("ready_status: Ready", "ready_status: ''"),
 		},
 		{
+			name: "padded Ready status",
+			text: replace("ready_status: Ready", "ready_status: ' Ready '"),
+		},
+		{
+			name: "padded lifecycle status",
+			text: replace("    spec_review: Spec Review", "    spec_review: ' Spec Review '"),
+		},
+		{
 			name: "unknown profile field",
 			text: replace("  agent: copilot", "  agent: copilot\n  unknown: true"),
 		},

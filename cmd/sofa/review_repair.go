@@ -557,7 +557,7 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 		FeedbackText: selected.FeedbackText,
 	}
 	if err := revalidateRepairReview(c, preflightManifest, currentPull, currentReviews, ""); err != nil {
-		_ = engine.Fail(ctx, fence, "authority")
+		_ = engine.FailReviewRepair(ctx, fence)
 		return err
 	}
 	m := repairManifest{

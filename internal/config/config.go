@@ -182,7 +182,7 @@ func (c Config) Validate() error {
 			return errors.New("immutable repository, Project, and owner IDs are required")
 		}
 	}
-	if len(c.ReadyStatus) > 100 || strings.ContainsAny(c.ReadyStatus, "\r\n\x00") {
+	if len(c.ReadyStatus) > 100 || strings.TrimSpace(c.ReadyStatus) != c.ReadyStatus || strings.ContainsAny(c.ReadyStatus, "\r\n\x00") {
 		return errors.New("ready_status is required")
 	}
 	if !envPattern.MatchString(c.Profile.SecretEnv) {
@@ -231,7 +231,7 @@ func (c Config) Validate() error {
 		seenNames := map[string]bool{}
 		for _, stage := range lifecycleStages {
 			name := l.Statuses[stage]
-			if name == "" || len(name) > 100 || strings.ContainsAny(name, "\r\n\x00") || seenNames[name] {
+			if name == "" || len(name) > 100 || strings.TrimSpace(name) != name || strings.ContainsAny(name, "\r\n\x00") || seenNames[name] {
 				return errors.New("lifecycle requires distinct, bounded status names")
 			}
 			seenNames[name] = true

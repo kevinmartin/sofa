@@ -10,9 +10,10 @@ references, never secret values.
 
 Milestone 02 adds an optional `lifecycle` block for consumers enabling Project
 Discovery and completion reconciliation. `statuses` maps all ten canonical
-stages to distinct names in the Project's built-in Status field. Its `ready`
-entry must equal the existing `ready_status`; existing delivery-only callers
-may omit the block. `poll_minutes` defaults to ten and accepts 60 for the hourly
+stages to distinct names without surrounding whitespace in the Project's
+built-in Status field. Its `ready` entry must equal the existing `ready_status`;
+existing delivery-only callers may omit the block. `poll_minutes` defaults to
+ten and accepts 60 for the hourly
 economy preset. `discovery_wip` and `delivery_wip` default to two and one.
 Optional `dependencies_field` and `priority_field` name owner-managed Project
 fields. Dependencies use `none` or strict same-repository `#N` references;

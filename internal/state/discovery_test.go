@@ -506,6 +506,18 @@ func TestUnapprovedLaterRevisionRestoresLastApprovedSpec(t *testing.T) {
 	newAdmission := first
 	newAdmission.StatusUpdatedAt = base.Add(6 * time.Hour)
 	newAdmission.SourceDigest = newSource // A manual return to Discovery can keep the idea unchanged.
+	staleAdmission := newAdmission
+	staleAdmission.SourceDigest = oldSource
+	if _, _, err := engine.AdmitDiscovery(ctx, staleAdmission, 2, 3); !errors.Is(err, ErrAdmissionChanged) {
+		t.Fatalf("reset reused the last approved source: %v", err)
+	}
+	unchanged, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.State.Discoveries[first.IssueID] != current || unchanged.State.Specs[first.IssueID] != rejected || len(unchanged.State.DiscoveryResetHistory[first.IssueID]) != 0 {
+		t.Fatal("rejected reset changed Discovery or specification state")
+	}
 	task, created, err := engine.AdmitDiscovery(ctx, newAdmission, 2, 3)
 	if err != nil || !created || task.Revision != 1 || task.ModelCalls != 2 {
 		t.Fatalf("unapproved v1 reset: %+v, %v, %v", task, created, err)

@@ -132,6 +132,10 @@ func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission
 				}
 				s.DiscoveryHistory[task.IssueID] = append(s.DiscoveryHistory[task.IssueID], previous)
 			} else {
+				history := s.DiscoveryHistory[task.IssueID]
+				if len(history) > 0 && history[len(history)-1].SourceDigest == task.SourceDigest {
+					return false, fmt.Errorf("%w: source matches the last approved Discovery revision", ErrAdmissionChanged)
+				}
 				if s.DiscoveryResetHistory == nil {
 					s.DiscoveryResetHistory = map[string][]DiscoveryTask{}
 				}
