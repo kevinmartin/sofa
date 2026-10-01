@@ -82,6 +82,33 @@ func TestFixedHoldAdviceSeparatesIssueAndRedactsUntrustedDetails(t *testing.T) {
 	}
 }
 
+func TestCompleteLifecycleAdvisoriesKeepsFixedGateReasonAcrossPollPasses(t *testing.T) {
+	items := []github.ProjectWorkItem{{
+		Issue: admission.Snapshot{
+			IssueID:       "gate-hold",
+			Number:        11,
+			CurrentStatus: "Verification",
+		},
+	}}
+	result := lifecycleReconcileResult{
+		Held: []int{11},
+		HoldAdvisories: []lifecycleAdvisory{fixedHoldAdvice(lifecycle.Effect{
+			IssueNumber:   11,
+			BlockedReason: "required gate plan or candidate unavailable",
+			NextAction:    "untrusted detail",
+		})},
+	}
+	statuses := lifecycle.Statuses{
+		lifecycle.Verification: "Verification",
+	}
+	for range 2 {
+		desired := completeLifecycleAdvisories(&result, items, statuses)
+		if got := desired[11]; got.BlockedReason != "required gate evidence unavailable or failed" || got.NextAction != "inspect current required gate evidence" {
+			t.Fatalf("gate hold lost its fixed reason after repeated reconciliation: %+v", got)
+		}
+	}
+}
+
 func TestCompleteLifecycleAdvisoriesIsolatesHoldsAndClearsResolvedItems(t *testing.T) {
 	items := []github.ProjectWorkItem{
 		{Issue: admission.Snapshot{IssueID: "backlog", Number: 7, CurrentStatus: "Backlog"}},

@@ -484,7 +484,7 @@ func fixedHoldAdvice(effect lifecycle.Effect) lifecycleAdvisory {
 	case "unknown Project status":
 		advice.BlockedReason = "unknown Project status"
 		advice.NextAction = "update trusted status mapping"
-	case "Project item identity changed", "Project changed during pending transition", "pending transition no longer justified":
+	case "Project item identity changed", "Project changed during pending transition", "pending transition no longer justified", "Project status conflicts with recorded transition":
 		advice.BlockedReason = "Project status conflicts with recorded transition"
 		advice.NextAction = "inspect current Project item and recorded status"
 	case "ambiguous attempts for Project item":
@@ -508,7 +508,7 @@ func fixedHoldAdvice(effect lifecycle.Effect) lifecycleAdvisory {
 	case "closed without merge":
 		advice.BlockedReason = "closed without merge"
 		advice.NextAction = "inspect closed PR"
-	case "required gate plan or candidate unavailable", "ambiguous gate evidence", "invalid gate plan", "required gate evidence missing or stale", "required gate did not pass":
+	case "required gate plan or candidate unavailable", "ambiguous gate evidence", "invalid gate plan", "required gate evidence missing or stale", "required gate did not pass", "required gate evidence unavailable or failed":
 		advice.BlockedReason = "required gate evidence unavailable or failed"
 		advice.NextAction = "inspect current required gate evidence"
 	case "merge identity unavailable":
