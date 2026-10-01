@@ -800,6 +800,76 @@ func TestBoardSnapshotPreservesProjectIdentity(t *testing.T) {
 	}
 }
 
+func TestBoardMoveRejectsPRChangedAfterScan(t *testing.T) {
+	ctx := context.Background()
+	when := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	c := config.Config{Repository: "owner/repo", ProjectID: "P_1"}
+	statuses := lifecycle.Statuses{
+		lifecycle.Inbox: "Inbox", lifecycle.Discovery: "Discovery", lifecycle.SpecReview: "Spec Review",
+		lifecycle.Backlog: "Backlog", lifecycle.Ready: "Ready", lifecycle.Building: "Building",
+		lifecycle.Verification: "Verification", lifecycle.Review: "Review", lifecycle.Release: "Release", lifecycle.Done: "Done",
+	}
+	item := admission.Snapshot{
+		IssueID: "I_7", ProjectItemID: "PVTI_7", Number: 7,
+		StatusOptionID: "building-option", StatusUpdatedAt: when,
+	}
+	engine := state.Engine{Store: &state.MemoryStore{}}
+	if err := engine.ObserveBoard(ctx, boardFromSnapshot(c, lifecycle.Building, item)); err != nil {
+		t.Fatal(err)
+	}
+	head := strings.Repeat("a", 40)
+	base := strings.Repeat("b", 40)
+	effect := lifecycle.Effect{
+		Kind: lifecycle.Move, IssueID: item.IssueID, IssueNumber: item.Number,
+		From: lifecycle.Building, To: lifecycle.Verification,
+		PRFence: &lifecycle.PRMoveFence{
+			Number: 7, URL: "https://github.com/owner/repo/pull/7", HeadSHA: head, BaseSHA: base,
+		},
+	}
+	mutationCalls := 0
+	client, err := github.New("fixture-token", lifecycleRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/pulls/7" {
+			return lifecycleJSONResponse(200, map[string]any{
+				"number": 7, "html_url": effect.PRFence.URL, "state": "open", "draft": true,
+				"updated_at": when,
+				"head":       map[string]any{"sha": strings.Repeat("c", 40), "ref": "sofa/issue-7", "repo": map[string]any{"full_name": c.Repository}},
+				"base":       map[string]any{"sha": base, "ref": "main", "repo": map[string]any{"full_name": c.Repository}},
+			}), nil
+		}
+		var request struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case strings.Contains(request.Query, "fields(first:"):
+			return lifecycleJSONResponse(200, map[string]any{"data": map[string]any{"node": map[string]any{
+				"id": c.ProjectID, "public": false,
+				"fields": map[string]any{"nodes": []any{map[string]any{
+					"id": "status-field", "name": "Status", "options": []any{
+						map[string]any{"id": "building-option", "name": statuses[lifecycle.Building]},
+						map[string]any{"id": "verification-option", "name": statuses[lifecycle.Verification]},
+					},
+				}}, "pageInfo": map[string]any{"hasNextPage": false}},
+			}}}), nil
+		case strings.HasPrefix(request.Query, "mutation"):
+			mutationCalls++
+			return lifecycleJSONResponse(200, map[string]any{"data": map[string]any{}}), nil
+		default:
+			t.Fatalf("unexpected GitHub request: %s", request.Query)
+			return nil, nil
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyBoardMove(ctx, client, engine, c, statuses, effect, item); err == nil || !strings.Contains(err.Error(), "PR identity or revision changed") {
+		t.Fatalf("changed PR head did not block stale board move: %v", err)
+	}
+	if mutationCalls != 0 {
+		t.Fatalf("stale PR head reached Project mutation: %d", mutationCalls)
+	}
+}
+
 func TestAttemptForItemFailsClosedOnAmbiguousOrWrongIdentity(t *testing.T) {
 	when := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	digest := strings.Repeat("a", 64)

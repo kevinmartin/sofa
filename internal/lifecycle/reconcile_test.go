@@ -154,6 +154,9 @@ func TestScanKeepsPRResultsAndResourcesSeparate(t *testing.T) {
 	if len(effects) != 2 || effects[0].Kind != Hold || effects[0].BlockedReason == "" || effects[1].Kind != Move || effects[1].To != Review {
 		t.Fatalf("one PR's failure interfered with the other: %+v", effects)
 	}
+	if fence := effects[1].PRFence; fence == nil || fence.Number != 2 || fence.URL != input.Evidence["I_2"].PRURL || fence.HeadSHA != input.Evidence["I_2"].HeadSHA || fence.BaseSHA != input.Evidence["I_2"].BaseSHA {
+		t.Fatalf("move lost its exact PR identity: %+v", fence)
+	}
 	input.Evidence["I_1"] = input.Evidence["I_2"] // Swapped PR identity cannot borrow success.
 	effects, err = Scan(input)
 	if err != nil {
@@ -182,6 +185,31 @@ func TestScanRetriesPendingMoveOnlyWithCurrentEvidence(t *testing.T) {
 	effects, err = Scan(input)
 	if err != nil || effects[0].Kind != Hold || effects[0].RetryIntent || effects[0].BlockedReason == "" || effects[1].Kind != Move {
 		t.Fatalf("stale evidence retried or affected another item: %+v, %v", effects, err)
+	}
+}
+
+func TestScanHoldsPendingBuildingMoveAfterPRChanges(t *testing.T) {
+	input := scanFixture(t)
+	input.Issues[0].CurrentStatus = "Building"
+	input.Issues[0].StatusOptionID = "building-option"
+	prior := input.Ledger.Projections["I_1"]
+	prior.Stage = "building"
+	prior.OptionID = "building-option"
+	prior.PendingStage = "verification"
+	prior.PendingOptionID = "verification-option"
+	prior.PendingFromOptionID = prior.OptionID
+	prior.PendingFromUpdatedAt = prior.UpdatedAt
+	input.Ledger.Projections["I_1"] = prior
+	changed := input.Evidence["I_1"]
+	changed.HeadSHA = strings.Repeat("d", 40)
+	input.Evidence["I_1"] = changed
+
+	effects, err := Scan(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effects[0].Kind != Hold || effects[0].BlockedReason != "pending transition no longer justified" || !effects[0].Conflict || effects[1].Kind != Move {
+		t.Fatalf("changed PR retried a stale move or blocked another item: %+v", effects)
 	}
 }
 

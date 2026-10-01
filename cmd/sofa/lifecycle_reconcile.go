@@ -1101,6 +1101,19 @@ func applyBoardMove(ctx context.Context, client *github.Client, engine state.Eng
 			return err
 		}
 	}
+	if effect.From != lifecycle.Discovery {
+		if effect.PRFence == nil || effect.PRFence.Number < 1 {
+			return errors.New("project move lacks exact PR identity")
+		}
+		pull, err := client.Pull(ctx, c.Repository, effect.PRFence.Number)
+		if err != nil {
+			return err
+		}
+		fence := effect.PRFence
+		if pull.URL != fence.URL || pull.HeadSHA != fence.HeadSHA || pull.BaseSHA != fence.BaseSHA || (pull.State == "closed") != fence.Closed || pull.Merged != fence.Merged || pull.MergeCommitSHA != fence.MergeCommitSHA {
+			return errors.New("project move PR identity or revision changed")
+		}
+	}
 	if err := client.SetProjectStatusIfCurrent(ctx, item.IssueID, c.ProjectID, item.ProjectItemID, item.StatusOptionID, item.StatusUpdatedAt, statuses, effect.To); err != nil {
 		return err
 	}

@@ -52,12 +52,25 @@ type Effect struct {
 	IssueNumber   int
 	From          Stage
 	To            Stage
+	PRFence       *PRMoveFence
 	OptionID      string
 	UpdatedAt     time.Time
 	BlockedReason string
 	NextAction    string
 	Conflict      bool
 	RetryIntent   bool
+}
+
+// PRMoveFence binds a proposed board move to the PR observed during the scan.
+// The writer must re-read this identity immediately before changing Projects.
+type PRMoveFence struct {
+	Number         int64
+	URL            string
+	HeadSHA        string
+	BaseSHA        string
+	Closed         bool
+	Merged         bool
+	MergeCommitSHA string
 }
 
 // Scan computes bounded effects from one complete Project poll. It never
@@ -211,6 +224,11 @@ func Scan(input ScanInput) ([]Effect, error) {
 		effect.BlockedReason = decision.BlockedReason
 		effect.NextAction = decision.NextAction
 		effect.Conflict = decision.Conflict
+		if pendingRetry && decision.MoveTo == "" {
+			effect.BlockedReason = "pending transition no longer justified"
+			effect.NextAction = "inspect changed PR and pending move"
+			effect.Conflict = true
+		}
 		if decision.MoveTo != "" {
 			if pendingRetry && string(decision.MoveTo) != prior.PendingStage {
 				effect.BlockedReason = "pending transition no longer justified"
@@ -219,6 +237,15 @@ func Scan(input ScanInput) ([]Effect, error) {
 				effect.Kind = Move
 				effect.To = decision.MoveTo
 				effect.RetryIntent = pendingRetry
+				effect.PRFence = &PRMoveFence{
+					Number:         observed.PRNumber,
+					URL:            observed.PRURL,
+					HeadSHA:        observed.HeadSHA,
+					BaseSHA:        observed.BaseSHA,
+					Closed:         observed.Closed,
+					Merged:         observed.Merged,
+					MergeCommitSHA: observed.MergedSHA,
+				}
 			}
 		}
 		effects = append(effects, effect)
