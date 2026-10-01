@@ -75,6 +75,25 @@ items and code-writing delivery to one per repository; changing either cap is
 a trusted configuration change. Child work and repair must reuse the parent's cumulative
 budget and PR identity.
 
+For a live owner-review repair, publish draft PRs under an identity distinct
+from `owner_id`. GitHub does not let the PR author submit a formal
+`CHANGES_REQUESTED` review on that same PR. A consumer can pass
+`SOFA_PUBLISH_APP_ID` and `SOFA_PUBLISH_APP_PRIVATE_KEY` to both the delivery
+and review reusable callers. The installed App needs **Contents: read/write**
+and **Pull requests: read/write** on only that consumer repository. Approve
+those permissions on its installation after changing the App, then store its
+numeric ID and private key under those two repository secret names. The trusted
+publisher job mints a repository-scoped, short-lived installation token and
+revokes it at job end. The worker, verifier, and failure finalizer do not see
+that key or token. Keep `SOFA_PROJECTS_TOKEN` separate and keep `owner_id` set
+to the human reviewer. Existing consumers can continue passing
+`SOFA_PUBLISH_TOKEN`; when both App secrets are configured, the App identity
+takes precedence so old callers can retain their token during migration. A
+partial App configuration fails the publication job rather than falling back
+to the legacy identity. Before exercising review repair, verify that the new
+draft PR's author ID differs from `owner_id` and that the owner's review binds
+its current head.
+
 If `priority_field` is configured, set its Project value to exactly `P0`
 through `P4`, with `P0` highest. Within one priority, lower issue numbers run
 first. A blank or different value holds that item rather than guessing its
