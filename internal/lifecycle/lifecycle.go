@@ -166,9 +166,16 @@ func GatesPassed(required []string, evidence []GateEvidence, candidateSHA, baseS
 	if !shaPattern.MatchString(candidateSHA) || !shaPattern.MatchString(baseSHA) || len(required) == 0 {
 		return false, "required gate plan or candidate unavailable"
 	}
-	results := make(map[string]GateEvidence, len(evidence))
+	seen := make(map[string]bool, len(required))
+	for _, gate := range required {
+		if gate == "" || seen[gate] {
+			return false, "invalid gate plan"
+		}
+		seen[gate] = true
+	}
+	results := make(map[string]GateEvidence, len(required))
 	for _, result := range evidence {
-		if result.ID == "" || result.CandidateSHA != candidateSHA || result.BaseSHA != baseSHA || result.Fixture && !allowFixture {
+		if !seen[result.ID] || result.CandidateSHA != candidateSHA || result.BaseSHA != baseSHA || result.Fixture && !allowFixture {
 			continue
 		}
 		if _, exists := results[result.ID]; exists {
@@ -176,12 +183,7 @@ func GatesPassed(required []string, evidence []GateEvidence, candidateSHA, baseS
 		}
 		results[result.ID] = result
 	}
-	seen := make(map[string]bool, len(required))
 	for _, gate := range required {
-		if gate == "" || seen[gate] {
-			return false, "invalid gate plan"
-		}
-		seen[gate] = true
 		result, ok := results[gate]
 		if !ok {
 			return false, "required gate evidence missing or stale"

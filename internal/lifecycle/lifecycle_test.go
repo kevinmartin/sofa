@@ -128,6 +128,31 @@ func TestGatesAndProjectionFailClosed(t *testing.T) {
 	}
 }
 
+func TestGatesPassedIgnoresDuplicateUnrelatedEvidence(t *testing.T) {
+	candidateSHA := strings.Repeat("a", 40)
+	baseSHA := strings.Repeat("b", 40)
+	quality := GateEvidence{
+		ID:           "quality",
+		CandidateSHA: candidateSHA,
+		BaseSHA:      baseSHA,
+		Outcome:      GatePassed,
+	}
+	unrelated := GateEvidence{
+		ID:           "telemetry",
+		CandidateSHA: candidateSHA,
+		BaseSHA:      baseSHA,
+		Outcome:      GateFailed,
+	}
+	evidence := []GateEvidence{quality, unrelated, unrelated}
+	if passed, reason := GatesPassed([]string{"quality"}, evidence, candidateSHA, baseSHA, false); !passed || reason != "" {
+		t.Fatalf("unrelated duplicate blocked required gate: passed=%t reason=%q", passed, reason)
+	}
+	evidence = append(evidence, quality)
+	if passed, reason := GatesPassed([]string{"quality"}, evidence, candidateSHA, baseSHA, false); passed || reason != "ambiguous gate evidence" {
+		t.Fatalf("duplicate required gate was accepted: passed=%t reason=%q", passed, reason)
+	}
+}
+
 func TestLifecycleTransitionsAndTerminalOutcomes(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	baseSHA := strings.Repeat("c", 40)
