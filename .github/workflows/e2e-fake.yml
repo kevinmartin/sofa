@@ -53,13 +53,13 @@ jobs:
       contents: read
     steps:
       - name: Check out exact disposable fixture
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.disposable_base_sha }}
           persist-credentials: false
           path: consumer
       - name: Check out exact sofa candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kevinmartin/sofa
           ref: ${{ inputs.candidate_sha }}
@@ -223,13 +223,13 @@ jobs:
           github-token: ${{ github.token }}
           path: candidate
       - name: Check out exact disposable fixture
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.disposable_base_sha }}
           persist-credentials: false
           path: consumer
       - name: Check out exact sofa candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kevinmartin/sofa
           ref: ${{ inputs.candidate_sha }}
@@ -294,13 +294,13 @@ jobs:
           name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
       - name: Check out exact disposable fixture
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.disposable_base_sha }}
           persist-credentials: false
           path: consumer
       - name: Check out exact sofa candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kevinmartin/sofa
           ref: ${{ inputs.candidate_sha }}
@@ -398,13 +398,13 @@ jobs:
       contents: read
     steps:
       - name: Check out exact disposable fixture
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.disposable_base_sha }}
           persist-credentials: false
           path: consumer
       - name: Check out exact sofa candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kevinmartin/sofa
           ref: ${{ inputs.candidate_sha }}
