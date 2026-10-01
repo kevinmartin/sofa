@@ -90,6 +90,22 @@ jobs:
         run: |
           mkdir -p transport
           ./sofa lifecycle reconcile --config consumer/.sofa.yml --wake-id "$SOFA_WAKE_ID" --out transport/lifecycle.json
+      - name: Summarize Backlog review suggestions
+        shell: bash
+        env:
+          SOFA_REPOSITORY: ${{ github.repository }}
+        run: |
+          jq -e '.backlog_advisories | type == "array" and length <= 2000 and all(.[]; (.issue_number | type == "number") and .issue_number > 0 and (.blocked_reason | type == "string") and (.next_action | type == "string"))' transport/lifecycle.json >/dev/null
+          count=$(jq '.backlog_advisories | length' transport/lifecycle.json)
+          if (( count > 0 )); then
+            {
+              echo '### Backlog review suggestions'
+              jq -r --arg repo "$SOFA_REPOSITORY" '.backlog_advisories[:20][] | "- [Issue #\(.issue_number)](https://github.com/\($repo)/issues/\(.issue_number)): \(.blocked_reason). Next: \(.next_action)."' transport/lifecycle.json
+              if (( count > 20 )); then
+                echo "Showing the first 20 of $count suggestions."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Dispatch owner-admitted Discovery issues
         shell: bash
         env:

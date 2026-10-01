@@ -9,8 +9,10 @@ Keep `ready_status` equal to the Ready mapping.
 
 Create a **Product** view filtered to Inbox, Discovery, Spec Review, and
 Backlog, and a **Delivery** view filtered to Ready through Done. Keep an
-unfiltered view for audit. Blocked reason and next action are separate ledger
-metadata; moving a blocked item to a special column would hide its handoff.
+unfiltered view for audit. Lifecycle decisions keep blocked reason and next
+action separate from the stage. Backlog suggestions also appear in the poll
+result and Actions run summary. Moving a blocked item to a special column
+would hide its handoff.
 
 Only Kevin, another explicitly designated owner, and the trusted factory
 controller credential should have Project write access. GitHub Projects does
@@ -60,9 +62,11 @@ If Actions is delayed or cancelled, run the trusted reconciliation caller
 again. It must inspect the persisted claim and current Project/PR/check state
 before doing work. If a board item was moved manually, inspect its status and
 ledger before changing it; do not repeatedly force the expected column. If a
-specification changed, return it to Spec Review and require a fresh owner
-Backlog gesture. A missing or stale required gate leaves the candidate draft
-and blocked in Verification. After merge, observe the actual merge/default
+Backlog specification or source changed, the controller holds it and suggests
+an owner move to Discovery. A new versioned proposal then returns to Spec
+Review and requires a fresh owner Backlog gesture. The controller never makes
+either approval move. A missing or stale required gate leaves the candidate
+draft and blocked in Verification. After merge, observe the actual merge/default
 branch commit and configured release checks before Done. A failed release
 remains Release with a linked correction; it does not grant deployment or
 rollback authority.

@@ -26,13 +26,22 @@ type lifecycleReconcileOptions struct {
 }
 
 type lifecycleReconcileResult struct {
-	Claimed     bool  `json:"claimed"`
-	Generation  int64 `json:"generation,omitempty"`
-	MissedTicks int64 `json:"missed_ticks,omitempty"`
-	Discovery   []int `json:"discovery_issue_numbers"`
-	Ready       []int `json:"ready_issue_numbers"`
-	Held        []int `json:"held_issue_numbers"`
-	Moved       []int `json:"moved_issue_numbers"`
+	Claimed           bool                `json:"claimed"`
+	Generation        int64               `json:"generation,omitempty"`
+	MissedTicks       int64               `json:"missed_ticks,omitempty"`
+	Discovery         []int               `json:"discovery_issue_numbers"`
+	Ready             []int               `json:"ready_issue_numbers"`
+	Held              []int               `json:"held_issue_numbers"`
+	Moved             []int               `json:"moved_issue_numbers"`
+	BacklogAdvisories []lifecycleAdvisory `json:"backlog_advisories"`
+}
+
+// Lifecycle advice contains only fixed controller text and an issue number;
+// untrusted issue/comment content never enters the public workflow summary.
+type lifecycleAdvisory struct {
+	IssueNumber   int    `json:"issue_number"`
+	BlockedReason string `json:"blocked_reason"`
+	NextAction    string `json:"next_action"`
 }
 
 // newLifecycleCommand exposes reconciliation with a stable optional event wake ID.
@@ -101,13 +110,14 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 		return err
 	}
 	result := lifecycleReconcileResult{
-		Claimed:     claim.Claimed,
-		Generation:  claim.Generation,
-		MissedTicks: claim.Missed,
-		Discovery:   []int{},
-		Ready:       []int{},
-		Held:        []int{},
-		Moved:       []int{},
+		Claimed:           claim.Claimed,
+		Generation:        claim.Generation,
+		MissedTicks:       claim.Missed,
+		Discovery:         []int{},
+		Ready:             []int{},
+		Held:              []int{},
+		Moved:             []int{},
+		BacklogAdvisories: []lifecycleAdvisory{},
 	}
 	if !claim.Claimed {
 		return writeJSON(opts.outPath, result)
@@ -129,12 +139,21 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	if err != nil {
 		return err
 	}
+	ledger, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
 	issues := make([]admission.Snapshot, 0, len(items))
 	byID := make(map[string]admission.Snapshot, len(items))
+	stageByNumber := make(map[int]lifecycle.Stage, len(items))
 	for _, item := range items {
 		issues = append(issues, item.Issue)
 		byID[item.Issue.IssueID] = item.Issue
+		if stage, known := statuses.StageFor(item.Issue.CurrentStatus); known {
+			stageByNumber[item.Issue.Number] = stage
+		}
 	}
+	changedBacklog := backlogSourceChanges(c, items, ledger.State.Specs, statuses)
 	// Approval observations are deterministic and scoped to one item. One
 	// invalid candidate must not stop unrelated Project items in the same scan.
 	for _, item := range items {
@@ -148,12 +167,25 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 				result.Held = append(result.Held, item.Issue.Number)
 			}
 		case lifecycle.Backlog:
+			if changedBacklog[item.Issue.IssueID] {
+				result.Held = append(result.Held, item.Issue.Number)
+				result.BacklogAdvisories = append(result.BacklogAdvisories, revisedBacklogAdvice(item.Issue.Number))
+				continue
+			}
 			if _, _, err := discovery.ObserveBacklog(ctx, projects, store, policy, item.Issue); err != nil {
 				result.Held = append(result.Held, item.Issue.Number)
+				if errors.Is(err, discovery.ErrRevision) {
+					result.BacklogAdvisories = append(result.BacklogAdvisories, revisedBacklogAdvice(item.Issue.Number))
+				}
+				continue
+			}
+			if advice, needed := backlogOwnerFieldAdvice(item, stageByNumber); needed {
+				result.Held = append(result.Held, item.Issue.Number)
+				result.BacklogAdvisories = append(result.BacklogAdvisories, advice)
 			}
 		}
 	}
-	ledger, err := store.Load(ctx)
+	ledger, err = store.Load(ctx)
 	if err != nil {
 		return err
 	}
@@ -315,6 +347,73 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 	result.Held = uniqueInts(result.Held)
 	result.Moved = uniqueInts(result.Moved)
 	return writeJSON(opts.outPath, result)
+}
+
+// backlogSourceChanges compares trusted, recorded proposal sources with the
+// current issue text before fetching comments. An invalid or changed source
+// needs re-review; it cannot inherit the old Backlog approval.
+func backlogSourceChanges(c config.Config, items []github.ProjectWorkItem, specs map[string]state.SpecRecord, statuses lifecycle.Statuses) map[string]bool {
+	approved := make(map[int]string)
+	current := make(map[int]string)
+	byNumber := make(map[int]string)
+	for _, item := range items {
+		issue := item.Issue
+		stage, known := statuses.StageFor(issue.CurrentStatus)
+		if !known || stage != lifecycle.Backlog {
+			continue
+		}
+		record, found := specs[issue.IssueID]
+		if !found || !strings.EqualFold(record.Repository, c.Repository) || record.Issue != int64(issue.Number) || record.ProjectID != c.ProjectID || record.ProjectItemID != issue.ProjectItemID {
+			continue
+		}
+		approved[issue.Number] = record.SourceDigest
+		byNumber[issue.Number] = issue.IssueID
+		if _, digest, err := admission.CanonicalSpec(issue.Title, issue.Body); err == nil {
+			current[issue.Number] = digest
+		}
+	}
+	changed := make(map[string]bool)
+	for _, number := range lifecycle.ChangedBacklog(approved, current) {
+		changed[byNumber[number]] = true
+	}
+	return changed
+}
+
+func revisedBacklogAdvice(number int) lifecycleAdvisory {
+	return lifecycleAdvisory{
+		IssueNumber:   number,
+		BlockedReason: "specification proposal or source changed",
+		NextAction:    "move to Discovery for a revised specification and fresh Backlog approval",
+	}
+}
+
+// backlogOwnerFieldAdvice reports only configured, owner-controlled metadata.
+// It never edits the issue, changes a Project status, or starts inference.
+func backlogOwnerFieldAdvice(item github.ProjectWorkItem, stages map[int]lifecycle.Stage) (lifecycleAdvisory, bool) {
+	advice := lifecycleAdvisory{
+		IssueNumber: item.Issue.Number,
+	}
+	switch {
+	case item.MetadataError != "":
+		advice.BlockedReason = "owner-managed Project field invalid"
+		advice.NextAction = "correct the configured dependency or priority field"
+	case !item.DependenciesKnown:
+		advice.BlockedReason = "owner-managed dependencies unavailable"
+		advice.NextAction = "set the configured dependencies field to none or same-repository issue references"
+	case !item.PriorityKnown:
+		advice.BlockedReason = "owner-managed priority unavailable"
+		advice.NextAction = "set the configured priority field to P0 through P4"
+	default:
+		ready, _, err := lifecycle.DependenciesReady(item.Dependencies, stages)
+		if err != nil {
+			advice.BlockedReason = "owner-managed dependencies invalid"
+			advice.NextAction = "correct the configured dependencies field"
+		} else if !ready {
+			advice.BlockedReason = "dependencies have not reached Done"
+			advice.NextAction = "wait for dependencies to reach Done or revise the owner-managed field"
+		}
+	}
+	return advice, advice.BlockedReason != ""
 }
 
 // doneCorrectionPatrol selects a stable, round-robin slice so every Done
