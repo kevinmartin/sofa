@@ -11,6 +11,7 @@ import (
 
 type reviewStep struct {
 	Name string            `yaml:"name"`
+	If   string            `yaml:"if"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
 	Env  map[string]string `yaml:"env"`
@@ -29,7 +30,9 @@ type reviewWorkflow struct {
 	On   struct {
 		WorkflowCall struct {
 			Inputs  map[string]any `yaml:"inputs"`
-			Secrets map[string]any `yaml:"secrets"`
+			Secrets map[string]struct {
+				Required bool `yaml:"required"`
+			} `yaml:"secrets"`
 		} `yaml:"workflow_call"`
 	} `yaml:"on"`
 	Jobs map[string]reviewJob `yaml:"jobs"`
@@ -44,7 +47,7 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 	if err := yaml.Unmarshal(data, &w); err != nil {
 		t.Fatal(err)
 	}
-	if w.Name == "" || len(w.On.WorkflowCall.Inputs) != 2 || len(w.On.WorkflowCall.Secrets) != 2 {
+	if w.Name == "" || len(w.On.WorkflowCall.Inputs) != 2 || len(w.On.WorkflowCall.Secrets) != 4 {
 		t.Fatal("review workflow call contract changed")
 	}
 	for _, name := range []string{"toolkit_sha", "issue_number"} {
@@ -52,8 +55,9 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 			t.Fatalf("missing %s input", name)
 		}
 	}
-	for _, name := range []string{"SOFA_PROJECTS_TOKEN", "SOFA_PUBLISH_TOKEN"} {
-		if _, ok := w.On.WorkflowCall.Secrets[name]; !ok {
+	for _, name := range []string{"SOFA_PROJECTS_TOKEN", "SOFA_PUBLISH_TOKEN", "SOFA_PUBLISH_APP_ID", "SOFA_PUBLISH_APP_PRIVATE_KEY"} {
+		secret, ok := w.On.WorkflowCall.Secrets[name]
+		if !ok || secret.Required != (name == "SOFA_PROJECTS_TOKEN") {
 			t.Fatalf("missing %s caller-owned secret", name)
 		}
 	}
@@ -87,6 +91,11 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 	}
 	for jobName, job := range w.Jobs {
 		for _, step := range job.Steps {
+			if strings.HasPrefix(step.Uses, "actions/create-github-app-token@") {
+				if jobName != "publish" || step.If != "steps.publisher-auth.outputs.mode == 'app'" || step.With["permission-contents"] != "write" || step.With["permission-pull-requests"] != "write" || step.With["owner"] != "" || step.With["repositories"] != "" {
+					t.Errorf("App publisher credential escaped repository-scoped publish job")
+				}
+			}
 			for name := range step.Env {
 				switch name {
 				case "SOFA_MODEL_TOKEN":
@@ -101,6 +110,10 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 					if jobName != "publish" {
 						t.Errorf("publisher token present in %s", jobName)
 					}
+				case "SOFA_HAS_APP_ID", "SOFA_HAS_APP_KEY", "SOFA_HAS_LEGACY_TOKEN":
+					if jobName != "publish" {
+						t.Errorf("publisher credential selection present in %s", jobName)
+					}
 				case "SOFA_STATE_TOKEN":
 					if jobName != "admit" && jobName != "finalize-failure" {
 						t.Errorf("state token present in %s", jobName)
@@ -108,6 +121,21 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 				}
 			}
 		}
+	}
+	var appMint, publication int
+	for _, step := range w.Jobs["publish"].Steps {
+		if strings.HasPrefix(step.Uses, "actions/create-github-app-token@") {
+			appMint++
+		}
+		if strings.Contains(step.Run, "./sofa review-repair publish") {
+			publication++
+			if !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "steps.publisher-app.outputs.token") || !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "secrets.SOFA_PUBLISH_TOKEN") {
+				t.Error("repair publisher lost App and legacy token selection")
+			}
+		}
+	}
+	if appMint != 1 || publication != 1 {
+		t.Fatal("repair publisher App or command missing")
 	}
 	for _, edge := range []struct{ producer, consumer, artifact string }{
 		{"admit", "execute", "sofa-review-manifest-"},

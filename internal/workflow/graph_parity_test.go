@@ -93,7 +93,7 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 		!strings.Contains(fake.Jobs["execute"].If, "refs/heads/sofa-e2e/") ||
 		work.Jobs["execute"].Permissions["copilot-requests"] != "write" ||
 		fake.Jobs["execute"].Permissions["copilot-requests"] != "" ||
-		!strings.Contains(string(workData), "${{ secrets.SOFA_PUBLISH_TOKEN }}") ||
+		!appPublisherBoundary(work.Jobs["publish"]) ||
 		strings.Contains(string(fakeData), "${{ secrets.") ||
 		!strings.Contains(string(workData), "./sofa publish") ||
 		!strings.Contains(string(fakeData), "go test -count=1 -run '^TestHostedArtifactPublication$'") ||
@@ -102,6 +102,27 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 		return fmt.Errorf("an intentional production/fake trust or source difference changed")
 	}
 	return nil
+}
+
+// The hosted fake has no publication credential. In production, only the
+// publisher may mint a repository-scoped App token or use the legacy token.
+func appPublisherBoundary(job contractJob) bool {
+	var mint, publish int
+	for _, step := range job.Steps {
+		switch step.Name {
+		case "Mint repository-scoped publisher App token":
+			mint++
+			if !strings.HasPrefix(step.Uses, "actions/create-github-app-token@") || step.If != "steps.publisher-auth.outputs.mode == 'app'" || step.With["owner"] != "" || step.With["repositories"] != "" || step.With["permission-contents"] != "write" || step.With["permission-pull-requests"] != "write" {
+				return false
+			}
+		case "Revalidate live authority and publish one draft PR":
+			publish++
+			if !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "steps.publisher-app.outputs.token") || !strings.Contains(step.Env["SOFA_PUBLISH_TOKEN"], "secrets.SOFA_PUBLISH_TOKEN") {
+				return false
+			}
+		}
+	}
+	return mint == 1 && publish == 1
 }
 
 func jobNames(w contractWorkflow) []string {
