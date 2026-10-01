@@ -79,6 +79,108 @@ func snapshot(t *testing.T, e Engine, id string) Attempt {
 	return s.State.Attempts[id]
 }
 
+func TestStopRevokedPendingFencesExactPrimaryReservation(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	first := admitted(t, e)
+	secondAdmission := admission()
+	secondAdmission.Issue = 8
+	secondAdmission.ProjectItemID = "item-8"
+	second, _, err := e.Admit(ctx, secondAdmission, limits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := e.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first = loaded.State.Attempts[first.ID]
+	first.Counts = Counters{ModelCalls: 1, RuntimeSeconds: 100}
+	first.Publication = &Publication{
+		Branch:          "sofa/issue-7",
+		ExpectedHead:    admission().BaseSHA,
+		CandidateDigest: admission().SpecDigest,
+	}
+	loaded.State.Attempts[first.ID] = first
+	if err := e.Store.CompareAndSwap(ctx, loaded.Revision, loaded.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.StopRevokedPending(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	got := snapshot(t, e, first.ID)
+	if got.Phase != Blocked || got.Failure != "authority" || got.Owner != nil || got.Generation != first.Generation+1 || got.Counts != first.Counts || got.Publication == nil || *got.Publication != *first.Publication || got.Dispatch != first.Dispatch {
+		t.Fatalf("revoked reservation lost its fence, budget, or publication: %+v", got)
+	}
+	if other := snapshot(t, e, second.ID); other.Phase != Pending || other.Generation != second.Generation {
+		t.Fatalf("another issue's reservation changed: %+v", other)
+	}
+	if err := e.StopRevokedPending(ctx, first); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("stale release replay = %v", err)
+	}
+}
+
+func TestStopRevokedPendingRejectsChangedOrClaimedReservation(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	if err := e.MarkDispatched(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.StopRevokedPending(ctx, a); !errors.Is(err, ErrStale) {
+		t.Fatalf("changed dispatch was not fenced: %v", err)
+	}
+	current := snapshot(t, e, a.ID)
+	if current.Phase != Pending || current.Failure != "" {
+		t.Fatalf("stale release changed reservation: %+v", current)
+	}
+	if _, err := e.Claim(ctx, a.ID, testOwner); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.StopRevokedPending(ctx, current); !errors.Is(err, ErrClaimed) {
+		t.Fatalf("claimed owner was not fenced: %v", err)
+	}
+	if current = snapshot(t, e, a.ID); current.Phase != Executing || current.Owner == nil || *current.Owner != testOwner {
+		t.Fatalf("revocation displaced active owner: %+v", current)
+	}
+}
+
+func TestStopRevokedPendingExcludesReviewRepair(t *testing.T) {
+	ctx := context.Background()
+	e := engine()
+	a := admitted(t, e)
+	loaded, err := e.Store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = loaded.State.Attempts[a.ID]
+	a.Publication = &Publication{
+		Branch:          "sofa/issue-7",
+		ExpectedHead:    admission().BaseSHA,
+		CandidateDigest: admission().SpecDigest,
+		HeadSHA:         strings.Repeat("d", 40),
+		PRNumber:        7,
+		PRURL:           "https://github.com/owner/consumer/pull/7",
+	}
+	a.Repair = &RepairIntent{
+		FeedbackID:   "review-7",
+		FeedbackHash: strings.Repeat("e", 64),
+		PRBaseSHA:    admission().BaseSHA,
+		PRHeadSHA:    a.Publication.HeadSHA,
+		PRNumber:     7,
+	}
+	loaded.State.Attempts[a.ID] = a
+	if err := e.Store.CompareAndSwap(ctx, loaded.Revision, loaded.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.StopRevokedPending(ctx, a); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("review repair reservation was treated as delivery: %v", err)
+	}
+	if got := snapshot(t, e, a.ID); got.Phase != Pending || got.Repair == nil || got.Generation != a.Generation {
+		t.Fatalf("review repair was revoked: %+v", got)
+	}
+}
+
 func TestAdmissionCrashAndDedup(t *testing.T) {
 	e := engine()
 	a := admitted(t, e)

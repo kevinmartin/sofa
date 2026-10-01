@@ -338,6 +338,17 @@ func runLifecycleReconcile(ctx context.Context, opts lifecycleReconcileOptions) 
 			return err
 		}
 	}
+	// An ownerless Pending reservation can outlive the Ready revision that
+	// authorized it. Re-read the complete private Project before freeing its
+	// WIP slot; a failed read cannot prove revocation.
+	released, releaseHeld := releaseRevokedPendingDeliveries(ctx, projects, engine, c, ledger.State, statuses)
+	result.Held = append(result.Held, releaseHeld...)
+	if released {
+		ledger, err = store.Load(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	scanIssues := make([]admission.Snapshot, 0, len(issues))
 	for _, issue := range issues {
 		if !recovering[issue.IssueID] {
@@ -1007,6 +1018,59 @@ func recoverStoppedDeliveries(ctx context.Context, reader discoveryRunProofReade
 	return changed, held
 }
 
+type deliveryProjectReader interface {
+	ProjectWorkItems(context.Context, config.Config) ([]github.ProjectWorkItem, error)
+}
+
+// releaseRevokedPendingDeliveries frees only unclaimed primary delivery
+// reservations whose exact Ready revision is absent from a fresh complete
+// Project scan. The state transition is fenced against a concurrent claim;
+// review-repair reservations have separate authority and remain untouched.
+func releaseRevokedPendingDeliveries(ctx context.Context, reader deliveryProjectReader, engine state.Engine, c config.Config, ledger state.State, statuses lifecycle.Statuses) (bool, []int) {
+	ids := make([]string, 0)
+	for id, attempt := range ledger.Attempts {
+		if attempt.SupersededAt.IsZero() && strings.EqualFold(attempt.Admission.Repository, c.Repository) && attempt.Admission.ProjectID == c.ProjectID && attempt.Phase == state.Pending && attempt.Owner == nil && attempt.Repair == nil {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return false, nil
+	}
+	sort.Strings(ids)
+	fresh, err := reader.ProjectWorkItems(ctx, c)
+	if err != nil {
+		held := make([]int, 0, len(ids))
+		for _, id := range ids {
+			held = append(held, int(ledger.Attempts[id].Admission.Issue))
+		}
+		return false, held
+	}
+	byItem := make(map[string]admission.Snapshot, len(fresh))
+	for _, item := range fresh {
+		byItem[item.Issue.ProjectItemID] = item.Issue
+	}
+	attempted := false
+	held := make([]int, 0)
+	for _, id := range ids {
+		attempt := ledger.Attempts[id]
+		current, present := byItem[attempt.Admission.ProjectItemID]
+		if present && (current.Number != int(attempt.Admission.Issue) || !strings.EqualFold(current.Repository, attempt.Admission.Repository) || current.ProjectID != attempt.Admission.ProjectID || !current.ProjectPrivate || !current.Complete) {
+			held = append(held, int(attempt.Admission.Issue))
+			continue
+		}
+		if present && current.Open && current.StatusOptionID == attempt.Admission.StatusOptionID && current.StatusUpdatedAt.Equal(attempt.Admission.StatusUpdatedAt) {
+			if stage, known := statuses.StageFor(current.CurrentStatus); known && stage == lifecycle.Ready {
+				continue
+			}
+		}
+		attempted = true
+		if err := engine.StopRevokedPending(ctx, attempt); err != nil {
+			held = append(held, int(attempt.Admission.Issue))
+		}
+	}
+	return attempted, held
+}
+
 // readyForDiscovery queues only owner-admitted Project items with an available
 // WIP slot. A pending reservation is retried before new work; a running or
 // already presented task never creates a second model prompt on a poll.
@@ -1014,7 +1078,7 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 	if c.Lifecycle == nil {
 		return nil
 	}
-	cap := int64(min(c.Limits.MaxAgentTurns, 20))
+	callCap := int64(min(c.Limits.MaxAgentTurns, 20))
 	wip := c.Lifecycle.EffectiveDiscoveryWIP()
 	active := 0
 	for _, task := range ledger.Discoveries {
@@ -1050,7 +1114,7 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 		if sameSource {
 			if task.Phase == state.DiscoveryPending && task.Owner == nil && (task.Publication != nil || task.ModelCalls < task.MaxModelCalls) {
 				pending = append(pending, issue.Number)
-			} else if task.Phase == state.DiscoveryBlocked && task.Failure == "budget" && cap > task.MaxModelCalls {
+			} else if task.Phase == state.DiscoveryBlocked && task.Failure == "budget" && callCap > task.MaxModelCalls {
 				fresh = append(fresh, issue.Number)
 			}
 			continue
@@ -1064,7 +1128,7 @@ func readyForDiscovery(c config.Config, items []github.ProjectWorkItem, ledger s
 			}
 			continue
 		}
-		if cap < task.MaxModelCalls || cap <= task.ModelCalls {
+		if callCap < task.MaxModelCalls || callCap <= task.ModelCalls {
 			continue
 		}
 		record, hasRecord := ledger.Specs[issue.IssueID]

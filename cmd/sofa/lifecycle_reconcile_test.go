@@ -41,6 +41,12 @@ func (f discoveryProofFunc) RunProof(ctx context.Context, repo string, owner sta
 	return f(ctx, repo, owner)
 }
 
+type deliveryProjectFunc func(context.Context, config.Config) ([]github.ProjectWorkItem, error)
+
+func (f deliveryProjectFunc) ProjectWorkItems(ctx context.Context, policy config.Config) ([]github.ProjectWorkItem, error) {
+	return f(ctx, policy)
+}
+
 func (f lifecycleRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func lifecycleJSONResponse(code int, value any) *http.Response {
@@ -1044,6 +1050,203 @@ func TestReadyForDeliveryPreservesPendingWIPBeforeNewPriority(t *testing.T) {
 	got = readyForDelivery(c, items, ledger, authority, statuses, nil)
 	if len(got) != 0 {
 		t.Fatalf("active worker did not hold WIP: %v", got)
+	}
+}
+
+func TestRevokedPendingDeliveryReleasesOnlyItsOwnWIPSlot(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	c := config.Config{
+		Repository: "owner/repo",
+		ProjectID:  "P_1",
+		Lifecycle: &config.Lifecycle{
+			DeliveryWIP: 1,
+		},
+	}
+	status := lifecycle.Statuses{
+		lifecycle.Ready:   "Ready",
+		lifecycle.Backlog: "Backlog",
+	}
+	store := &state.MemoryStore{}
+	initial := state.Empty()
+	initial.Specs["old-issue"] = state.SpecRecord{
+		Repository:       c.Repository,
+		IssueID:          "old-issue",
+		Issue:            9,
+		ProjectID:        c.ProjectID,
+		ProjectItemID:    "item-9",
+		SourceDigest:     strings.Repeat("d", 64),
+		SpecDigest:       strings.Repeat("a", 64),
+		CommentID:        1,
+		CommentAuthorID:  "bot",
+		CommentCreatedAt: now.Add(-4 * time.Hour),
+		CommentUpdatedAt: now.Add(-4 * time.Hour),
+		ReviewOptionID:   "review",
+		ReviewUpdatedAt:  now.Add(-3 * time.Hour),
+		ApprovedDigest:   strings.Repeat("a", 64),
+		BacklogOptionID:  "backlog",
+		BacklogUpdatedAt: now.Add(-2 * time.Hour),
+	}
+	if err := store.CompareAndSwap(ctx, "", initial); err != nil {
+		t.Fatal(err)
+	}
+	engine := state.Engine{Store: store, Now: func() time.Time { return now }}
+	grant := state.Admission{
+		Repository:      c.Repository,
+		Issue:           9,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       c.ProjectID,
+		ProjectItemID:   "item-9",
+		StatusOptionID:  "ready-option",
+		StatusUpdatedAt: now.Add(-time.Hour),
+	}
+	attempt, _, err := engine.Admit(ctx, grant, state.Limits{
+		ModelCalls:            2,
+		Repairs:               1,
+		InfrastructureRetries: 1,
+		RuntimeSeconds:        100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := admission.Snapshot{
+		Repository:      c.Repository,
+		IssueID:         "old-issue",
+		Number:          9,
+		ProjectID:       c.ProjectID,
+		ProjectPrivate:  true,
+		ProjectItemID:   "item-9",
+		CurrentStatus:   "Ready",
+		StatusOptionID:  grant.StatusOptionID,
+		StatusUpdatedAt: grant.StatusUpdatedAt,
+		Open:            true,
+		Complete:        true,
+	}
+	newIssue := admission.Snapshot{
+		Repository:    c.Repository,
+		IssueID:       "new-issue",
+		Number:        2,
+		ProjectID:     c.ProjectID,
+		ProjectItemID: "item-2",
+		CurrentStatus: "Ready",
+	}
+	items := []github.ProjectWorkItem{
+		{Issue: old, DependenciesKnown: true, PriorityKnown: true},
+		{Issue: newIssue, DependenciesKnown: true, PriorityKnown: true},
+	}
+	authority := map[string]bool{old.IssueID: true, newIssue.IssueID: true}
+	load := func() state.State {
+		t.Helper()
+		loaded, loadErr := store.Load(ctx)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		return loaded.State
+	}
+	if got := readyForDelivery(c, items, load(), authority, status, nil); len(got) != 1 || got[0] != old.Number {
+		t.Fatalf("old reservation did not own WIP before revocation: %v", got)
+	}
+	transient := deliveryProjectFunc(func(context.Context, config.Config) ([]github.ProjectWorkItem, error) {
+		return nil, errors.New("Project API unavailable")
+	})
+	attempted, held := releaseRevokedPendingDeliveries(ctx, transient, engine, c, load(), status)
+	if attempted || len(held) != 1 || held[0] != old.Number || load().Attempts[attempt.ID].Phase != state.Pending {
+		t.Fatalf("transient Project error released a reservation: attempted=%v held=%v", attempted, held)
+	}
+	if got := readyForDelivery(c, items, load(), authority, status, nil); len(got) != 1 || got[0] != old.Number {
+		t.Fatalf("transient error let another issue take WIP: %v", got)
+	}
+	unchanged := deliveryProjectFunc(func(context.Context, config.Config) ([]github.ProjectWorkItem, error) {
+		return []github.ProjectWorkItem{{Issue: old}, {Issue: newIssue}}, nil
+	})
+	attempted, held = releaseRevokedPendingDeliveries(ctx, unchanged, engine, c, load(), status)
+	if attempted || len(held) != 0 || load().Attempts[attempt.ID].Phase != state.Pending {
+		t.Fatalf("unchanged Ready grant was released: attempted=%v held=%v", attempted, held)
+	}
+	wrongIssue := old
+	wrongIssue.Number = 10
+	wrongIdentity := deliveryProjectFunc(func(context.Context, config.Config) ([]github.ProjectWorkItem, error) {
+		return []github.ProjectWorkItem{{Issue: wrongIssue}, {Issue: newIssue}}, nil
+	})
+	attempted, held = releaseRevokedPendingDeliveries(ctx, wrongIdentity, engine, c, load(), status)
+	if attempted || len(held) != 1 || held[0] != old.Number || load().Attempts[attempt.ID].Phase != state.Pending {
+		t.Fatalf("another issue's Project identity released old WIP: attempted=%v held=%v", attempted, held)
+	}
+	current := old
+	current.CurrentStatus = "Backlog"
+	current.StatusOptionID = "backlog-option"
+	current.StatusUpdatedAt = now
+	fresh := deliveryProjectFunc(func(context.Context, config.Config) ([]github.ProjectWorkItem, error) {
+		return []github.ProjectWorkItem{{Issue: current}, {Issue: newIssue}}, nil
+	})
+	attempted, held = releaseRevokedPendingDeliveries(ctx, fresh, engine, c, load(), status)
+	if !attempted || len(held) != 0 {
+		t.Fatalf("revoked Ready revision was not released: attempted=%v held=%v", attempted, held)
+	}
+	stopped := load().Attempts[attempt.ID]
+	if stopped.Phase != state.Blocked || stopped.Failure != "authority" || stopped.Owner != nil || stopped.Admission != grant {
+		t.Fatalf("revoked attempt changed wrong state: %+v", stopped)
+	}
+	if got := readyForDelivery(c, items, load(), authority, status, nil); len(got) != 1 || got[0] != newIssue.Number {
+		t.Fatalf("new issue did not receive released WIP: %v", got)
+	}
+	attempted, held = releaseRevokedPendingDeliveries(ctx, fresh, engine, c, load(), status)
+	if attempted || len(held) != 0 {
+		t.Fatalf("repeat poll was not idempotent: attempted=%v held=%v", attempted, held)
+	}
+}
+
+func TestLaterReadyRevisionDoesNotKeepOldPendingReservation(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	c := config.Config{Repository: "owner/repo", ProjectID: "P_1"}
+	store := &state.MemoryStore{}
+	engine := state.Engine{Store: store, Now: func() time.Time { return now }}
+	grant := state.Admission{
+		Repository:      c.Repository,
+		Issue:           9,
+		SpecDigest:      strings.Repeat("a", 64),
+		ConfigDigest:    strings.Repeat("b", 64),
+		BaseSHA:         strings.Repeat("c", 40),
+		ProjectID:       c.ProjectID,
+		ProjectItemID:   "item-9",
+		StatusOptionID:  "ready-option",
+		StatusUpdatedAt: now.Add(-time.Hour),
+	}
+	attempt, _, err := engine.Admit(ctx, grant, state.Limits{ModelCalls: 1, Repairs: 1, InfrastructureRetries: 1, RuntimeSeconds: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := deliveryProjectFunc(func(context.Context, config.Config) ([]github.ProjectWorkItem, error) {
+		return []github.ProjectWorkItem{{Issue: admission.Snapshot{
+			Repository:      c.Repository,
+			Number:          9,
+			ProjectID:       c.ProjectID,
+			ProjectPrivate:  true,
+			ProjectItemID:   grant.ProjectItemID,
+			CurrentStatus:   "Ready",
+			StatusOptionID:  grant.StatusOptionID,
+			StatusUpdatedAt: now,
+			Open:            true,
+			Complete:        true,
+		}}}, nil
+	})
+	changed, held := releaseRevokedPendingDeliveries(ctx, reader, engine, c, loaded.State, lifecycle.Statuses{lifecycle.Ready: "Ready"})
+	if !changed || len(held) != 0 {
+		t.Fatalf("later Ready grant reused prior reservation: changed=%v held=%v", changed, held)
+	}
+	loaded, err = store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.State.Attempts[attempt.ID]; got.Phase != state.Blocked || got.Failure != "authority" {
+		t.Fatalf("old reservation stayed active after new Ready revision: %+v", got)
 	}
 }
 

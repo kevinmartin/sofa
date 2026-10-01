@@ -529,6 +529,35 @@ func (e Engine) StopProvenOwner(ctx context.Context, id string, proof RunProof, 
 	})
 }
 
+// StopRevokedPending releases an ownerless primary delivery reservation only
+// after the caller has independently proved its admitted Ready grant is no
+// longer current. The exact ledger snapshot is compared under CAS: a claimed
+// worker, changed recovery intent, or review-repair reservation cannot be
+// stopped using an earlier Project observation.
+func (e Engine) StopRevokedPending(ctx context.Context, expected Attempt) error {
+	if expected.ID != AttemptID(expected.Admission) || expected.Phase != Pending || expected.Owner != nil || expected.Repair != nil || !expected.SupersededAt.IsZero() {
+		return ErrInvalid
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[expected.ID]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if a.Owner != nil || a.Phase != Pending {
+			return false, ErrClaimed
+		}
+		if !a.SupersededAt.IsZero() || !reflect.DeepEqual(a, expected) {
+			return false, ErrStale
+		}
+		a.Generation++
+		a.Phase = Blocked
+		a.Failure = "authority"
+		a.UpdatedAt = e.now()
+		s.Attempts[a.ID] = a
+		return true, nil
+	})
+}
+
 // Observe is idempotent by record ID. The same ID with different content fails
 // instead of rewriting a historical observation.
 func (e Engine) Observe(ctx context.Context, observation Observation) error {
