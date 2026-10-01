@@ -62,6 +62,8 @@ type RequiredCheck struct {
 
 var lifecycleStages = []string{"inbox", "discovery", "spec_review", "backlog", "ready", "building", "verification", "review", "release", "done"}
 
+// EffectivePollMinutes returns the configured interval in minutes, defaulting
+// to 10 when zero. Nonzero values are returned without validation.
 func (l Lifecycle) EffectivePollMinutes() int {
 	if l.PollMinutes == 0 {
 		return 10
@@ -69,6 +71,8 @@ func (l Lifecycle) EffectivePollMinutes() int {
 	return l.PollMinutes
 }
 
+// EffectiveDiscoveryWIP returns the configured concurrent Discovery limit,
+// defaulting to 2 when zero. Nonzero values are returned without validation.
 func (l Lifecycle) EffectiveDiscoveryWIP() int {
 	if l.DiscoveryWIP == 0 {
 		return 2
@@ -76,6 +80,8 @@ func (l Lifecycle) EffectiveDiscoveryWIP() int {
 	return l.DiscoveryWIP
 }
 
+// EffectiveDeliveryWIP returns the configured concurrent delivery limit,
+// defaulting to 1 when zero. Nonzero values are returned without validation.
 func (l Lifecycle) EffectiveDeliveryWIP() int {
 	if l.DeliveryWIP == 0 {
 		return 1
@@ -158,6 +164,9 @@ func Decode(r io.Reader) (Config, error) {
 	return c, nil
 }
 
+// Validate checks field bounds and cross-field policy, including paths, model
+// credential references, check budgets, and optional lifecycle settings. It
+// returns the first detected violation without changing the configuration.
 func (c Config) Validate() error {
 	// Static field bounds are declarative; policy involving multiple fields or
 	// runtime identities remains explicit below. Never include rejected values.

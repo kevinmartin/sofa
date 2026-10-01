@@ -18,12 +18,15 @@ type Runner interface {
 
 type RunnerFunc func(context.Context, agent.Config, string) (agent.Result, error)
 
+// Run invokes f and returns its result and error unchanged.
 func (f RunnerFunc) Run(ctx context.Context, config agent.Config, prompt string) (agent.Result, error) {
 	return f(ctx, config, prompt)
 }
 
 type NativeRunner struct{}
 
+// Run delegates the configured ACP turn to agent.Run, returning its telemetry
+// and error.
 func (NativeRunner) Run(ctx context.Context, config agent.Config, prompt string) (agent.Result, error) {
 	return agent.Run(ctx, config, prompt)
 }
@@ -73,6 +76,9 @@ const draftTemplate = `<!-- sofa:specification v1 -->
 // Generate runs one isolated ACP turn to fill an existing specification file.
 // It validates the file, not the model's prose response. The caller must first
 // reserve a persistent Discovery claim and recheck its fence before publishing.
+// The returned telemetry is retained on runner or output-validation errors.
+// Runner errors propagate; invalid input, workspace failures, incomplete turns,
+// changed inputs, or invalid specifications return errors with an empty Body.
 func Generate(ctx context.Context, in GenerateInput) (GenerateResult, error) {
 	var out GenerateResult
 	if strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Idea) == "" || len(in.Title) > 1024 || len(in.Idea) > 64<<10 || len(in.Facts) > 64<<10 || strings.TrimSpace(in.ModelToken) == "" || in.Timeout <= 0 || in.Timeout > 6*time.Hour {

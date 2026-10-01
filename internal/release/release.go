@@ -42,6 +42,8 @@ type RevertVerifier interface {
 // ObserveRevert appends a linked correction only after a trusted source proves
 // the new default-branch commit exactly reverses the merged file changes.
 // Partial or ambiguous reversions remain unclassified for human review.
+// A negative verification returns ErrUnverifiedRevert; verifier and ledger
+// errors propagate, and invalid PR or commit identity returns an error.
 func ObserveRevert(ctx context.Context, verifier RevertVerifier, engine state.Engine, attempt state.Attempt, pull github.PullSnapshot, revertSHA, defaultHead string, observedAt time.Time) error {
 	if verifier == nil || attempt.Publication == nil || pull.Number != attempt.Publication.PRNumber || pull.URL != attempt.Publication.PRURL || !pull.Merged || pull.HeadSHA != attempt.Publication.HeadSHA || !shaPattern.MatchString(pull.MergeCommitSHA) || !shaPattern.MatchString(revertSHA) || !shaPattern.MatchString(defaultHead) {
 		return errors.New("revert is not bound to completed PR")
@@ -159,6 +161,10 @@ func Evaluate(attempt state.Attempt, pull github.PullSnapshot, defaultHead strin
 	return d, nil
 }
 
+// evaluateChecks classifies the latest check for each required name and App ID,
+// breaking timestamp ties by larger source ID. Failure takes precedence over
+// missing or pending evidence. An empty plan returns done; an invalid or
+// duplicate requirement or more than 20 requirements returns an error.
 func evaluateChecks(required []RequiredCheck, checks []github.CommitCheck) (string, error) {
 	if len(required) > 20 {
 		return "", errors.New("too many required release checks")

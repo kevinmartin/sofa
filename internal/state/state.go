@@ -112,6 +112,8 @@ type RepairIntent struct {
 	CandidateSHA    string `json:"candidate_sha,omitempty"`
 }
 
+// valid checks feedback and PR identity against the publication and requires
+// candidate digest and SHA to be either both absent or both well formed.
 func (r RepairIntent) valid(p *Publication) bool {
 	if p == nil || !reference(r.FeedbackID) || !digestPattern.MatchString(r.FeedbackHash) || !shaPattern.MatchString(r.PRBaseSHA) || !shaPattern.MatchString(r.PRHeadSHA) || r.PRNumber <= 0 || p.PRNumber != r.PRNumber || p.HeadSHA != r.PRHeadSHA {
 		return false
@@ -226,6 +228,8 @@ type DiscoveryPublication struct {
 	Producer      Owner  `json:"producer"`
 }
 
+// valid checks digest, retry-key, and producer formats without establishing
+// publication success or specification approval.
 func (p DiscoveryPublication) valid() bool {
 	return digestPattern.MatchString(p.Digest) && digestPattern.MatchString(p.Key) && validOwner(p.Producer)
 }
@@ -253,10 +257,14 @@ type PollCursor struct {
 	Generation int64     `json:"generation"`
 }
 
+// valid checks that generation and last-poll presence agree and any wake ID
+// is a bounded reference.
 func (p PollCursor) valid() bool {
 	return p.Generation >= 0 && (p.Generation == 0 && p.LastPoll.IsZero() || p.Generation > 0 && !p.LastPoll.IsZero()) && (p.LastWakeID == "" || reference(p.LastWakeID))
 }
 
+// valid checks Project observation identity and requires any pending move
+// to retain the current option and update time as its source revision.
 func (p BoardProjection) valid() bool {
 	if !repoPattern.MatchString(p.Repository) || !reference(p.IssueID) || !reference(p.ProjectID) || !reference(p.ProjectItemID) || !validStage(p.Stage) || !reference(p.OptionID) || p.UpdatedAt.IsZero() {
 		return false
@@ -267,10 +275,14 @@ func (p BoardProjection) valid() bool {
 	return validStage(p.PendingStage) && reference(p.PendingOptionID) && p.PendingFromOptionID == p.OptionID && p.PendingFromUpdatedAt.Equal(p.UpdatedAt)
 }
 
+// validStage checks a nonempty stage string of at most 100 bytes for NUL, CR,
+// LF, and tabs; it does not require a canonical lifecycle stage.
 func validStage(stage string) bool {
 	return stage != "" && len(stage) <= 100 && !strings.ContainsAny(stage, "\x00\r\n\t")
 }
 
+// valid checks task identity, cumulative call bounds, timestamps, and the
+// ownership, publication, and comment fields required by its phase.
 func (d DiscoveryTask) valid() bool {
 	if !repoPattern.MatchString(d.Repository) || !reference(d.IssueID) || d.Issue < 1 || !reference(d.ProjectID) || !reference(d.ProjectItemID) || !reference(d.StatusOptionID) || d.StatusUpdatedAt.IsZero() || !digestPattern.MatchString(d.SourceDigest) || d.Revision < 0 || d.Generation < 0 || d.ModelCalls < 0 || d.MaxModelCalls < 1 || d.MaxModelCalls > 20 || d.ModelCalls > d.MaxModelCalls || d.CreatedAt.IsZero() || d.UpdatedAt.Before(d.CreatedAt) {
 		return false
@@ -295,6 +307,8 @@ func (d DiscoveryTask) valid() bool {
 	}
 }
 
+// valid checks specification and comment identity and requires any approval
+// to match the specification digest with a Backlog time after review and issue edits.
 func (r SpecRecord) valid() bool {
 	if r.Revision < 0 || !repoPattern.MatchString(r.Repository) || !reference(r.IssueID) || r.Issue < 1 || !reference(r.ProjectID) || !reference(r.ProjectItemID) || !digestPattern.MatchString(r.SourceDigest) || !digestPattern.MatchString(r.SpecDigest) || r.CommentID < 1 || !reference(r.CommentAuthorID) || r.CommentCreatedAt.IsZero() || r.CommentUpdatedAt.Before(r.CommentCreatedAt) || !reference(r.ReviewOptionID) || r.ReviewUpdatedAt.IsZero() {
 		return false
@@ -328,6 +342,8 @@ type Store interface {
 	CompareAndSwap(context.Context, string, State) error
 }
 
+// Empty returns a ledger at the current version with initialized maps and
+// no attempts or observations.
 func Empty() State {
 	return State{
 		Version:               Version,
@@ -416,6 +432,9 @@ func Decode(b []byte) (State, error) {
 	return s, s.Validate()
 }
 
+// Validate checks ledger metadata, budgets, revision histories, projections,
+// and observation references without modifying state. The first detected
+// inconsistency returns an error wrapping ErrInvalid.
 func (s State) Validate() error {
 	if s.Version != Version || s.Attempts == nil {
 		return fmt.Errorf("%w: ledger version or attempts", ErrInvalid)

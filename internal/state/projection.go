@@ -54,10 +54,14 @@ func (e Engine) ObserveBoard(ctx context.Context, observed BoardProjection) erro
 	})
 }
 
+// sameBoardRevision compares stage, option ID, and update time; callers must
+// check repository and Project item identity separately.
 func sameBoardRevision(a, b BoardProjection) bool {
 	return a.Stage == b.Stage && a.OptionID == b.OptionID && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
+// ownerTransition recognizes a reset to Discovery, Spec Review to Backlog,
+// or Backlog to Ready. It does not verify the actor or Project permissions.
 func ownerTransition(from, to string) bool {
 	switch {
 	case from != "discovery" && to == "discovery":
@@ -99,6 +103,8 @@ func (e Engine) BeginBoardMove(ctx context.Context, expected BoardProjection, ta
 	})
 }
 
+// factoryTransition recognizes supported system-owned moves, including
+// re-review from Backlog and repair returns to Building.
 func factoryTransition(from, to string) bool {
 	if to == "spec_review" {
 		return from == "discovery" || from == "backlog"

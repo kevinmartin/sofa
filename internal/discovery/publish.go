@@ -32,6 +32,8 @@ type PublishInput struct {
 	Guard            func(context.Context) (admission.Snapshot, error)
 }
 
+// publicationKey derives a deterministic retry locator from the task source,
+// Project admission time, and exact draft body.
 func publicationKey(task state.DiscoveryTask, body string) string {
 	payload, _ := json.Marshal(struct {
 		Repository, IssueID, SourceDigest, Body string
@@ -47,6 +49,8 @@ func publicationKey(task state.DiscoveryTask, body string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// publicationSource reports whether the live Discovery admission and source
+// digest still match the task. Invalid source content returns false.
 func publicationSource(p Policy, s admission.Snapshot, task state.DiscoveryTask) bool {
 	if !p.trusted(s, p.DiscoveryStatus) || task.IssueID != s.IssueID || task.Issue != int64(s.Number) || task.ProjectItemID != s.ProjectItemID || task.ProjectID != s.ProjectID || task.StatusOptionID != s.StatusOptionID || !task.StatusUpdatedAt.Equal(s.StatusUpdatedAt) || !strings.EqualFold(task.Repository, p.Repository) {
 		return false
@@ -55,6 +59,9 @@ func publicationSource(p Policy, s admission.Snapshot, task state.DiscoveryTask)
 	return err == nil && digest == task.SourceDigest
 }
 
+// matchingPublishedComment finds the single comment with the expected author,
+// key, and exact body. No match returns false without error; changed, invalid,
+// or duplicate comments sharing the author and key return errors.
 func matchingPublishedComment(comments []SpecComment, body, key, author string) (SpecComment, bool, error) {
 	var match SpecComment
 	found := false

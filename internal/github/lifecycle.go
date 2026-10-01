@@ -36,6 +36,8 @@ type PullSnapshot struct {
 	UpdatedAt      time.Time
 }
 
+// Pull reads a PR whose head and base both belong to repository, rejecting
+// forks and incomplete identity or revision metadata. Request errors propagate.
 func (c *Client) Pull(ctx context.Context, repository string, number int64) (PullSnapshot, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || number < 1 {
 		return PullSnapshot{}, errors.New("invalid pull request identity")
@@ -105,6 +107,9 @@ type PullReview struct {
 	Comments    []PullReviewComment
 }
 
+// PullReviews reads submitted reviews, skipping entries without a user ID or
+// submission time. Inline comments are not fetched. Invalid IDs, request errors,
+// or a history without a short page within 20 pages of 100 return errors.
 func (c *Client) PullReviews(ctx context.Context, repository string, number int64) ([]PullReview, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || number < 1 {
 		return nil, errors.New("invalid pull request identity")
@@ -159,6 +164,9 @@ type CommitCheck struct {
 	SourceID  int64
 }
 
+// CommitChecks reads check runs for an exact commit, using the conclusion for
+// completed runs and status otherwise. Invalid identity or timestamps, request
+// errors, or failure to reach a short page within 20 pages of 100 return errors.
 func (c *Client) CommitChecks(ctx context.Context, repository, sha string) ([]CommitCheck, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || !lifecycleSHAPattern.MatchString(sha) {
 		return nil, errors.New("invalid commit check identity")
@@ -216,6 +224,9 @@ func (c *Client) CommitChecks(ctx context.Context, repository, sha string) ([]Co
 	return nil, errors.New("commit check history exceeds bound")
 }
 
+// IsAncestor reports whether ancestor is reachable from descendant, including
+// equal commits. Behind or diverged comparisons return false without error;
+// invalid identities, unknown comparison states, and request failures return errors.
 func (c *Client) IsAncestor(ctx context.Context, repository, ancestor, descendant string) (bool, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || !lifecycleSHAPattern.MatchString(ancestor) || !lifecycleSHAPattern.MatchString(descendant) {
 		return false, errors.New("invalid commit ancestry identity")

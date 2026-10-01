@@ -74,6 +74,8 @@ func VerifyApprovedRevision(ctx context.Context, reader CommentReader, store sta
 
 // ObserveSpecReview persists the exact comment snapshot before ledgering it.
 // A failed snapshot write cannot leave an apparently reviewable approval.
+// The boolean reports a committed ledger change. Comment, validation, and store
+// errors propagate; 32 conflicting write attempts return state.ErrConflict.
 func ObserveSpecReview(ctx context.Context, reader CommentReader, store SpecStore, policy Policy, source admission.Snapshot) (state.SpecRecord, bool, error) {
 	if reader == nil || store == nil {
 		return state.SpecRecord{}, false, ErrAuthority
@@ -123,6 +125,8 @@ func ObserveSpecReview(ctx context.Context, reader CommentReader, store SpecStor
 
 // ObserveBacklog records an owner approval only after observing the trusted
 // Project's Backlog transition and re-reading the same unedited comment.
+// The boolean reports a committed approval. Comment, validation, and store
+// errors propagate; 32 conflicting write attempts return state.ErrConflict.
 func ObserveBacklog(ctx context.Context, reader CommentReader, store state.Store, policy Policy, source admission.Snapshot) (state.SpecRecord, bool, error) {
 	if reader == nil || store == nil {
 		return state.SpecRecord{}, false, ErrAuthority

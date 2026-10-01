@@ -37,31 +37,46 @@ type SpecComment struct {
 	UpdatedAt time.Time
 }
 
+// valid reports whether the comment has a bounded author identity and
+// consistent timestamps; it does not validate the body or establish authority.
 func (c SpecComment) valid() bool {
 	return c.ID > 0 && c.AuthorID != "" && len(c.AuthorID) <= 512 && !strings.ContainsAny(c.AuthorID, "\x00\r\n\t ") && !c.CreatedAt.IsZero() && !c.UpdatedAt.Before(c.CreatedAt)
 }
 
+// valid checks that required identities and status names are nonempty and
+// adjacent approval stages use different names.
 func (p Policy) valid() bool {
 	return p.Repository != "" && p.RepositoryID != "" && p.ProjectID != "" && p.DiscoveryStatus != "" && p.SpecReviewStatus != "" && p.BacklogStatus != "" && p.ReadyStatus != "" && p.DiscoveryStatus != p.SpecReviewStatus && p.SpecReviewStatus != p.BacklogStatus && p.BacklogStatus != p.ReadyStatus
 }
 
+// trusted requires a complete open issue in the configured private Project at
+// the requested status, with an identified status revision.
 func (p Policy) trusted(s admission.Snapshot, status string) bool {
 	return p.valid() && s.Complete && s.Open && strings.EqualFold(s.Repository, p.Repository) && s.RepositoryID == p.RepositoryID && s.ProjectID == p.ProjectID && s.ProjectPrivate && s.IssueID != "" && s.Number > 0 && s.ProjectItemID != "" && s.CurrentStatus == status && s.StatusOptionID != "" && !s.StatusUpdatedAt.IsZero()
 }
 
+// matches reports whether a stored specification belongs to this repository,
+// issue, and Project item; it does not compare specification content.
 func (p Policy) matches(s admission.Snapshot, r state.SpecRecord) bool {
 	return strings.EqualFold(r.Repository, p.Repository) && r.IssueID == s.IssueID && r.Issue == int64(s.Number) && r.ProjectID == s.ProjectID && r.ProjectItemID == s.ProjectItemID
 }
 
+// sameComment compares a valid comment with its recorded ID, author, and
+// creation and update timestamps; it does not compare the body.
 func sameComment(c SpecComment, id int64, author string, createdAt, updatedAt time.Time) bool {
 	return c.valid() && c.ID == id && c.AuthorID == author && c.CreatedAt.Equal(createdAt) && c.UpdatedAt.Equal(updatedAt)
 }
 
+// sourceDigest returns the canonical digest of the idea title and body,
+// propagating canonicalization errors.
 func sourceDigest(s admission.Snapshot) (string, error) {
 	_, digest, err := admission.CanonicalSpec(s.Title, s.Body)
 	return digest, err
 }
 
+// commentDigest validates a versioned comment and canonicalizes it with the
+// issue title. Invalid comment metadata or syntax returns ErrRevision; parse
+// errors are wrapped and canonicalization errors propagate.
 func commentDigest(s admission.Snapshot, c SpecComment) ([]byte, string, error) {
 	if !c.valid() {
 		return nil, "", ErrRevision
@@ -112,8 +127,11 @@ func ReviewCommentReadyForMove(p Policy, s admission.Snapshot, c SpecComment, ta
 	return nil
 }
 
-// CaptureReview records the versioned bot-authored comment already visible in
-// Spec Review. A copied marker from another commenter has no authority.
+// CaptureReview builds a record for the versioned bot-authored comment already
+// visible in Spec Review. A copied marker from another commenter has no authority.
+// It returns canonical bytes and whether the record changed, without persisting
+// either. An exact replay returns prior, nil bytes, and false. Authority failures
+// return ErrAuthority; changed or invalid revisions return ErrRevision.
 func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.DiscoveryTask, prior *state.SpecRecord) (state.SpecRecord, []byte, bool, error) {
 	if !p.trusted(s, p.SpecReviewStatus) || task.Phase != state.DiscoveryReview || task.IssueID != s.IssueID || task.Issue != int64(s.Number) || !strings.EqualFold(task.Repository, p.Repository) || task.ProjectID != p.ProjectID || task.ProjectItemID != s.ProjectItemID || !sameComment(c, task.CommentID, task.CommentAuthorID, task.CommentCreatedAt, task.CommentUpdatedAt) {
 		return state.SpecRecord{}, nil, false, ErrAuthority
@@ -163,6 +181,8 @@ func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.Dis
 	return record, canonical, prior == nil || *prior != record, nil
 }
 
+// currentRevision reports whether the source and exact comment still match
+// the record. Invalid content and edits after comment creation return false.
 func currentRevision(s admission.Snapshot, c SpecComment, r state.SpecRecord) bool {
 	source, err := sourceDigest(s)
 	if err != nil || source != r.SourceDigest || (!s.IssueLastEditedAt.IsZero() && s.IssueLastEditedAt.After(r.CommentCreatedAt)) || !sameComment(c, r.CommentID, r.CommentAuthorID, r.CommentCreatedAt, r.CommentUpdatedAt) {
@@ -174,6 +194,9 @@ func currentRevision(s admission.Snapshot, c SpecComment, r state.SpecRecord) bo
 
 // ApproveBacklog binds only a prior observed Spec Review proposal to a later
 // restricted-Project Backlog transition. It never writes the Project status.
+// The boolean reports a new approval; replaying the same approval returns false.
+// Missing authority returns ErrAuthority; changed content or invalid transition
+// ordering returns ErrRevision.
 func ApproveBacklog(p Policy, s admission.Snapshot, c SpecComment, prior state.SpecRecord) (state.SpecRecord, bool, error) {
 	if !p.trusted(s, p.BacklogStatus) || !p.matches(s, prior) || prior.SpecDigest == "" || prior.ReviewUpdatedAt.IsZero() {
 		return prior, false, ErrAuthority

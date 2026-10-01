@@ -21,7 +21,12 @@ type DiscoveryAdmission struct {
 
 // AdmitDiscovery reserves WIP atomically. The caller must have checked the
 // private, owner-writable Project's current Discovery status; issue creation
-// alone never reaches this method. Existing tasks are replayed, not reset.
+// alone never reaches this method. Exact admissions replay the existing task.
+// A later owner status revision can reset eligible work while retaining model-call
+// counts; a changed approved source supersedes its delivery attempt. Increasing
+// the call limit can reopen a task blocked by budget. created reports a new or
+// reset task, not a budget increase. Admission mismatches return ErrAdmissionChanged,
+// exhausted WIP or reset limits return ErrLimit, and store errors propagate.
 func (e Engine) AdmitDiscovery(ctx context.Context, admission DiscoveryAdmission, maxActive int, maxModelCalls int64) (task DiscoveryTask, created bool, err error) {
 	if maxActive < 1 || maxActive > 20 || maxModelCalls < 1 || maxModelCalls > 20 {
 		return task, false, fmt.Errorf("%w: discovery limits", ErrInvalid)
@@ -200,8 +205,9 @@ type DiscoveryFence struct {
 	Owner      Owner
 }
 
-// ClaimDiscovery reserves one prompt before invoking the model. Lost work
-// still consumes its reservation; a retry cannot inflate the call budget.
+// ClaimDiscovery claims pending work and reserves one prompt unless resuming
+// a persisted publication intent. Lost work still consumes its reservation;
+// a retry cannot inflate the call budget.
 func (e Engine) ClaimDiscovery(ctx context.Context, issueID string, owner Owner) (fence DiscoveryFence, err error) {
 	if !reference(issueID) || !validOwner(owner) {
 		return fence, fmt.Errorf("%w: discovery owner", ErrInvalid)
@@ -235,6 +241,8 @@ func (e Engine) ClaimDiscovery(ctx context.Context, issueID string, owner Owner)
 	return
 }
 
+// ownedDiscovery returns the running task matching the fence, or ErrNotFound
+// for a missing task and ErrStale for a changed generation, owner, or phase.
 func ownedDiscovery(s *State, fence DiscoveryFence) (DiscoveryTask, error) {
 	d, ok := s.Discoveries[fence.IssueID]
 	if !ok {
@@ -246,6 +254,9 @@ func ownedDiscovery(s *State, fence DiscoveryFence) (DiscoveryTask, error) {
 	return d, nil
 }
 
+// AssertDiscoveryOwner checks the persisted running task against the fence.
+// Store errors propagate; a missing task returns ErrNotFound and a changed
+// owner, generation, or phase returns ErrStale. It does not lock future writes.
 func (e Engine) AssertDiscoveryOwner(ctx context.Context, fence DiscoveryFence) error {
 	snapshot, err := e.Store.Load(ctx)
 	if err != nil {
@@ -313,6 +324,10 @@ func (e Engine) MarkDiscoveryPostAttempt(ctx context.Context, fence DiscoveryFen
 	return first, err
 }
 
+// CompleteDiscovery records the published comment identity, marks the task for Spec Review,
+// and clears ownership and publication intent. Invalid comment metadata wraps
+// ErrInvalid; a missing or different publication digest returns ErrConflict.
+// Fence and store errors propagate. The caller must verify the remote comment.
 func (e Engine) CompleteDiscovery(ctx context.Context, fence DiscoveryFence, specDigest string, commentID int64, authorID string, commentCreatedAt, commentUpdatedAt time.Time) error {
 	if !digestPattern.MatchString(specDigest) || commentID < 1 || !reference(authorID) || commentCreatedAt.IsZero() || commentUpdatedAt.Before(commentCreatedAt) {
 		return fmt.Errorf("%w: specification comment identity", ErrInvalid)
@@ -339,6 +354,10 @@ func (e Engine) CompleteDiscovery(ctx context.Context, fence DiscoveryFence, spe
 	})
 }
 
+// FailDiscovery blocks the owned task and clears ownership for an authority,
+// validation, authentication, quota, or infrastructure failure. Other kinds wrap
+// ErrInvalid. A pending publication intent must be reconciled first and returns
+// an error; fence and store errors propagate.
 func (e Engine) FailDiscovery(ctx context.Context, fence DiscoveryFence, kind string) error {
 	if kind != "authority" && kind != "validation" && kind != "authentication" && kind != "quota" && kind != "infrastructure" {
 		return fmt.Errorf("%w: discovery failure", ErrInvalid)
@@ -360,6 +379,11 @@ func (e Engine) FailDiscovery(ctx context.Context, fence DiscoveryFence, kind st
 	})
 }
 
+// RecoverDiscovery releases a running task after fresh terminal proof for its
+// exact owner, invalidating the old fence without resetting model-call counts.
+// It returns the task to pending unless its budget is exhausted and no publication
+// intent remains. Insufficient proof returns ErrActive; missing or changed tasks
+// return ErrNotFound or ErrStale, and store errors propagate.
 func (e Engine) RecoverDiscovery(ctx context.Context, issueID string, proof RunProof) error {
 	if !proof.terminal(e.now()) {
 		return ErrActive
@@ -386,6 +410,10 @@ func (e Engine) RecoverDiscovery(ctx context.Context, issueID string, proof RunP
 	})
 }
 
+// CancelDiscovery clears ownership and invalidates the fence, retaining budget
+// counts. Already canceled tasks are unchanged. Completed tasks and pending
+// publication intents return errors; missing tasks return ErrNotFound and store
+// errors propagate.
 func (e Engine) CancelDiscovery(ctx context.Context, issueID string) error {
 	return e.update(ctx, func(s *State) (bool, error) {
 		d, ok := s.Discoveries[issueID]

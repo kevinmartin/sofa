@@ -5,6 +5,8 @@ import "strings"
 // CurrentAttemptForIssue selects delivery evidence only for the latest
 // Backlog-approved revision of this immutable issue. A superseded PR remains
 // in history but cannot be borrowed for the revised specification.
+// Missing approval or an absent attempt returns false without error. A current
+// attempt with mismatched approval evidence, or multiple matches, returns ErrConflict.
 func CurrentAttemptForIssue(s State, issueID string) (Attempt, bool, error) {
 	record, ok := s.Specs[issueID]
 	if !ok || record.ApprovedDigest == "" {

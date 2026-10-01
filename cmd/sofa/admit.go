@@ -37,6 +37,10 @@ func newAdmitCommand() *cobra.Command {
 	return cmd
 }
 
+// runAdmit authorizes the current Ready specification, reserves or recovers a
+// delivery attempt, and writes dispatch status and any manifest to outDir.
+// A failed run-proof read leaves an existing owner active; other admission,
+// ledger, artifact, and output errors are returned.
 func runAdmit(ctx context.Context, opts admitOptions) error {
 	c, err := readConfig(opts.configPath)
 	if err != nil {

@@ -35,6 +35,9 @@ type repairManifest struct {
 	FeedbackText  string             `json:"feedback_text"`
 }
 
+// readRepairManifest accepts files up to 256 KiB and verifies configuration,
+// specification, feedback, and repair identities. File, JSON, and configuration
+// errors propagate; inconsistent manifest fields return an identity error.
 func readRepairManifest(path string, c config.Config) (repairManifest, error) {
 	var m repairManifest
 	if err := readJSON(path, 256<<10, &m); err != nil {
@@ -52,6 +55,8 @@ func readRepairManifest(path string, c config.Config) (repairManifest, error) {
 	return m, nil
 }
 
+// newReviewRepairCommand builds the admission, execution, verification,
+// publication, and failure subcommands for owner review repairs.
 func newReviewRepairCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "review-repair",
@@ -132,6 +137,10 @@ func newReviewRepairCommand() *cobra.Command {
 	return root
 }
 
+// runReviewRepairFail records an execute, verify, or publish failure for the
+// current manifest owner. It releases an unprepared repair or blocks a prepared
+// one, then records the failed stage. Credential, identity, and ledger errors
+// propagate; an already blocked validation failure is a no-op.
 func runReviewRepairFail(ctx context.Context, configPath, manifestPath, stage string) error {
 	if stage != "execute" && stage != "verify" && stage != "publish" {
 		return errors.New("invalid bounded repair failure stage")
@@ -178,6 +187,10 @@ func runReviewRepairFail(ctx context.Context, configPath, manifestPath, stage st
 	return observeOnce(ctx, engine, m.Fence.AttemptID, "review-repair-failure", stage, m.Repair.PRHeadSHA, "", fmt.Sprintf("g%d", m.Fence.Generation))
 }
 
+// runReviewRepairExecute edits a clean checkout of the reviewed head and writes
+// a candidate bundle plus execution.json. Prepared repairs are rejected, and
+// a no-change result returns errExecutionValidation. Input, worker, and output
+// errors propagate; checkout edits are not rolled back on failure.
 func runReviewRepairExecute(ctx context.Context, configPath, manifestPath, workspace, out string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -223,6 +236,10 @@ func runReviewRepairExecute(ctx context.Context, configPath, manifestPath, works
 	})
 }
 
+// runReviewRepairVerify applies the repair to a clean checkout, runs configured
+// checks without credentials, and writes evidence only if each check passes
+// without changing the candidate. Failed checks or workspace changes return
+// errExecutionValidation; input, apply, snapshot, and output errors propagate.
 func runReviewRepairVerify(ctx context.Context, configPath, manifestPath, workspace, bundlePath, out string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -276,6 +293,10 @@ func runReviewRepairVerify(ctx context.Context, configPath, manifestPath, worksp
 	return writeJSON(out, checks)
 }
 
+// runReviewRepairPublish revalidates the owner review and scope, persists the
+// child commit intent, and updates the existing PR with a leased push. It records
+// the result in the ledger and repair-publication.json. Validation, API, Git,
+// ledger, and output errors propagate, including failures after a successful push.
 func runReviewRepairPublish(ctx context.Context, configPath, manifestPath, bundlePath, evidencePath, baseBranch string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -401,6 +422,10 @@ func runReviewRepairPublish(ctx context.Context, configPath, manifestPath, bundl
 	return writeJSON("repair-publication.json", result)
 }
 
+// runReviewRepairAdmit reserves or recovers the current owner review repair,
+// charges its claim, and writes a manifest and dispatch status. Missing eligible
+// feedback or an active owner yields no-dispatch status; a changed reservation,
+// authority failure, API error, ledger error, or output failure is returned.
 func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, outDir string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -555,6 +580,9 @@ func runReviewRepairAdmit(ctx context.Context, configPath string, issue int, out
 	return writeRepairStatus(outDir, true, "repair-admitted", attempt.ID)
 }
 
+// selectRepairReview evaluates the newest non-informational owner review
+// against the current or reserved repair. Missing feedback and evaluation
+// errors both produce zero values.
 func selectRepairReview(attempt state.Attempt, pull github.PullSnapshot, reviews []github.PullReview, ownerID string) (review.Decision, github.PullReview) {
 	i := newestOwnerReview(reviews, ownerID)
 	if i < 0 {
@@ -574,6 +602,9 @@ func selectRepairReview(attempt state.Attempt, pull github.PullSnapshot, reviews
 	return decision, submitted
 }
 
+// newestOwnerReview returns the index of the latest identified, submitted
+// owner review other than COMMENTED, breaking time ties by larger review ID.
+// It returns -1 when no review qualifies.
 func newestOwnerReview(reviews []github.PullReview, ownerID string) int {
 	selected := -1
 	for i, submitted := range reviews {
@@ -589,6 +620,8 @@ func newestOwnerReview(reviews []github.PullReview, ownerID string) int {
 	return selected
 }
 
+// attachRepairReviewComments fills Comments on the first matching review in
+// the supplied slice. It returns API errors or an error if reviewID is absent.
 func attachRepairReviewComments(ctx context.Context, client *github.Client, repository string, number int64, reviews []github.PullReview, reviewID int64) error {
 	for i := range reviews {
 		if reviews[i].ID != reviewID {
@@ -635,6 +668,8 @@ func recoverReservedReviewRepair(ctx context.Context, engine state.Engine, proof
 	return current, nil
 }
 
+// writeRepairStatus creates outDir if needed and writes status.json with the
+// dispatch decision and attempt identity. Directory and write failures return errors.
 func writeRepairStatus(outDir string, dispatch bool, reason, attemptID string) error {
 	if err := os.MkdirAll(outDir, 0700); err != nil {
 		return errors.New("cannot create repair output directory")
@@ -661,6 +696,10 @@ func approvedRepairSource(ctx context.Context, c config.Config, reader discovery
 	return validateRepairSource(c, approved, attempt)
 }
 
+// validateRepairSource returns the canonical approved specification only for
+// a matching open issue in Building, Verification, or Review with unchanged
+// configuration and scope. Callers must first substitute the approved comment
+// body. Identity, stage, configuration, and canonicalization failures return errors.
 func validateRepairSource(c config.Config, snapshot admission.Snapshot, attempt state.Attempt) (json.RawMessage, error) {
 	if c.Lifecycle == nil || !snapshot.Complete || !snapshot.Open || !strings.EqualFold(snapshot.Repository, c.Repository) || snapshot.RepositoryID != c.RepositoryID || snapshot.Number != int(attempt.Admission.Issue) || snapshot.ProjectID != c.ProjectID || !snapshot.ProjectPrivate || snapshot.ProjectItemID != attempt.Admission.ProjectItemID {
 		return nil, errors.New("repair issue or restricted Project identity changed")
@@ -684,6 +723,8 @@ func validateRepairSource(c config.Config, snapshot admission.Snapshot, attempt 
 	return spec, nil
 }
 
+// repairEvidenceExpected binds verification to the admitted attempt and
+// generation, using the reviewed PR head as the base and the bundle digest.
 func repairEvidenceExpected(m repairManifest, b integrity.Bundle) integrity.Expected {
 	return integrity.Expected{
 		Repository:      m.Admission.Repository,
@@ -694,6 +735,9 @@ func repairEvidenceExpected(m repairManifest, b integrity.Bundle) integrity.Expe
 	}
 }
 
+// revalidateRepairReview rejects changes to the PR identity, base, or newest
+// owner change request and its feedback. preparedSHA permits recovery after
+// our child commit replaced the reviewed head. Feedback encoding errors propagate.
 func revalidateRepairReview(c config.Config, m repairManifest, pull github.PullSnapshot, reviews []github.PullReview, preparedSHA string) error {
 	if pull.Number != m.Publication.PRNumber || pull.URL != m.Publication.PRURL || pull.HeadRef != m.Publication.Branch || pull.BaseSHA != m.Repair.PRBaseSHA || pull.State != "open" || pull.Merged || !strings.EqualFold(pull.HeadRepository, c.Repository) || !strings.EqualFold(pull.BaseRepository, c.Repository) || (pull.HeadSHA != m.Repair.PRHeadSHA && pull.HeadSHA != preparedSHA) {
 		return errors.New("repair PR changed since owner feedback")
@@ -714,6 +758,9 @@ func revalidateRepairReview(c config.Config, m repairManifest, pull github.PullS
 	return nil
 }
 
+// requireRepairOwner checks the live fence and reloads the matching repair
+// reservation. Fence and store errors propagate; mismatched ledger fields wrap
+// state.ErrInvalid.
 func requireRepairOwner(ctx context.Context, engine state.Engine, m repairManifest) (state.Attempt, error) {
 	if err := engine.AssertOwner(ctx, m.Fence); err != nil {
 		return state.Attempt{}, err

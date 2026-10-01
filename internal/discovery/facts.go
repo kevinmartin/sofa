@@ -22,6 +22,9 @@ type RepositoryFacts struct {
 // import repository code, follow symlinks, or send raw source to the model.
 // Related issue IDs are exact deterministic duplicate candidates supplied by
 // the trusted source scan; semantic duplicate guesses remain model hypotheses.
+// It returns JSON and requires an absolute root and at most 100 positive related
+// issue numbers. Enumeration and path-list limits set Truncated; filesystem
+// errors are returned instead of partial facts.
 func GatherFacts(root string, related []int64) (string, error) {
 	if !filepath.IsAbs(root) || len(related) > 100 {
 		return "", errors.New("invalid bounded repository facts source")

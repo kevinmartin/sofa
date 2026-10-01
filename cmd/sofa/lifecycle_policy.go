@@ -7,6 +7,8 @@ import (
 	"github.com/kevinmartin/sofa/internal/discovery"
 )
 
+// discoveryPolicy copies repository identity and approval-stage names from
+// trusted configuration. It errors when lifecycle configuration is absent.
 func discoveryPolicy(c config.Config) (discovery.Policy, error) {
 	if c.Lifecycle == nil {
 		return discovery.Policy{}, errors.New("lifecycle configuration is unavailable")

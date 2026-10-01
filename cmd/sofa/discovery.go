@@ -41,6 +41,8 @@ type discoveryStatus struct {
 	RecoveryAttempt int    `json:"recovery_run_attempt,omitempty"`
 }
 
+// newDiscoveryCommand builds the admission, generation, publication, and
+// failure subcommands for Discovery.
 func newDiscoveryCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "discovery",
@@ -96,6 +98,9 @@ func newDiscoveryCommand() *cobra.Command {
 	return root
 }
 
+// readDiscoveryManifest accepts files up to 192 KiB and checks transport identity and
+// bounds. A non-nil c also requires the manifest to match its lifecycle policy
+// and digest. File and JSON errors propagate; mismatches return validation errors.
 func readDiscoveryManifest(path string, c *config.Config) (discoveryManifest, error) {
 	var m discoveryManifest
 	if err := readJSON(path, 192<<10, &m); err != nil {
@@ -113,6 +118,8 @@ func readDiscoveryManifest(path string, c *config.Config) (discoveryManifest, er
 	return m, nil
 }
 
+// discoveryClients builds separate Project and ledger clients from their
+// credential environment variables, returning credential errors to the caller.
 func discoveryClients(c config.Config) (*github.Client, github.StateStore, error) {
 	projects, err := clientFromEnv("SOFA_PROJECTS_TOKEN")
 	if err != nil {
@@ -128,6 +135,8 @@ func discoveryClients(c config.Config) (*github.Client, github.StateStore, error
 	}, nil
 }
 
+// currentCheckoutSHA reads HEAD from an absolute checkout path. Relative paths,
+// Git failures, and output whose length is not 41 bytes return errors.
 func currentCheckoutSHA(ctx context.Context, root string) (string, error) {
 	if !filepath.IsAbs(root) {
 		return "", errors.New("discovery workspace must be absolute")
@@ -140,7 +149,9 @@ func currentCheckoutSHA(ctx context.Context, root string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// Only exact title/body matches are deterministic duplicate candidates.
+// relatedDiscoveryIssues returns other open issues in the same repository whose
+// trimmed titles match case-insensitively or whose trimmed nonempty bodies match.
+// More than 100 matches returns an error.
 // Semantic similarity is a hypothesis for the research agent, not authority
 // to merge or suppress another issue.
 func relatedDiscoveryIssues(source admission.Snapshot, items []github.ProjectWorkItem) ([]int64, error) {
@@ -162,6 +173,10 @@ func relatedDiscoveryIssues(source admission.Snapshot, items []github.ProjectWor
 	return related, nil
 }
 
+// runDiscoveryAdmit verifies the live Discovery source and checkout, gathers
+// repository facts, and reserves or recovers a claim before writing artifacts.
+// Terminal or active tasks and missing recovery artifacts produce no-dispatch
+// status; configuration, authority, API, ledger, and output errors are returned.
 func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, workspace, outDir string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -317,6 +332,9 @@ func runDiscoveryAdmit(ctx context.Context, configPath string, issue int, worksp
 	return writeJSON(statusPath, status)
 }
 
+// runDiscoveryGenerate runs one isolated specification turn and writes the
+// validated body to out. Recovery manifests must reuse their retained candidate
+// and are rejected. Environment, manifest, generation, and write errors propagate.
 func runDiscoveryGenerate(ctx context.Context, manifestPath, out string) error {
 	if err := forbidPrivilegedEnv("SOFA_MODEL_TOKEN", false); err != nil {
 		return err
@@ -350,6 +368,10 @@ func runDiscoveryGenerate(ctx context.Context, manifestPath, out string) error {
 	})
 }
 
+// runDiscoveryPublish checks the candidate and current admission, then posts or
+// recovers its specification comment through the fenced ledger publication flow.
+// It returns validation, credential, API, and ledger errors, including errors
+// after a comment may already have been posted.
 func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidatePath string) error {
 	c, err := readConfig(configPath)
 	if err != nil {
@@ -420,6 +442,9 @@ func runDiscoveryPublish(ctx context.Context, configPath, manifestPath, candidat
 	return err
 }
 
+// runDiscoveryFail validates the manifest against current configuration and
+// records kind through its Discovery fence. Configuration, credential, manifest,
+// and ledger errors are returned.
 func runDiscoveryFail(ctx context.Context, configPath, manifestPath, kind string) error {
 	c, err := readConfig(configPath)
 	if err != nil {

@@ -30,7 +30,9 @@ type PullReviewComment struct {
 }
 
 // PullReviewComments reads only the comments attached to the selected review.
-// A truncated history must fail closed rather than silently omit feedback.
+// Replies to existing threads are skipped. Request errors, invalid comment
+// identity, content over the aggregate 64 KiB bound, and a history without a
+// short page within 20 pages of 100 return errors rather than partial feedback.
 func (c *Client) PullReviewComments(ctx context.Context, repository string, number, reviewID int64) ([]PullReviewComment, error) {
 	if !lifecycleRepositoryPattern.MatchString(repository) || number < 1 || reviewID < 1 {
 		return nil, errors.New("invalid pull request review identity")
@@ -175,18 +177,31 @@ func (c *Client) PublishRepair(ctx context.Context, in RepairPublishInput) (Draf
 	}, nil
 }
 
+// repairPullMatches requires the same open PR identity and published head.
 func repairPullMatches(pr PullSnapshot, repository string, p state.Publication, baseBranch string) bool {
 	return repairPullIdentity(pr, repository, p, baseBranch) && pr.HeadSHA == p.HeadSHA
 }
 
+// repairPullIdentity checks the open, unmerged PR, branch, base branch, and
+// repository identities without comparing commit SHAs.
 func repairPullIdentity(pr PullSnapshot, repository string, p state.Publication, baseBranch string) bool {
 	return pr.Number == p.PRNumber && pr.URL == p.PRURL && pr.HeadRef == p.Branch && pr.BaseRef == baseBranch && pr.State == "open" && !pr.Merged && strings.EqualFold(pr.HeadRepository, repository) && strings.EqualFold(pr.BaseRepository, repository)
 }
 
+// prepareRepairCommit prepares a deterministic child commit against the
+// GitHub repository, returning its SHA, a leased push callback, and cleanup.
+// The caller must call cleanup after successful preparation. On failure the
+// helper attempts to remove its temporary directory before returning the error.
 func (c *Client) prepareRepairCommit(ctx context.Context, b integrity.Bundle, branch, marker string) (string, func() error, func(), error) {
 	return c.prepareRepairCommitAtURL(ctx, b, branch, marker, "https://github.com/"+b.Repository+".git")
 }
 
+// prepareRepairCommitAtURL fetches branch from repositoryURL and prepares a
+// deterministic child of b.BaseSHA in a temporary bare repository. On success it
+// returns the SHA, a push callback requiring the remote head to equal b.BaseSHA,
+// and cleanup, which the caller must invoke after using the callback.
+// Git preparation and push each have a two-minute timeout; identity, filesystem,
+// and Git failures return bounded errors.
 func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundle, branch, marker, repositoryURL string) (string, func() error, func(), error) {
 	if !c.Authenticated() || !safeBranch(branch) || !strings.HasPrefix(branch, "sofa/") || !lifecycleSHAPattern.MatchString(b.BaseSHA) {
 		return "", nil, nil, errors.New("invalid repair Git identity")
@@ -287,6 +302,10 @@ func (c *Client) prepareRepairCommitAtURL(ctx context.Context, b integrity.Bundl
 	return commit, push, cleanup, nil
 }
 
+// runRepairGit runs a Git subcommand with the supplied environment and input,
+// returning trimmed stdout. args must contain a subcommand. Process failures
+// return a bounded error without stderr or the underlying process error; output
+// over 1024 bytes is rejected.
 func runRepairGit(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

@@ -33,6 +33,8 @@ var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // A display name must identify exactly one stage.
 type Statuses map[Stage]string
 
+// Validate requires every canonical stage to have a distinct, nonempty display
+// name of at most 100 bytes without surrounding whitespace, NUL, CR, or LF.
 func (m Statuses) Validate() error {
 	if len(m) != len(Stages) {
 		return errors.New("lifecycle requires every canonical Project status")
@@ -48,6 +50,8 @@ func (m Statuses) Validate() error {
 	return nil
 }
 
+// StageFor resolves an exact display name, returning false if none matches.
+// The caller should validate the mapping to ensure names are unambiguous.
 func (m Statuses) StageFor(name string) (Stage, bool) {
 	for stage, display := range m {
 		if name == display {
@@ -66,6 +70,11 @@ type PollPlan struct {
 	Missed int64
 }
 
+// PlanPoll schedules one scan when an interval has elapsed or a nonempty wakeID
+// differs from lastWakeID. A zero last makes the first poll due. Next is based
+// on now for a due poll and last otherwise; Missed counts whole elapsed intervals.
+// Intervals outside one minute through 24 hours, invalid wake IDs, zero now,
+// and a clock earlier than last return errors.
 func PlanPoll(now, last time.Time, interval time.Duration, lastWakeID, wakeID string) (PollPlan, error) {
 	if now.IsZero() || interval < time.Minute || interval > 24*time.Hour || len(wakeID) > 512 || strings.ContainsAny(wakeID, "\x00\r\n") {
 		return PollPlan{}, errors.New("invalid poll schedule")
@@ -97,9 +106,10 @@ func PlanPoll(now, last time.Time, interval time.Duration, lastWakeID, wakeID st
 	return plan, nil
 }
 
-// SelectOpenSlots limits new work deterministically. Candidates are already
-// authorized by the caller and sorted by stable issue number; this function
-// never treats mere presence in a Project as admission.
+// SelectOpenSlots returns up to limit-active caller-authorized candidates in
+// issue-number order without modifying the input. Full capacity returns nil
+// without validating individual candidates. Invalid bounds, or nonpositive
+// or duplicate candidates when capacity remains, return errors.
 func SelectOpenSlots(candidates []int, active, limit int) ([]int, error) {
 	if active < 0 || limit < 1 || limit > 100 || len(candidates) > 10000 {
 		return nil, errors.New("invalid WIP inputs")

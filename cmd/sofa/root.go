@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// newRootCommand builds the sofa CLI with its trust-stage commands and bounded
+// parser diagnostics. A command is required to execute work.
 func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "sofa",

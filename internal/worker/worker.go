@@ -66,6 +66,13 @@ type Result struct {
 	NoChange                 bool             `json:"no_change"`
 }
 
+// Execute edits the supplied checkout using an admitted gofmt recipe or one
+// ACP turn, then returns a sealed candidate for allowed paths. ReviewFeedback
+// is untrusted prompt data and must be valid UTF-8 without NUL, at most 64 KiB.
+// No detected changes sets NoChange and leaves Bundle empty. Validation failures
+// wrap ErrValidation; when ACP is needed, a missing model token returns
+// agent.ErrAuthentication. Runner errors propagate with available telemetry. Edits are not
+// rolled back on failure. The caller owns admission and budget reservation.
 func Execute(ctx context.Context, in Input) (Result, error) {
 	var out Result
 	if err := in.Config.Validate(); err != nil {

@@ -23,6 +23,8 @@ type issueCommentJSON struct {
 	} `json:"user"`
 }
 
+// commentPath returns the issue-comment collection path, rejecting malformed
+// repository names and nonpositive issue numbers.
 func commentPath(repository string, issue int64) (string, error) {
 	if !repositoryPattern.MatchString(repository) || issue < 1 {
 		return "", errors.New("invalid issue comment target")
@@ -30,6 +32,9 @@ func commentPath(repository string, issue int64) (string, error) {
 	return "/repos/" + repository + "/issues/" + strconv.FormatInt(issue, 10) + "/comments", nil
 }
 
+// commentSnapshot converts a response belonging to the expected issue into
+// a comment observation. Missing identity, inconsistent timestamps, or a body
+// over 64 KiB returns an error.
 func commentSnapshot(repository string, issue int64, raw issueCommentJSON) (discovery.SpecComment, error) {
 	expected := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d", repository, issue)
 	if raw.ID < 1 || !strings.EqualFold(raw.IssueURL, expected) || raw.User.NodeID == "" || raw.CreatedAt.IsZero() || raw.UpdatedAt.Before(raw.CreatedAt) || len(raw.Body) > 64<<10 {
@@ -61,8 +66,10 @@ func (c *Client) IssueComment(ctx context.Context, repository string, issue, id 
 	return commentSnapshot(repository, issue, raw)
 }
 
-// IssueComments enumerates a bounded complete issue-comment history. A partial
-// page set is unusable for crash recovery because a prior POST may be hidden.
+// IssueComments scans a bounded issue-comment history, skipping bodies over
+// 64 KiB and comments without an author ID. Request or identity errors and a
+// history without a short page within 20 pages of 100 return errors; partial
+// results cannot be used to recover a prior POST.
 func (c *Client) IssueComments(ctx context.Context, repository string, issue int64) ([]discovery.SpecComment, error) {
 	path, err := commentPath(repository, issue)
 	if err != nil {
@@ -94,8 +101,10 @@ func (c *Client) IssueComments(ctx context.Context, repository string, issue int
 	return nil, errors.New("issue comment history exceeds recovery bound")
 }
 
-// CreateIssueComment publishes a versioned specification through an explicitly
-// passed repository-scoped credential. It cannot edit the owner's issue body.
+// CreateIssueComment posts a nonempty body of at most 64 KiB using the client
+// credential and verifies the returned body and issue identity. Callers must
+// validate specification syntax. Request and response-validation errors are
+// returned even when the comment may already have been created.
 func (c *Client) CreateIssueComment(ctx context.Context, repository string, issue int64, body string) (discovery.SpecComment, error) {
 	var empty discovery.SpecComment
 	path, err := commentPath(repository, issue)
