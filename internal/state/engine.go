@@ -50,8 +50,8 @@ func (e Engine) update(ctx context.Context, f func(*State) (bool, error)) error 
 }
 
 // Admit persists dispatch intent before any external dispatch. Same-authority
-// replay returns the original attempt; changed snapshots cannot mint new work.
-// Superseding an issue's existing authorization is intentionally not automatic.
+// replay returns the original attempt. A later attempt requires a separately
+// approved Discovery revision and an atomically superseded predecessor.
 func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (attempt Attempt, created bool, err error) {
 	if err = admission.Validate(); err != nil {
 		return
@@ -65,25 +65,68 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 		created = false
 		if a, ok := s.Attempts[id]; ok {
 			attempt = a
-			if a.Admission != admission || a.Limits != limits {
+			if a.Admission != admission || a.Limits != limits || !a.SupersededAt.IsZero() {
 				return false, ErrAdmissionChanged
 			}
 			return false, nil
 		}
+		var prior *Attempt
 		for _, a := range s.Attempts {
 			if a.Admission.Repository == admission.Repository && a.Admission.Issue == admission.Issue {
+				if prior == nil || a.SpecRevision > prior.SpecRevision {
+					candidate := a
+					prior = &candidate
+				} else if a.SpecRevision == prior.SpecRevision {
+					return false, ErrAdmissionChanged
+				}
+			}
+		}
+		counts := Counters{}
+		revision := int64(0)
+		var approved *SpecRecord
+		for _, record := range s.Specs {
+			if record.Repository == admission.Repository && record.Issue == admission.Issue {
+				if approved != nil {
+					return false, ErrAdmissionChanged
+				}
+				candidate := record
+				approved = &candidate
+			}
+		}
+		if approved != nil {
+			if approved.ApprovedDigest != admission.SpecDigest || approved.ProjectID != admission.ProjectID || approved.ProjectItemID != admission.ProjectItemID || !admission.StatusUpdatedAt.After(approved.BacklogUpdatedAt) {
 				return false, ErrAdmissionChanged
 			}
+			revision = approved.Revision
+		}
+		if prior != nil {
+			if prior.SupersededAt.IsZero() || approved == nil || approved.Revision <= prior.SpecRevision || !approved.BacklogUpdatedAt.After(prior.Admission.StatusUpdatedAt) || !limits.permits(prior.Counts) {
+				return false, ErrAdmissionChanged
+			}
+			following := *approved
+			if approved.Revision > prior.SpecRevision+1 {
+				history := s.SpecHistory[approved.IssueID]
+				if int64(len(history)) <= prior.SpecRevision+1 {
+					return false, ErrAdmissionChanged
+				}
+				following = history[prior.SpecRevision+1]
+			}
+			if !supersessionFollowsApprovedRevision(s, *prior, following) || !following.BacklogUpdatedAt.After(prior.Admission.StatusUpdatedAt) {
+				return false, ErrAdmissionChanged
+			}
+			counts = prior.Counts
 		}
 		now := e.now()
 		attempt = Attempt{
-			ID:        id,
-			Admission: admission,
-			Phase:     Pending,
-			Dispatch:  "pending",
-			Limits:    limits,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:           id,
+			Admission:    admission,
+			SpecRevision: revision,
+			Phase:        Pending,
+			Dispatch:     "pending",
+			Limits:       limits,
+			Counts:       counts,
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		}
 		s.Attempts[id] = attempt
 		created = true
@@ -95,6 +138,41 @@ func (e Engine) Admit(ctx context.Context, admission Admission, limits Limits) (
 	return
 }
 
+// A rejected Discovery proposal may be reset by a later owner Project move
+// without advancing the approved revision. In that case the superseded
+// attempt is bound to the first Discovery source, while the eventual approved
+// proposal is bound to the last one. The reset ledger proves that bridge.
+func supersessionFollowsApprovedRevision(s *State, prior Attempt, following SpecRecord) bool {
+	if prior.SupersededSourceDigest == following.SourceDigest {
+		return true
+	}
+	var first, last *DiscoveryTask
+	for i := range s.DiscoveryResetHistory[following.IssueID] {
+		reset := &s.DiscoveryResetHistory[following.IssueID][i]
+		if reset.Revision != following.Revision {
+			continue
+		}
+		if first == nil {
+			first = reset
+		}
+		last = reset
+	}
+	if first == nil || first.SourceDigest != prior.SupersededSourceDigest {
+		return false
+	}
+	var completed DiscoveryTask
+	if current, ok := s.Discoveries[following.IssueID]; ok && current.Revision == following.Revision {
+		completed = current
+	} else {
+		history := s.DiscoveryHistory[following.IssueID]
+		if following.Revision < 0 || int64(len(history)) <= following.Revision {
+			return false
+		}
+		completed = history[following.Revision]
+	}
+	return completed.Phase == DiscoveryReview && completed.Revision == following.Revision && completed.Repository == following.Repository && completed.Issue == following.Issue && completed.ProjectID == following.ProjectID && completed.ProjectItemID == following.ProjectItemID && completed.SourceDigest == following.SourceDigest && completed.SpecDigest == following.SpecDigest && completed.CommentID == following.CommentID && completed.CommentAuthorID == following.CommentAuthorID && completed.CommentCreatedAt.Equal(following.CommentCreatedAt) && completed.CommentUpdatedAt.Equal(following.CommentUpdatedAt) && completed.StatusUpdatedAt.After(last.StatusUpdatedAt) && completed.ModelCalls >= last.ModelCalls
+}
+
 // MarkDispatched acknowledges an external dispatch, but grants no authority.
 // A crash before this acknowledgement is safe: repeated deliveries must Claim.
 func (e Engine) MarkDispatched(ctx context.Context, id string) error {
@@ -102,6 +180,9 @@ func (e Engine) MarkDispatched(ctx context.Context, id string) error {
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
 		}
 		if a.Dispatch != "pending" {
 			return false, nil
@@ -146,10 +227,15 @@ func (e Engine) Claim(ctx context.Context, id string, owner Owner) (fence Fence,
 	return
 }
 
+// owned returns the attempt matching the ownership fence. Missing attempts yield
+// ErrNotFound; superseded attempts or changed ownership yield ErrStale.
 func owned(s *State, f Fence) (Attempt, error) {
 	a, ok := s.Attempts[f.AttemptID]
 	if !ok {
 		return a, ErrNotFound
+	}
+	if !a.SupersededAt.IsZero() {
+		return a, ErrStale
 	}
 	if a.Owner == nil || *a.Owner != f.Owner || a.Generation != f.Generation {
 		return a, ErrStale
@@ -257,6 +343,9 @@ func (e Engine) DiscardUnavailableCheckpoint(ctx context.Context, id string, exp
 		a, ok := s.Attempts[id]
 		if !ok {
 			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
 		}
 		if a.Phase != Pending || a.Owner != nil || a.Publication != nil {
 			return false, ErrClaimed
@@ -378,6 +467,9 @@ func (e Engine) Recover(ctx context.Context, id string, proof RunProof) error {
 		if !ok {
 			return false, ErrNotFound
 		}
+		if !a.SupersededAt.IsZero() {
+			return false, ErrStale
+		}
 		if a.Owner == nil || *a.Owner != proof.Owner {
 			return false, ErrStale
 		}
@@ -398,6 +490,70 @@ func (e Engine) Recover(ctx context.Context, id string, proof RunProof) error {
 			a.Checkpoint = nil
 		}
 		s.Attempts[id] = a
+		return true, nil
+	})
+}
+
+// StopProvenOwner releases a terminal Actions owner when automatic recovery is
+// not authorized. It preserves every charged counter and recovery identity.
+// The exact run proof and ledger owner are checked together under CAS, so a
+// failed API read or a replacement owner cannot free another worker's slot.
+func (e Engine) StopProvenOwner(ctx context.Context, id string, proof RunProof, kind string) error {
+	if !proof.terminal(e.now()) {
+		return ErrActive
+	}
+	if kind != "authority" && kind != "infrastructure" {
+		return fmt.Errorf("%w: stopped owner failure class", ErrInvalid)
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[id]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if !a.SupersededAt.IsZero() || a.Owner == nil || *a.Owner != proof.Owner {
+			return false, ErrStale
+		}
+		if a.Phase != Executing && a.Phase != Validating && a.Phase != Publishing {
+			return false, ErrClaimed
+		}
+		a.Owner = nil
+		a.Generation++
+		a.Failure = kind
+		a.Phase = Blocked
+		if kind == "infrastructure" {
+			a.Phase = Deferred
+		}
+		a.UpdatedAt = e.now()
+		s.Attempts[id] = a
+		return true, nil
+	})
+}
+
+// StopRevokedPending releases an ownerless primary delivery reservation only
+// after the caller has independently proved its admitted Ready grant is no
+// longer current. The exact ledger snapshot is compared under CAS: a claimed
+// worker, changed recovery intent, or review-repair reservation cannot be
+// stopped using an earlier Project observation.
+func (e Engine) StopRevokedPending(ctx context.Context, expected Attempt) error {
+	if expected.ID != AttemptID(expected.Admission) || expected.Phase != Pending || expected.Owner != nil || expected.Repair != nil || !expected.SupersededAt.IsZero() {
+		return ErrInvalid
+	}
+	return e.update(ctx, func(s *State) (bool, error) {
+		a, ok := s.Attempts[expected.ID]
+		if !ok {
+			return false, ErrNotFound
+		}
+		if a.Owner != nil || a.Phase != Pending {
+			return false, ErrClaimed
+		}
+		if !a.SupersededAt.IsZero() || !reflect.DeepEqual(a, expected) {
+			return false, ErrStale
+		}
+		a.Generation++
+		a.Phase = Blocked
+		a.Failure = "authority"
+		a.UpdatedAt = e.now()
+		s.Attempts[a.ID] = a
 		return true, nil
 	})
 }

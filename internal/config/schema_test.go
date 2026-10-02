@@ -37,6 +37,30 @@ func TestConfigurationSchema(t *testing.T) {
 			runtimeValid: true,
 		},
 		{
+			name:         "lifecycle omitted for legacy delivery caller",
+			text:         strings.Replace(text, text[strings.Index(text, "lifecycle:\n"):strings.Index(text, "allowed_paths:\n")], "", 1),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name: "lifecycle missing stage",
+			text: replace("    spec_review: Spec Review\n", ""),
+		},
+		{
+			name: "lifecycle invalid poll",
+			text: replace("poll_minutes: 10", "poll_minutes: 1"),
+		},
+		{
+			name: "release check requires app identity",
+			text: replace("required_checks: []", "required_checks: [{name: smoke, app_id: 0}]"),
+		},
+		{
+			name:         "release check with app identity",
+			text:         replace("required_checks: []", "required_checks: [{name: smoke, app_id: 15368}]"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
 			name:         "omitted retry limits default to zero",
 			text:         strings.ReplaceAll(replace("  repair_attempts: 0\n", ""), "  infra_retries: 1\n", ""),
 			schemaValid:  true,
@@ -87,6 +111,49 @@ func TestConfigurationSchema(t *testing.T) {
 		{
 			name: "empty Ready status",
 			text: replace("ready_status: Ready", "ready_status: ''"),
+		},
+		{
+			name: "padded Ready status",
+			text: replace("ready_status: Ready", "ready_status: ' Ready '"),
+		},
+		{
+			name: "padded lifecycle status",
+			text: replace("    spec_review: Spec Review", "    spec_review: ' Spec Review '"),
+		},
+		{
+			name:         "empty optional owner fields",
+			text:         replace("  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: ''\n  priority_field: ''"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name:         "named optional owner fields",
+			text:         replace("  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: Dependencies\n  priority_field: Priority"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name: "padded dependencies field",
+			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  dependencies_field: ' Dependencies'"),
+		},
+		{
+			name: "padded priority field",
+			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  priority_field: 'Priority '"),
+		},
+		{
+			name:         "named advice fields",
+			text:         replace("  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Hold\n  next_action_field: Follow up"),
+			schemaValid:  true,
+			runtimeValid: true,
+		},
+		{
+			name:        "unpaired advice field",
+			text:        replace("  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: Hold"),
+			schemaValid: true,
+		},
+		{
+			name: "padded advice field",
+			text: replace("  delivery_wip: 1", "  delivery_wip: 1\n  blocked_reason_field: ' Hold'\n  next_action_field: Follow up"),
 		},
 		{
 			name: "unknown profile field",
@@ -159,6 +226,11 @@ func TestConfigurationSchema(t *testing.T) {
 		{
 			name: "oversized argument",
 			text: replace("argv: [go, test, ./...]", "argv: [go, '"+strings.Repeat("x", 4097)+"']"),
+		},
+		{
+			name:        "UTF-8 argument byte limit",
+			text:        replace("argv: [go, test, ./...]", "argv: [go, '"+strings.Repeat("é", 2049)+"']"),
+			schemaValid: true,
 		},
 		{
 			name: "unbounded check timeout",

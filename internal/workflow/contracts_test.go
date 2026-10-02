@@ -29,9 +29,11 @@ type contractJob struct {
 	Permissions map[string]string `yaml:"permissions"`
 	Steps       []struct {
 		Name  string            `yaml:"name"`
+		If    string            `yaml:"if"`
 		Run   string            `yaml:"run"`
 		Shell string            `yaml:"shell"`
 		Uses  string            `yaml:"uses"`
+		Env   map[string]string `yaml:"env"`
 		With  map[string]string `yaml:"with"`
 	} `yaml:"steps"`
 }

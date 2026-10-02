@@ -6,6 +6,27 @@ repository_id: R_kgDOUmB_jw
 project_id: REPLACE_PROJECT_NODE_ID
 owner_id: MDQ6VXNlcjUxMDk1Nw==
 ready_status: Ready
+lifecycle:
+  statuses:
+    inbox: Inbox
+    discovery: Discovery
+    spec_review: Spec Review
+    backlog: Backlog
+    ready: Ready
+    building: Building
+    verification: Verification
+    review: Review
+    release: Release
+    done: Done
+  poll_minutes: 10
+  discovery_wip: 2
+  delivery_wip: 1
+  # Optional overrides for the default Project text fields:
+  # blocked_reason_field: Blocked reason
+  # next_action_field: Next action
+  spec_author_id: MDM6Qm90NDE4OTgyODI= # github-actions[bot] issue-comment author
+  release:
+    required_checks: []
 allowed_paths:
   - fixture/greeting.go
 profile:

@@ -1,0 +1,80 @@
+# Build one secretless controller for an exact sofa revision. Credentialed
+# lifecycle polls discover the artifact by revision, verify its provenance,
+# then run it without building the repository on each wake.
+name: Sofa / Reusable controller build
+
+on:
+  workflow_call:
+    inputs:
+      toolkit_sha:
+        description: Full immutable commit SHA of the sofa toolkit
+        required: true
+        type: string
+    outputs:
+      artifact_id:
+        description: ID of the controller artifact in the calling repository
+        value: ${{ jobs.build.outputs.artifact_id }}
+
+jobs:
+  build:
+    name: Build pinned lifecycle controller
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Validate immutable toolkit reference
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
+      - name: Check out immutable sofa toolkit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          persist-credentials: false
+          path: toolkit
+      - name: Verify toolkit source revision
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
+          test -z "$(git -C toolkit status --porcelain)"
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: toolkit/go.mod
+          cache: false
+      - name: Build and verify controller provenance
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p controller
+          (cd toolkit && go build -trimpath -buildvcs=true -o ../controller/sofa ./cmd/sofa)
+          build_info="$(go version -m controller/sofa)"
+          revision="$(awk '$1 == "build" && $2 ~ /^vcs.revision=/ {sub(/^vcs.revision=/, "", $2); print $2}' <<< "$build_info")"
+          modified="$(awk '$1 == "build" && $2 ~ /^vcs.modified=/ {sub(/^vcs.modified=/, "", $2); print $2}' <<< "$build_info")"
+          test "$revision" = "$SOFA_TOOLKIT_SHA"
+          test "$modified" = false
+          binary_sha256="$(sha256sum controller/sofa | cut -d ' ' -f 1)"
+          jq -n --arg toolkit_sha "$SOFA_TOOLKIT_SHA" --arg binary_sha256 "$binary_sha256" \
+            '{schema: "sofa-controller-v1", toolkit_sha: $toolkit_sha, goos: "linux", goarch: "amd64", cgo_enabled: false, binary_sha256: $binary_sha256}' \
+            > controller/manifest.json
+      - name: Upload pinned controller
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-controller-${{ inputs.toolkit_sha }}
+          path: controller/
+          if-no-files-found: error
+          retention-days: 30

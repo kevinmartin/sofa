@@ -25,7 +25,11 @@ on:
       SOFA_PROJECTS_TOKEN:
         required: true
       SOFA_PUBLISH_TOKEN:
-        required: true
+        required: false # Legacy publisher identity; an App can author reviewable PRs instead.
+      SOFA_PUBLISH_APP_ID:
+        required: false
+      SOFA_PUBLISH_APP_PRIVATE_KEY:
+        required: false
 
 # The caller invokes this only when reconcile emitted dispatch=true. Recovery
 # fetches only the prior run/attempt identified by the admitted manifest.
@@ -412,9 +416,51 @@ jobs:
         run: |
           test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
           test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
+      - name: Select publisher identity
+        id: publisher-auth
+        shell: bash
+        env:
+          SOFA_HAS_APP_ID: ${{ secrets.SOFA_PUBLISH_APP_ID != '' }}
+          SOFA_HAS_APP_KEY: ${{ secrets.SOFA_PUBLISH_APP_PRIVATE_KEY != '' }}
+          SOFA_HAS_LEGACY_TOKEN: ${{ secrets.SOFA_PUBLISH_TOKEN != '' }}
+        run: |
+          if [[ "$SOFA_HAS_APP_ID" == true && "$SOFA_HAS_APP_KEY" == true ]]; then
+            echo 'mode=app' >> "$GITHUB_OUTPUT"
+          elif [[ "$SOFA_HAS_APP_ID" == true || "$SOFA_HAS_APP_KEY" == true ]]; then
+            echo 'publisher App ID and private key must be configured together' >&2
+            exit 1
+          elif [[ "$SOFA_HAS_LEGACY_TOKEN" == true ]]; then
+            echo 'mode=legacy' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publisher credential unavailable' >&2
+            exit 1
+          fi
+      # The installation token is restricted to this consumer repository and
+      # revoked at job end. It never enters execution or verification jobs.
+      - name: Mint repository-scoped publisher App token
+        if: steps.publisher-auth.outputs.mode == 'app'
+        id: publisher-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SOFA_PUBLISH_APP_ID }}
+          private-key: ${{ secrets.SOFA_PUBLISH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       # Revalidate issue content, Project Ready revision, and ledger ownership
       # immediately before publication; reconcile an existing intent/PR on retry.
-      - name: Revalidate live authority and publish one draft PR
+      - name: Revalidate live authority and publish one draft PR with App
+        if: steps.publisher-auth.outputs.mode == 'app'
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_PUBLISH_TOKEN: ${{ steps.publisher-app.outputs.token }}
+          SOFA_BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          ./sofa publish --config consumer/.sofa.yml \
+            --manifest transport/manifest.json --bundle candidate/bundle.json \
+            --evidence evidence/checks.json --base-branch "$SOFA_BASE_BRANCH"
+      - name: Revalidate live authority and publish one draft PR with legacy token
+        if: steps.publisher-auth.outputs.mode == 'legacy'
         shell: bash
         env:
           SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}

@@ -43,6 +43,6 @@ func newRootCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "ACP standard I/O transport")
 	_ = cmd.Flags().MarkHidden("acp")
 	_ = cmd.Flags().MarkHidden("stdio")
-	cmd.AddCommand(newPrepareCommand(), newRecoverCommand(), newReportCommand(), newDenyCommand(), newGateBridgeCommand())
+	cmd.AddCommand(newPrepareCommand(), newRecoverCommand(), newReportCommand(), newDenyCommand(), newGateBridgeCommand(), newReleaseObserveCommand())
 	return cmd
 }

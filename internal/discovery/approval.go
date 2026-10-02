@@ -1,0 +1,221 @@
+package discovery
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/state"
+)
+
+var (
+	ErrAuthority = errors.New("discovery lacks trusted Project authority")
+	ErrRevision  = errors.New("specification revision requires new review")
+)
+
+// Policy comes from trusted repository configuration, never an issue.
+// Project ACLs restrict Backlog/Ready; GitHub does not reliably expose the mover.
+type Policy struct {
+	Repository       string
+	RepositoryID     string
+	ProjectID        string
+	DiscoveryStatus  string
+	SpecReviewStatus string
+	BacklogStatus    string
+	ReadyStatus      string
+}
+
+// SpecComment is a live GitHub issue-comment observation, not authority by
+// itself. Its immutable identity is bound to the durable Discovery task.
+type SpecComment struct {
+	ID        int64
+	AuthorID  string
+	Body      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// valid checks comment identity and timestamp ordering, without parsing its body.
+func (c SpecComment) valid() bool {
+	return c.ID > 0 && c.AuthorID != "" && len(c.AuthorID) <= 512 && !strings.ContainsAny(c.AuthorID, "\x00\r\n\t ") && !c.CreatedAt.IsZero() && !c.UpdatedAt.Before(c.CreatedAt)
+}
+
+// valid checks required policy fields and distinct adjacent approval statuses.
+func (p Policy) valid() bool {
+	return p.Repository != "" && p.RepositoryID != "" && p.ProjectID != "" && p.DiscoveryStatus != "" && p.SpecReviewStatus != "" && p.BacklogStatus != "" && p.ReadyStatus != "" && p.DiscoveryStatus != p.SpecReviewStatus && p.SpecReviewStatus != p.BacklogStatus && p.BacklogStatus != p.ReadyStatus
+}
+
+// trusted reports whether an open issue belongs to the configured private
+// Project and has an observed revision of the requested display status.
+func (p Policy) trusted(s admission.Snapshot, status string) bool {
+	return p.valid() && s.Complete && s.Open && strings.EqualFold(s.Repository, p.Repository) && s.RepositoryID == p.RepositoryID && s.ProjectID == p.ProjectID && s.ProjectPrivate && s.IssueID != "" && s.Number > 0 && s.ProjectItemID != "" && s.CurrentStatus == status && s.StatusOptionID != "" && !s.StatusUpdatedAt.IsZero()
+}
+
+// matches binds a specification record to the snapshot's issue and Project item.
+func (p Policy) matches(s admission.Snapshot, r state.SpecRecord) bool {
+	return strings.EqualFold(r.Repository, p.Repository) && r.IssueID == s.IssueID && r.Issue == int64(s.Number) && r.ProjectID == s.ProjectID && r.ProjectItemID == s.ProjectItemID
+}
+
+// sameComment compares a valid comment's identity and timestamps, not its body.
+func sameComment(c SpecComment, id int64, author string, createdAt, updatedAt time.Time) bool {
+	return c.valid() && c.ID == id && c.AuthorID == author && c.CreatedAt.Equal(createdAt) && c.UpdatedAt.Equal(updatedAt)
+}
+
+// sourceDigest hashes the canonical issue title and idea body, returning any
+// canonicalization error.
+func sourceDigest(s admission.Snapshot) (string, error) {
+	_, digest, err := admission.CanonicalSpec(s.Title, s.Body)
+	return digest, err
+}
+
+// commentDigest returns the canonical title/specification bytes and their digest.
+// Invalid comment metadata or specification syntax yields ErrRevision; canonical
+// encoding errors are returned directly.
+func commentDigest(s admission.Snapshot, c SpecComment) ([]byte, string, error) {
+	if !c.valid() {
+		return nil, "", ErrRevision
+	}
+	if _, err := Parse(c.Body); err != nil {
+		return nil, "", fmt.Errorf("%w: %w", ErrRevision, err)
+	}
+	return admission.CanonicalSpec(s.Title, c.Body)
+}
+
+// AuthorizeDiscovery treats the private Project's Discovery status as explicit
+// owner admission. Public issue creation alone never authorizes inference.
+func AuthorizeDiscovery(p Policy, s admission.Snapshot) (state.DiscoveryAdmission, []byte, error) {
+	if !p.trusted(s, p.DiscoveryStatus) {
+		return state.DiscoveryAdmission{}, nil, ErrAuthority
+	}
+	canonical, digest, err := admission.CanonicalSpec(s.Title, s.Body)
+	if err != nil {
+		return state.DiscoveryAdmission{}, nil, fmt.Errorf("%w: invalid source", ErrRevision)
+	}
+	return state.DiscoveryAdmission{
+		Repository:      strings.ToLower(p.Repository),
+		IssueID:         s.IssueID,
+		Issue:           int64(s.Number),
+		ProjectID:       s.ProjectID,
+		ProjectItemID:   s.ProjectItemID,
+		StatusOptionID:  s.StatusOptionID,
+		StatusUpdatedAt: s.StatusUpdatedAt,
+		SourceDigest:    digest,
+	}, canonical, nil
+}
+
+// ReviewCommentReadyForMove verifies an already published, durable Discovery
+// comment before the trusted controller advances Discovery to Spec Review.
+// It does not itself mutate the Project or approve the specification.
+func ReviewCommentReadyForMove(p Policy, s admission.Snapshot, c SpecComment, task state.DiscoveryTask) error {
+	if !p.trusted(s, p.DiscoveryStatus) || task.Phase != state.DiscoveryReview || task.IssueID != s.IssueID || task.Issue != int64(s.Number) || !strings.EqualFold(task.Repository, p.Repository) || task.ProjectID != p.ProjectID || task.ProjectItemID != s.ProjectItemID || task.StatusOptionID != s.StatusOptionID || !task.StatusUpdatedAt.Equal(s.StatusUpdatedAt) || !sameComment(c, task.CommentID, task.CommentAuthorID, task.CommentCreatedAt, task.CommentUpdatedAt) {
+		return ErrAuthority
+	}
+	source, err := sourceDigest(s)
+	if err != nil || source != task.SourceDigest || (!s.IssueLastEditedAt.IsZero() && s.IssueLastEditedAt.After(c.CreatedAt)) || c.CreatedAt.Before(task.StatusUpdatedAt) {
+		return ErrRevision
+	}
+	_, digest, err := commentDigest(s, c)
+	if err != nil || digest != task.SpecDigest {
+		return ErrRevision
+	}
+	return nil
+}
+
+// CaptureReview records the versioned bot-authored comment already visible in
+// Spec Review. A copied marker from another commenter has no authority.
+// It returns the proposed record, canonical snapshot, and whether the record
+// changed; an unchanged replay returns a nil snapshot. It does not persist them.
+func CaptureReview(p Policy, s admission.Snapshot, c SpecComment, task state.DiscoveryTask, prior *state.SpecRecord) (state.SpecRecord, []byte, bool, error) {
+	if !p.trusted(s, p.SpecReviewStatus) || task.Phase != state.DiscoveryReview || task.IssueID != s.IssueID || task.Issue != int64(s.Number) || !strings.EqualFold(task.Repository, p.Repository) || task.ProjectID != p.ProjectID || task.ProjectItemID != s.ProjectItemID || !sameComment(c, task.CommentID, task.CommentAuthorID, task.CommentCreatedAt, task.CommentUpdatedAt) {
+		return state.SpecRecord{}, nil, false, ErrAuthority
+	}
+	if prior != nil && !p.matches(s, *prior) {
+		return state.SpecRecord{}, nil, false, ErrAuthority
+	}
+	if prior == nil && task.Revision != 0 {
+		return state.SpecRecord{}, nil, false, ErrRevision
+	}
+	if prior != nil {
+		if task.Revision == prior.Revision && task.CommentID == prior.CommentID && task.SourceDigest == prior.SourceDigest && task.SpecDigest == prior.SpecDigest && s.StatusOptionID == prior.ReviewOptionID && s.StatusUpdatedAt.Equal(prior.ReviewUpdatedAt) {
+			if !currentRevision(s, c, *prior) {
+				return state.SpecRecord{}, nil, false, ErrRevision
+			}
+			return *prior, nil, false, nil
+		}
+		if prior.ApprovedDigest == "" || task.Revision != prior.Revision+1 || task.SourceDigest == prior.SourceDigest || c.ID == prior.CommentID || !task.StatusUpdatedAt.After(prior.BacklogUpdatedAt) || !c.CreatedAt.After(prior.BacklogUpdatedAt) || !s.StatusUpdatedAt.After(prior.BacklogUpdatedAt) {
+			return state.SpecRecord{}, nil, false, ErrRevision
+		}
+	}
+	source, err := sourceDigest(s)
+	if err != nil || source != task.SourceDigest || (!s.IssueLastEditedAt.IsZero() && s.IssueLastEditedAt.After(c.CreatedAt)) {
+		return state.SpecRecord{}, nil, false, ErrRevision
+	}
+	canonical, digest, err := commentDigest(s, c)
+	if err != nil || digest != task.SpecDigest || c.UpdatedAt.After(s.StatusUpdatedAt) {
+		return state.SpecRecord{}, nil, false, ErrRevision
+	}
+	record := state.SpecRecord{
+		Revision:         task.Revision,
+		Repository:       strings.ToLower(p.Repository),
+		IssueID:          s.IssueID,
+		Issue:            int64(s.Number),
+		ProjectID:        s.ProjectID,
+		ProjectItemID:    s.ProjectItemID,
+		SourceDigest:     source,
+		SpecDigest:       digest,
+		IssueEditedAt:    s.IssueLastEditedAt,
+		CommentID:        c.ID,
+		CommentAuthorID:  c.AuthorID,
+		CommentCreatedAt: c.CreatedAt,
+		CommentUpdatedAt: c.UpdatedAt,
+		ReviewOptionID:   s.StatusOptionID,
+		ReviewUpdatedAt:  s.StatusUpdatedAt,
+	}
+	return record, canonical, prior == nil || *prior != record, nil
+}
+
+// currentRevision verifies the recorded source and comment revision.
+// Invalid source or specification content is treated as a revision mismatch.
+func currentRevision(s admission.Snapshot, c SpecComment, r state.SpecRecord) bool {
+	source, err := sourceDigest(s)
+	if err != nil || source != r.SourceDigest || (!s.IssueLastEditedAt.IsZero() && s.IssueLastEditedAt.After(r.CommentCreatedAt)) || !sameComment(c, r.CommentID, r.CommentAuthorID, r.CommentCreatedAt, r.CommentUpdatedAt) {
+		return false
+	}
+	_, digest, err := commentDigest(s, c)
+	return err == nil && digest == r.SpecDigest
+}
+
+// ApproveBacklog binds only a prior observed Spec Review proposal to a later
+// restricted-Project Backlog transition. It never writes the Project status.
+func ApproveBacklog(p Policy, s admission.Snapshot, c SpecComment, prior state.SpecRecord) (state.SpecRecord, bool, error) {
+	if !p.trusted(s, p.BacklogStatus) || !p.matches(s, prior) || prior.SpecDigest == "" || prior.ReviewUpdatedAt.IsZero() {
+		return prior, false, ErrAuthority
+	}
+	if !currentRevision(s, c, prior) || !s.StatusUpdatedAt.After(prior.ReviewUpdatedAt) || !s.StatusUpdatedAt.After(c.UpdatedAt) || (!s.IssueLastEditedAt.IsZero() && !s.StatusUpdatedAt.After(s.IssueLastEditedAt)) {
+		return prior, false, ErrRevision
+	}
+	if prior.ApprovedDigest != "" {
+		if prior.ApprovedDigest == prior.SpecDigest && prior.BacklogOptionID == s.StatusOptionID && prior.BacklogUpdatedAt.Equal(s.StatusUpdatedAt) {
+			return prior, false, nil
+		}
+		return prior, false, ErrRevision
+	}
+	prior.ApprovedDigest = prior.SpecDigest
+	prior.BacklogOptionID = s.StatusOptionID
+	prior.BacklogUpdatedAt = s.StatusUpdatedAt
+	return prior, true, nil
+}
+
+// ReadyApproved supplements exact-Ready admission with observed Backlog
+// approval. A changed spec comment or source idea requires re-review.
+func ReadyApproved(p Policy, s admission.Snapshot, c SpecComment, record state.SpecRecord) error {
+	if !p.trusted(s, p.ReadyStatus) || !p.matches(s, record) || record.ApprovedDigest == "" || record.BacklogUpdatedAt.IsZero() {
+		return ErrAuthority
+	}
+	if !currentRevision(s, c, record) || record.ApprovedDigest != record.SpecDigest || !s.StatusUpdatedAt.After(record.BacklogUpdatedAt) || (!s.IssueLastEditedAt.IsZero() && (!record.BacklogUpdatedAt.After(s.IssueLastEditedAt) || !s.StatusUpdatedAt.After(s.IssueLastEditedAt))) {
+		return ErrRevision
+	}
+	return nil
+}

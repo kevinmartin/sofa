@@ -59,6 +59,36 @@ func TestAuthorizeAndRevalidate(t *testing.T) {
 	}
 }
 
+func TestRevalidateDeliveryRetainsReadyGrantAfterFactoryMove(t *testing.T) {
+	c, ready := fixture(t)
+	grant, _, err := Authorize(c, ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	building := ready
+	building.CurrentStatus = c.Lifecycle.Statuses["building"]
+	building.StatusOptionID = "building-option"
+	building.StatusUpdatedAt = ready.StatusUpdatedAt.Add(time.Minute)
+	if err := RevalidateDelivery(c, building, grant); err != nil {
+		t.Fatalf("factory stage revoked admitted grant: %v", err)
+	}
+	changed := building
+	changed.Body += " New scope."
+	if err := RevalidateDelivery(c, changed, grant); err == nil {
+		t.Fatal("changed specification was accepted")
+	}
+	changed = building
+	changed.CurrentStatus = c.Lifecycle.Statuses["backlog"]
+	if err := RevalidateDelivery(c, changed, grant); err == nil {
+		t.Fatal("owner approval stage was accepted as delivery")
+	}
+	changed = building
+	changed.StatusUpdatedAt = ready.StatusUpdatedAt
+	if err := RevalidateDelivery(c, changed, grant); err == nil {
+		t.Fatal("advanced stage without a later revision was accepted")
+	}
+}
+
 func TestAuthorizePreservesConfiguredRepositoryCasing(t *testing.T) {
 	c, s := fixture(t)
 	s.Repository = strings.ToUpper(c.Repository)

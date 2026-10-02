@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kevinmartin/sofa/internal/admission"
+	"github.com/kevinmartin/sofa/internal/discovery"
 	"github.com/kevinmartin/sofa/internal/github"
 	"github.com/kevinmartin/sofa/internal/integrity"
 	"github.com/kevinmartin/sofa/internal/state"
@@ -36,6 +37,11 @@ func newAdmitCommand() *cobra.Command {
 	return cmd
 }
 
+// runAdmit validates live approval, persists admission, and claims or recovers
+// bounded delivery work. It writes status.json and, for dispatched work, manifest.json
+// in opts.outDir. Active, completed, or blocked work produces a nondispatch status;
+// run-proof read failures also leave owned work active. Other validation, state,
+// GitHub, and file errors propagate and may follow a durable reservation.
 func runAdmit(ctx context.Context, opts admitOptions) error {
 	c, err := readConfig(opts.configPath)
 	if err != nil {
@@ -53,9 +59,23 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 	if err != nil {
 		return err
 	}
+	store := github.StateStore{
+		Client:     ledgerClient,
+		Repository: c.Repository,
+	}
 	snapshot, err := projects.Issue(ctx, c, opts.issue)
 	if err != nil {
 		return err
+	}
+	if c.Lifecycle != nil {
+		policy, err := discoveryPolicy(c)
+		if err != nil {
+			return err
+		}
+		snapshot, err = discovery.ApprovedSnapshot(ctx, projects, store, policy, snapshot)
+		if err != nil {
+			return err
+		}
 	}
 	grant, spec, err := admission.Authorize(c, snapshot)
 	if err != nil {
@@ -64,21 +84,21 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 	if err := integrity.ScanSecrets(spec, [][]byte{[]byte(os.Getenv("SOFA_PROJECTS_TOKEN")), []byte(os.Getenv("SOFA_STATE_TOKEN"))}); err != nil {
 		return errors.New("approved specification contains sensitive material")
 	}
-	store := github.StateStore{
-		Client:     ledgerClient,
-		Repository: c.Repository,
-	}
 	engine := state.Engine{
 		Store: store,
 	}
-	maxAttempts := int64(c.Limits.InfraRetries + 1)
+	maxAttempts := int64(c.Limits.InfraRetries + c.Limits.RepairAttempts + 1)
 	limits := state.Limits{
 		ModelCalls:            int64(c.Limits.MaxAgentTurns) * maxAttempts,
 		Repairs:               int64(c.Limits.RepairAttempts),
 		InfrastructureRetries: int64(c.Limits.InfraRetries),
 		RuntimeSeconds:        int64(c.Limits.AttemptSeconds) * maxAttempts,
 	}
-	attempt, _, err := engine.Admit(ctx, ledgerAdmission(grant), limits)
+	legacyAttempts := int64(c.Limits.InfraRetries + 1)
+	legacyLimits := limits
+	legacyLimits.ModelCalls = int64(c.Limits.MaxAgentTurns) * legacyAttempts
+	legacyLimits.RuntimeSeconds = int64(c.Limits.AttemptSeconds) * legacyAttempts
+	attempt, _, err := admitWithLegacyLimits(ctx, engine, ledgerAdmission(grant), limits, legacyLimits)
 	if err != nil {
 		return err
 	}
@@ -192,4 +212,14 @@ func runAdmit(ctx context.Context, opts admitOptions) error {
 		}
 		return ""
 	}()})
+}
+
+// Existing attempts keep the limits persisted by the previous toolkit formula.
+// Only the exact same admission may replay them; new attempts use current limits.
+func admitWithLegacyLimits(ctx context.Context, engine state.Engine, admission state.Admission, current, legacy state.Limits) (state.Attempt, bool, error) {
+	attempt, created, err := engine.Admit(ctx, admission, current)
+	if !errors.Is(err, state.ErrAdmissionChanged) || current == legacy || attempt.ID != state.AttemptID(admission) || attempt.Admission != admission || attempt.Limits != legacy || !attempt.SupersededAt.IsZero() {
+		return attempt, created, err
+	}
+	return engine.Admit(ctx, admission, legacy)
 }

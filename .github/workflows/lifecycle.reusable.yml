@@ -1,0 +1,167 @@
+# Metadata-only lifecycle reconciliation for a caller's private Project. The
+# controller reads current issues, PRs and checks, then writes only bounded
+# ledger and non-approval Project statuses. No model runs in this workflow.
+name: Sofa / Reusable lifecycle reconciliation
+
+on:
+  workflow_call:
+    inputs:
+      toolkit_sha:
+        description: Full immutable commit SHA of the sofa toolkit
+        required: true
+        type: string
+      wake_id:
+        description: Stable event revision; omit for the scheduled ticker
+        required: false
+        type: string
+      delivery_workflow:
+        description: Caller-owned workflow filename accepting issue_number
+        required: false
+        default: sofa.yml
+        type: string
+      discovery_workflow:
+        description: Caller-owned Discovery workflow filename accepting issue_number
+        required: false
+        default: sofa-discovery.yml
+        type: string
+    secrets:
+      SOFA_PROJECTS_TOKEN:
+        required: true
+
+jobs:
+  reconcile:
+    if: github.event_name == 'schedule' || (github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: sofa-lifecycle-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write # Consumer-owned sofa-state ledger only.
+      issues: read
+      pull-requests: read
+      checks: read
+      actions: write # Dispatch caller-owned delivery workflow for Ready items.
+    steps:
+      - name: Validate trusted workflow inputs
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_DELIVERY_WORKFLOW: ${{ inputs.delivery_workflow }}
+          SOFA_DISCOVERY_WORKFLOW: ${{ inputs.discovery_workflow }}
+        run: |
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full commit SHA' >&2; exit 1; }
+          [[ "$SOFA_DELIVERY_WORKFLOW" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || { echo 'delivery_workflow must be a workflow filename' >&2; exit 1; }
+          [[ "$SOFA_DISCOVERY_WORKFLOW" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || { echo 'discovery_workflow must be a workflow filename' >&2; exit 1; }
+      - name: Check out caller configuration
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: consumer
+      - name: Download and verify pinned controller
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_REPOSITORY: ${{ github.repository }}
+          SOFA_CALLER_SHA: ${{ github.sha }}
+          SOFA_DEFAULT_BRANCH: ${{ github.event_name == 'schedule' && github.ref_name || github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test -n "$SOFA_DEFAULT_BRANCH" || { echo 'Default branch unavailable for controller artifact lookup' >&2; exit 1; }
+          repo_id=$(gh api "repos/$SOFA_REPOSITORY" --jq .id)
+          artifact_name="sofa-controller-$SOFA_TOOLKIT_SHA"
+          artifact=$(gh api "repos/$SOFA_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" |
+            jq -c --arg name "$artifact_name" --arg branch "$SOFA_DEFAULT_BRANCH" --argjson repo_id "$repo_id" \
+              '[.artifacts[] | select(.name == $name and .expired == false and .workflow_run.head_branch == $branch and .workflow_run.repository_id == $repo_id and .workflow_run.head_repository_id == $repo_id)] | sort_by(.id) | last // empty')
+          test -n "$artifact" || { echo 'No unexpired pinned controller artifact; dispatch the secretless controller build' >&2; exit 1; }
+          artifact_id=$(jq -r .id <<< "$artifact")
+          archive_digest=$(jq -r .digest <<< "$artifact")
+          archive_size=$(jq -r .size_in_bytes <<< "$artifact")
+          producer_id=$(jq -r .workflow_run.id <<< "$artifact")
+          test "$(jq -r .workflow_run.repository_id <<< "$artifact")" = "$repo_id"
+          test "$(jq -r .workflow_run.head_repository_id <<< "$artifact")" = "$repo_id"
+          test "$(jq -r .workflow_run.head_branch <<< "$artifact")" = "$SOFA_DEFAULT_BRANCH"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$producer_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$archive_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$archive_size" =~ ^[1-9][0-9]*$ ]] && (( archive_size <= 67108864 ))
+          producer=$(gh api "repos/$SOFA_REPOSITORY/actions/runs/$producer_id")
+          jq -e --argjson repo_id "$repo_id" --arg branch "$SOFA_DEFAULT_BRANCH" \
+            '.status == "completed" and .conclusion == "success" and .event == "workflow_dispatch" and .path == ".github/workflows/sofa-controller-build.yml" and .head_branch == $branch and .repository.id == $repo_id and .head_repository.id == $repo_id' \
+            <<< "$producer" >/dev/null
+          producer_sha=$(jq -r .head_sha <<< "$producer")
+          [[ "$producer_sha" =~ ^[0-9a-f]{40}$ && "$SOFA_CALLER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          comparison=$(gh api "repos/$SOFA_REPOSITORY/compare/$producer_sha...$SOFA_CALLER_SHA" --jq .status)
+          [[ "$comparison" == identical || "$comparison" == ahead ]] || { echo 'Controller build is not on the caller history' >&2; exit 1; }
+          gh api "repos/$SOFA_REPOSITORY/actions/artifacts/$artifact_id/zip" > controller.zip
+          test "$(sha256sum controller.zip | cut -d ' ' -f 1)" = "${archive_digest#sha256:}"
+          test "$(unzip -Z -1 controller.zip | sort)" = $'manifest.json\nsofa'
+          unzip -p controller.zip manifest.json > controller-manifest.json
+          jq -e --arg sha "$SOFA_TOOLKIT_SHA" \
+            '.schema == "sofa-controller-v1" and .toolkit_sha == $sha and .goos == "linux" and .goarch == "amd64" and .cgo_enabled == false and (.binary_sha256 | test("^[0-9a-f]{64}$"))' \
+            controller-manifest.json >/dev/null
+          unzip -p controller.zip sofa > sofa-controller
+          test "$(sha256sum sofa-controller | cut -d ' ' -f 1)" = "$(jq -r .binary_sha256 controller-manifest.json)"
+          chmod 700 sofa-controller
+      - name: Reconcile due Project work without inference
+        shell: bash
+        env:
+          SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
+          SOFA_STATE_TOKEN: ${{ github.token }}
+          SOFA_WAKE_ID: ${{ inputs.wake_id }}
+        run: |
+          mkdir -p transport
+          ./sofa-controller lifecycle reconcile --config consumer/.sofa.yml --wake-id "$SOFA_WAKE_ID" --out transport/lifecycle.json
+      - name: Summarize lifecycle holds and Backlog review suggestions
+        shell: bash
+        env:
+          SOFA_REPOSITORY: ${{ github.repository }}
+        run: |
+          jq -e '.backlog_advisories | type == "array" and length <= 2000 and all(.[]; (.issue_number | type == "number") and .issue_number > 0 and (.blocked_reason | type == "string") and (.next_action | type == "string"))' transport/lifecycle.json >/dev/null
+          jq -e '.hold_advisories | type == "array" and length <= 2000 and all(.[]; (.issue_number | type == "number") and .issue_number > 0 and (.blocked_reason | type == "string") and (.next_action | type == "string"))' transport/lifecycle.json >/dev/null
+          hold_count=$(jq '.hold_advisories | length' transport/lifecycle.json)
+          if (( hold_count > 0 )); then
+            {
+              echo '### Lifecycle holds'
+              jq -r --arg repo "$SOFA_REPOSITORY" '.hold_advisories[:20][] | "- [Issue #\(.issue_number)](https://github.com/\($repo)/issues/\(.issue_number)): \(.blocked_reason). Next: \(.next_action)."' transport/lifecycle.json
+              if (( hold_count > 20 )); then
+                echo "Showing the first 20 of $hold_count holds."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          count=$(jq '.backlog_advisories | length' transport/lifecycle.json)
+          if (( count > 0 )); then
+            {
+              echo '### Backlog review suggestions'
+              jq -r --arg repo "$SOFA_REPOSITORY" '.backlog_advisories[:20][] | "- [Issue #\(.issue_number)](https://github.com/\($repo)/issues/\(.issue_number)): \(.blocked_reason). Next: \(.next_action)."' transport/lifecycle.json
+              if (( count > 20 )); then
+                echo "Showing the first 20 of $count suggestions."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Dispatch owner-admitted Discovery issues
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOFA_DISCOVERY_WORKFLOW: ${{ inputs.discovery_workflow }}
+          SOFA_REPOSITORY: ${{ github.repository }}
+          SOFA_REF: ${{ github.event_name == 'schedule' && github.ref_name || github.event.repository.default_branch }}
+        run: |
+          jq -e '.discovery_issue_numbers | type == "array" and length <= 20' transport/lifecycle.json >/dev/null
+          jq -r '.discovery_issue_numbers[]' transport/lifecycle.json | while IFS= read -r issue; do
+            [[ "$issue" =~ ^[1-9][0-9]*$ ]] || { echo 'invalid Discovery dispatch identity' >&2; exit 1; }
+            gh workflow run "$SOFA_DISCOVERY_WORKFLOW" --repo "$SOFA_REPOSITORY" --ref "$SOFA_REF" -f issue_number="$issue"
+          done
+      - name: Dispatch approved Ready issues
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOFA_DELIVERY_WORKFLOW: ${{ inputs.delivery_workflow }}
+          SOFA_REPOSITORY: ${{ github.repository }}
+          SOFA_REF: ${{ github.event_name == 'schedule' && github.ref_name || github.event.repository.default_branch }}
+        run: |
+          jq -e '.ready_issue_numbers | type == "array" and length <= 20' transport/lifecycle.json >/dev/null
+          jq -r '.ready_issue_numbers[]' transport/lifecycle.json | while IFS= read -r issue; do
+            [[ "$issue" =~ ^[1-9][0-9]*$ ]] || { echo 'invalid issue dispatch identity' >&2; exit 1; }
+            gh workflow run "$SOFA_DELIVERY_WORKFLOW" --repo "$SOFA_REPOSITORY" --ref "$SOFA_REF" -f issue_number="$issue"
+          done
