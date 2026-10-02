@@ -5,11 +5,33 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kevinmartin/sofa/internal/state"
 )
+
+func TestDefaultCompatibilityFixtureUsesRetainedBaseline(t *testing.T) {
+	baseline, err := os.ReadFile("testdata/compatibility-v0.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(baseline, compatibilityBaseline) {
+		t.Fatal("embedded compatibility baseline differs from checked-in fixture")
+	}
+	want, err := decodeCompatibilityFixture(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := newCompatibilityFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("default fixture was regenerated instead of loaded from retained baseline")
+	}
+}
 
 func TestCompatibilityFixtureSurvivesFileHandoff(t *testing.T) {
 	first := filepath.Join(t.TempDir(), "before.json")

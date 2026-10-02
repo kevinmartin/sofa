@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -106,75 +107,11 @@ func newDistributionCommand() *cobra.Command {
 	return cmd
 }
 
+//go:embed testdata/compatibility-v0.json
+var compatibilityBaseline []byte
+
 func newCompatibilityFixture() (compatibilityFixture, error) {
-	c, err := config.Decode(strings.NewReader(compatibilityConfig))
-	if err != nil {
-		return compatibilityFixture{}, err
-	}
-	configDigest, err := c.Digest()
-	if err != nil {
-		return compatibilityFixture{}, err
-	}
-	when := time.Date(2026, time.September, 29, 12, 0, 0, 0, time.UTC)
-	owner := state.Owner{
-		RunID:      "fixture-run-42",
-		RunAttempt: 2,
-	}
-	admission := state.Admission{
-		Repository:      c.Repository,
-		Issue:           7,
-		SpecDigest:      strings.Repeat("a", 64),
-		ConfigDigest:    configDigest,
-		BaseSHA:         strings.Repeat("b", 40),
-		ProjectID:       c.ProjectID,
-		ProjectItemID:   "item-fixture-7",
-		StatusOptionID:  "ready-fixture",
-		StatusUpdatedAt: when,
-	}
-	attempt := state.Attempt{
-		ID:         state.AttemptID(admission),
-		Admission:  admission,
-		Phase:      state.Validating,
-		Generation: 3,
-		Owner:      &owner,
-		Dispatch:   "claimed",
-		Limits: state.Limits{
-			ModelCalls:            5,
-			Repairs:               2,
-			InfrastructureRetries: 1,
-			RuntimeSeconds:        600,
-		},
-		Counts: state.Counters{
-			ModelCalls:            2,
-			Repairs:               1,
-			InfrastructureRetries: 1,
-			RuntimeSeconds:        120,
-		},
-		Checkpoint: &state.Checkpoint{
-			Version:      state.Version,
-			Phase:        state.Validating,
-			ArtifactID:   "fixture-artifact-7",
-			Digest:       strings.Repeat("c", 64),
-			CandidateSHA: strings.Repeat("d", 40),
-			Producer:     owner,
-			Generation:   3,
-			AcceptedAt:   when.Add(time.Minute),
-			ExpiresAt:    when.Add(time.Hour),
-		},
-		CreatedAt: when,
-		UpdatedAt: when.Add(2 * time.Minute),
-	}
-	ledger := state.Empty()
-	ledger.Attempts[attempt.ID] = attempt
-	encoded, err := state.Encode(ledger)
-	if err != nil {
-		return compatibilityFixture{}, err
-	}
-	return compatibilityFixture{
-		SchemaVersion: 1,
-		ConfigYAML:    compatibilityConfig,
-		Ledger:        encoded,
-	}, nil
+	return decodeCompatibilityFixture(compatibilityBaseline)
 }
 
 func readCompatibilityFixture(path string) (compatibilityFixture, error) {
@@ -187,6 +124,10 @@ func readCompatibilityFixture(path string) (compatibilityFixture, error) {
 	if err != nil || len(data) > 2<<20 {
 		return compatibilityFixture{}, errors.New("read compatibility fixture")
 	}
+	return decodeCompatibilityFixture(data)
+}
+
+func decodeCompatibilityFixture(data []byte) (compatibilityFixture, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var fixture compatibilityFixture

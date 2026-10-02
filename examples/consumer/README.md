@@ -88,8 +88,13 @@ on its admitted base revision. The configured recipe path is exact and runs
 without Copilot. A missing path or already formatted file does not count as a
 successful recipe candidate.
 
-For recovery, rerun the same issue after the earlier Actions run is terminal.
-The ledger either suppresses duplicate work or reclaims the attempt. If a
+For factory recovery, start a fresh workflow dispatch for the same issue after
+the earlier Actions run is terminal, so reconciliation can admit the new run
+attempt. GitHub's raw failed-job or specific-job reruns can retain an earlier
+manifest and ownership fence; they are not a replacement for re-admission.
+Release selection supports full and partial job reruns, but does not bypass
+these factory ownership checks. The ledger either suppresses duplicate work or
+reclaims the attempt. If a
 publication intent survived, the verifier fetches the previous run's candidate
 artifact and checks it again under the new fence. Artifacts have a one-day
 retention. If a candidate checkpoint's artifact is missing before publication

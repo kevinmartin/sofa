@@ -50,25 +50,28 @@ expose the mover reliably, so Sofa does not claim to identify who made a move.
 One scheduled caller should invoke the reusable reconciliation workflow every
 ten minutes, or hourly using `lifecycle.poll_minutes: 60`. Manual and event
 wakeups use the same ledger and coalesce missed ticks. A poll reads metadata
-only; no model is started for unchanged items. Before the first poll at a new
-Sofa `toolkit_sha`, dispatch the consumer's default-branch, secretless
-controller-build caller at exactly `.github/workflows/sofa-controller-build.yml`.
-The poll rejects artifacts from another workflow path. The caller invokes
-`controller-build.reusable.yml` with that
-same full SHA and uploads a controller artifact in the consumer repository.
-The poll finds the artifact by exact SHA and verifies its producer, archive,
-manifest, and binary before fetching the Project credential. The artifact
-expires after 30 days; dispatch the builder again for the still-pinned SHA
-before expiry. A missing, expired, or invalid artifact stops the poll and
-requires an operator to inspect the build. The poll never rebuilds the
-controller from source. Keep the producer caller on a protected default
-branch and its artifact free of secrets.
+only; no model is started for unchanged items. After the first promoted v0
+release is activated, normal callers use
+`kevinmartin/sofa/.github/workflows/lifecycle.reusable.yml@v0` and omit
+`toolkit_sha`. Each poll uses the shared setup Action to download both CLIs
+from the currently promoted immutable Sofa release, verifies its signed asset,
+and retains that selection throughout the job. No Go toolchain, controller-build
+dispatch, or expiring controller artifact is needed. Optional `release_version`
+selects an exact immutable release within v0 instead of automatic updates.
+See [release setup and activation](releases.md) before migrating an existing
+consumer; keep its legacy caller operational until the v0 channel exists.
+
+Hosted tests of unmerged Sofa source can select a candidate workflow revision
+and pass the corresponding full `toolkit_sha`. That separate path builds both
+CLIs once in a secretless job and transfers them only within its invocation.
+It is not the normal polling setup. `controller-build.reusable.yml` remains
+only for legacy callers during migration.
 
 The poll's bounded output dispatches
 the caller-owned Discovery workflow for owner-admitted Discovery items and the
-delivery workflow for approved Ready items. The Discovery caller passes an
-exact `toolkit_sha` and targeted `issue_number` to
-`discovery.reusable.yml`; when its trusted publisher uses `github.token` for
+delivery workflow for approved Ready items. The normal Discovery caller uses
+`discovery.reusable.yml@v0`, omits `toolkit_sha`, and passes the targeted
+`issue_number`; when its trusted publisher uses `github.token` for
 issue comments, pin `spec_author_id` to the public node ID of
 `github-actions[bot]`. Active Discovery defaults to two
 items and code-writing delivery to one per repository; changing either cap is
