@@ -63,10 +63,21 @@ jobs:
           SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
         run: |
           set -euo pipefail
+          jq_bin=$(command -v jq)
+          # Hosted images contain Go already. Exclude every toolchain directory
+          # so this step proves the installed binaries need no Go runtime.
+          export PATH="$RUNNER_TEMP/sofa-cli"
+          if command -v go >/dev/null; then
+            echo 'Go must be unavailable during the CLI-only proof' >&2
+            exit 1
+          fi
           for binary in sofa sofa-test; do
             "$binary" --version >/dev/null
-            "$binary" version | jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
+            # $sha is a jq argument; the saved executable path hides jq from ShellCheck.
+            # shellcheck disable=SC2016
+            "$binary" version | "$jq_bin" -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
           done
+          sofa-test distribution compatibility-fixture >/dev/null
       - name: Upload first-job compatibility state
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -148,10 +159,21 @@ jobs:
           SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
         run: |
           set -euo pipefail
+          jq_bin=$(command -v jq)
+          # Hosted images contain Go already. Exclude every toolchain directory
+          # so this step proves the installed binaries need no Go runtime.
+          export PATH="$RUNNER_TEMP/sofa-cli"
+          if command -v go >/dev/null; then
+            echo 'Go must be unavailable during the CLI-only proof' >&2
+            exit 1
+          fi
           for binary in sofa sofa-test; do
             "$binary" --version >/dev/null
-            "$binary" version | jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
+            # $sha is a jq argument; the saved executable path hides jq from ShellCheck.
+            # shellcheck disable=SC2016
+            "$binary" version | "$jq_bin" -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
           done
+          sofa-test distribution compatibility-fixture >/dev/null
 
   result:
     name: Distribution E2E result

@@ -156,7 +156,7 @@ func TestHostedDistributionE2ERequiresEverySecretlessHandoff(t *testing.T) {
 				pathExportIndex = index
 			}
 			if step.Name == "Prove both CLIs remain on PATH in a later step" {
-				laterPathCheck = strings.Contains(step.Run, `"$binary" --version`) && strings.Contains(step.Run, `"$binary" version`) && strings.Contains(step.Run, `for binary in sofa sofa-test`) && strings.Contains(step.Run, `.source_commit == $sha`)
+				laterPathCheck = strings.Contains(step.Run, `"$binary" --version`) && strings.Contains(step.Run, `"$binary" version`) && strings.Contains(step.Run, `for binary in sofa sofa-test`) && strings.Contains(step.Run, `.source_commit == $sha`) && strings.Contains(step.Run, `export PATH="$RUNNER_TEMP/sofa-cli"`) && strings.Contains(step.Run, "command -v go") && strings.Contains(step.Run, "sofa-test distribution compatibility-fixture")
 				laterPathCheckIndex = index
 			}
 			if strings.Contains(step.Run, "go build ") {
