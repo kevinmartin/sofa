@@ -21,7 +21,7 @@ func TestDiscoveryWorkflowSeparatesModelAndPublicationAuthority(t *testing.T) {
 	if _, ok := w.On.WorkflowCall.Secrets["SOFA_PROJECTS_TOKEN"]; !ok || len(w.On.WorkflowCall.Secrets) != 1 {
 		t.Fatal("Discovery must receive only the caller-owned Project credential")
 	}
-	if len(w.Jobs) != 4 || w.Jobs["generate"].Needs != "admit" || !reflect.DeepEqual(w.Jobs["publish"].Needs, []any{"admit", "generate"}) || !reflect.DeepEqual(w.Jobs["finalize-failure"].Needs, []any{"admit", "generate", "publish"}) {
+	if len(w.Jobs) != 5 || w.Jobs["admit"].Needs != "candidate-build" || w.Jobs["generate"].Needs != "admit" || !reflect.DeepEqual(w.Jobs["publish"].Needs, []any{"admit", "generate"}) || !reflect.DeepEqual(w.Jobs["finalize-failure"].Needs, []any{"admit", "generate", "publish"}) {
 		t.Fatal("Discovery job graph lost admission, generation, publication, or failure fencing")
 	}
 	finalizer := w.Jobs["finalize-failure"].If

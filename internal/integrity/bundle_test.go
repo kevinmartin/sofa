@@ -29,14 +29,14 @@ func fixture(t *testing.T) (Bundle, Expected, Policy) {
 		t.Fatal(err)
 	}
 	return b, Expected{
-		Repository:      b.Repository,
-		AttemptID:       b.AttemptID,
-		Generation:      b.Generation,
-		BaseSHA:         b.BaseSHA,
-		CandidateDigest: b.CandidateDigest,
-	}, Policy{
-		AllowedPaths: []string{"src/"},
-	}
+			Repository:      b.Repository,
+			AttemptID:       b.AttemptID,
+			Generation:      b.Generation,
+			BaseSHA:         b.BaseSHA,
+			CandidateDigest: b.CandidateDigest,
+		}, Policy{
+			AllowedPaths: []string{"src/"},
+		}
 }
 
 func TestValidateBindsIdentityAndContents(t *testing.T) {

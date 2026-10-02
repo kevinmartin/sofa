@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kevinmartin/sofa/internal/version"
 )
 
 // newRootCommand assembles the CLI with bounded parser errors and explicit help routing.
@@ -13,6 +15,7 @@ func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "sofa",
 		Short:         "Run approved issue work through the SOFA trust stages",
+		Version:       version.Current().String(),
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		CompletionOptions: cobra.CompletionOptions{
@@ -25,9 +28,10 @@ func newRootCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return errors.New("command required: admit, execute, verify, publish, fail, discovery, lifecycle, review-repair, spec-digest, config")
+			return errors.New("command required: admit, execute, verify, publish, fail, discovery, lifecycle, review-repair, spec-digest, config, release, version")
 		},
 	}
+	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, _ error) error {
 		return errors.New("invalid command flags")
 	})
@@ -42,6 +46,8 @@ func newRootCommand() *cobra.Command {
 		newReviewRepairCommand(),
 		newSpecDigestCommand(),
 		newConfigCommand(),
+		newReleaseCommand(),
+		newVersionCommand(),
 	)
 	cmd.SetHelpCommand(newHelpCommand(cmd))
 	return cmd

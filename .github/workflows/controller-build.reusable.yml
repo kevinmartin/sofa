@@ -1,3 +1,5 @@
+# Legacy migration wrapper only. Normal consumers install releases through
+# setup-cli; candidate invocations use candidate-build.reusable.yml.
 # Build one secretless controller for an exact sofa revision. Credentialed
 # lifecycle polls discover the artifact by revision, verify its provenance,
 # then run it without building the repository on each wake.
