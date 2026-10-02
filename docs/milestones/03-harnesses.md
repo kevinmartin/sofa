@@ -4,7 +4,7 @@
 
 The same admitted task contract can use Copilot, Codex, or Claude through Caelis-backed ACP adapters, with explicitly selected model endpoints and isolated authentication. A compatibility report states which exact combinations were actually tested.
 
-Requires [01](01-delivery-slice.md). Read its adapter/evidence handoff, [the shared contract](README.md), and [PLAN.md](../../PLAN.md), especially ACP, endpoint, and credential boundaries. This goal can develop independently of 02/04 once the shared contracts are agreed.
+Requires [01](01-delivery-slice.md). Read its adapter/evidence handoff, [the shared contract](README.md), [PLAN.md](../../PLAN.md), and the tool-capability amendments in [02.1](02.1-versioned-distribution.md). This goal can develop independently of 02/04 once the shared contracts are agreed; it does not require 02.1 distribution to be implemented first.
 
 ## Prerequisites
 
@@ -14,6 +14,8 @@ Replay and transport tests need no subscriptions. Live checks need configured na
 
 - Keep Caelis protocol types private. Add/configure native Copilot ACP, the Codex ACP adapter, and the Claude ACP adapter with pinned compatible harness versions. Implement capabilities, streaming, permission requests, multi-turn behavior, deadlines, cancellation, and process cleanup consistently.
 - Implement explicit per-role profiles: harness, endpoint/provider, native wire protocol, model, optional supported reasoning effort, auth source, and limits. Discovery, implementation, review, blackbox, security, diagnosis, supervision, and dreaming may share a profile while using isolated sessions and permissions.
+- Include permitted tools and MCP servers in trusted role profiles. Replace the hard-coded file-only Copilot flags and blanket built-in MCP disabling with the capabilities each role needs. Implementation and repair profiles must support useful command execution; browser execution and independent gates are qualified in 04. Issue text and agent plugins cannot enable tools or expand permissions.
+- Account for harness-native tools that bypass ACP callbacks. Prove permitted execution and prohibited access in the isolated runtime, including separation of executed candidate code from controlling model and publication credentials; a mocked permission denial is insufficient.
 - Add direct protocol-specific endpoint presets. Copilot targets Chat Completions; Codex targets Responses; Claude targets Anthropic Messages. Custom hostnames must satisfy the actual protocol and configured data-routing policy. Do not introduce OpenCode as an intermediary.
 - Implement OpenRouter presets, including a free-only pool where compatible, and connection to the user's FreeLLMAPI instance for the Copilot/Codex targets in the plan. Claude plus non-Claude/free-pool backends remains explicitly experimental; it is not a substitute for the required Claude-compatible route.
 - Isolate auth/config/home state per profile. Native subscription profiles reject endpoint overrides. Router profiles use explicit endpoint credentials and clear incompatible native login state. Credential-bearing endpoints require HTTPS with normal certificate validation; reject HTTP before attaching credentials and reject redirects rather than forwarding credentials to another origin. Cover these boundaries in adapter tests. Unsupported combinations fail diagnostics without changing harness, provider, or billing source.
@@ -38,6 +40,7 @@ Exclude persistent Codex subscription refresh/secret writeback, arbitrary creden
 - [ ] **03-E:** An observed upstream incompatibility is recorded with reproducible evidence and an explicit unsupported/experimental status; absent access is recorded as untested and leaves required live validation pending. Do not silently remove a planned target or replace a required harness. A promised required capability remains open until it works or Kevin explicitly changes its scope; labeling it unsupported is not by itself completion. Targets already designated experimental by the plan may remain experimental with evidence.
 - [ ] **03-F:** Free-only, quota, auth failure, unsupported effort/model, context limits, and endpoint unavailability cannot trigger a paid or alternative-auth fallback. Ordinary diagnostics use zero model calls.
 - [ ] **03-G:** Profile selection from trusted configuration/inputs has documented precedence. Issue text and repository agent plugins cannot supply credential-bearing endpoints or override policy.
+- [ ] **03-H:** Each supported implementation/repair harness profile runs a real fixture test command and captures its result. Trusted tool/MCP settings take effect, prohibited operations remain denied even through native tools, and executed candidate code cannot obtain controlling model or publication credentials. File edits alone do not satisfy command-execution support.
 
 ## Evidence and handoff
 
@@ -46,5 +49,5 @@ Write `docs/milestones/evidence/03-harnesses.md` and the compatibility matrix. D
 ## Goal prompt
 
 ```text
-Implement milestone 03 in docs/milestones/03-harnesses.md under the shared contract in docs/milestones/README.md and PLAN.md. Complete the three Caelis-backed ACP harness integrations, isolated auth/profile selection, and direct endpoint compatibility matrix. Use subagents for independent adapters or contract tests, integrate their work, and maintain docs/milestones/evidence/03-harnesses.md with actual local and live results. Do not substitute mocks for live interoperability, forward subscription credentials to routers, or enable paid fallbacks. Stop when this milestone's required acceptance is complete; leave unavailable or incompatible targets accurately documented.
+Implement milestone 03 in docs/milestones/03-harnesses.md under the shared contract in docs/milestones/README.md and PLAN.md. Complete the three Caelis-backed ACP harness integrations, isolated auth/profile selection, and direct endpoint compatibility matrix. Replace the fixed Copilot tool restrictions with trusted role-specific tool/MCP profiles, and prove useful command execution and prohibited-access denial, including native-tool and credential boundaries. Use subagents for independent adapters or contract tests, integrate their work, and maintain docs/milestones/evidence/03-harnesses.md with actual local and live results. Do not substitute mocks for live interoperability, forward subscription credentials to routers, or enable paid fallbacks. Stop when this milestone's required acceptance is complete; leave unavailable or incompatible targets accurately documented.
 ```

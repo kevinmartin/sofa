@@ -12,6 +12,8 @@ Implement the Go decision interfaces, direct Jev HTTP adapter, optional SemIf su
 
 Route only among prefiltered, trusted model/effort profiles. Explicit choices and a single eligible profile make no decision request. Use advertised, tested ACP configuration between completed turns; otherwise start a configured session at a checkpoint. Reread available reasoning options after model changes. Preserve supported endpoint/auth combinations, required review roles, and publication boundaries.
 
+Prefilter profiles against the task's required tool/MCP capabilities from 03 and 04 before any model selection. A routing decision cannot add tools, servers, credentials, origins, or execution permissions. If no permitted profile provides a required capability, return Blocked; static fallbacks must meet the same requirements.
+
 Exclude per-internal-call proxies, universal live steering, browser navigation, memory ranking, scheduled watches, and new credentials/providers. Those belong to later milestones. Unknown failures may invoke existing diagnosis; classification never authorizes broader repairs, relaxes checks, or publishes protected-policy changes.
 
 ## Checkpoints
@@ -31,6 +33,7 @@ Exclude per-internal-call proxies, universal live steering, browser navigation, 
 - [ ] **05-F:** Recovery updates the existing task/PR, preserves budgets across reruns, and verifies the repair against current candidate gates.
 - [ ] **05-G:** Held-out results and predeclared promotion targets are published separately from calibration results; uncertainty is not presented as a correctness guarantee.
 - [ ] **05-H:** Missing required live access remains an incomplete validation item while independent local work continues; failed calibration can legitimately leave automatic decisions disabled.
+- [ ] **05-I:** Profiles lacking required command/browser/MCP capabilities are excluded before routing. Malicious decisions cannot expand permissions, and an empty eligible set produces an explicit Blocked result without silently dropping a required capability. Apply the same checks to deterministic and provider-error fallbacks.
 
 ## Evidence and handoff
 
@@ -39,5 +42,5 @@ During implementation, write `docs/milestones/evidence/05-system-one-routing.md`
 ## Paste-ready goal
 
 ```text
-Implement docs/milestones/05-system-one-routing.md under docs/milestones/README.md. Complete its scoped checkpoints and validation, preserve static fallbacks and authority boundaries, and write the specified evidence report. Keep unavailable required live validation explicitly incomplete while continuing independent work. Stop at this milestone.
+Implement docs/milestones/05-system-one-routing.md under docs/milestones/README.md. Complete its scoped checkpoints and validation, preserve static fallbacks and authority boundaries, and write the specified evidence report. Route only among profiles satisfying required tool/MCP capabilities; model selection and fallbacks cannot grant permissions or omit required tools. Keep unavailable required live validation explicitly incomplete while continuing independent work. Stop at this milestone.
 ```

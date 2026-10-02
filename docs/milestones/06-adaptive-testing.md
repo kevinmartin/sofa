@@ -10,6 +10,8 @@ Depends on **04: mandatory independent gates** and **05: System One routing/reco
 
 Implement all new observation, decision, action-policy, supervision, and reporting logic in Go. Use the existing browser runtime against a local/disposable application with synthetic accounts and a declared origin allowlist. Support observed HTML/ARIA controls through click, fixture-backed fill, native select, scroll, bounded wait, done, and blocked operations. Unsupported controls stop or escalate explicitly.
 
+Reuse milestone 04's qualified browser tool/runtime and credential boundary, including Playwright where supported. Require an actual running application and browser execution with captured observations/actions; removing Copilot CLI restrictions or enabling an MCP server alone does not qualify the exploratory lane.
+
 Keep deterministic regression journeys and acceptance oracles authoritative. Jev consumes DOM/accessibility text; screenshots support evidence, not unsupported Jev vision. Novel generated test text may use an already supported generative profile only after deterministic fixtures are exhausted and within the same budget.
 
 Exclude production targets, arbitrary web browsing, payment or messaging actions, new browser services, general desktop/mobile control, per-call model proxies, and automatic semantic worker termination. Progress supervision remains advisory in this milestone; deterministic cancellation already implemented remains active. Active semantic intervention requires a later evaluated policy change.
@@ -30,7 +32,7 @@ Exclude production targets, arbitrary web browsing, payment or messaging actions
 - [ ] **06-E:** Seeded defects fail independent oracles even when the decision provider returns `DONE`; passing evidence matches the tested candidate and environment.
 - [ ] **06-F:** At least one live exploratory finding yields a deterministic replay that fails the buggy fixture and passes its repaired version.
 - [ ] **06-G:** Repeated identical supervision evidence makes no new decision calls; advisory errors do not stop useful workers or waive deterministic limits.
-- [ ] **06-H:** Real browser and live-provider evidence is distinct from mocked replay coverage; unavailable required live validation stays incomplete while independent work continues.
+- [ ] **06-H:** Actual browser execution against the running fixture reuses 04's qualified runtime and credential boundary. Capture browser observations/actions and live-provider evidence separately from mocked replay coverage; a CLI flag change alone cannot satisfy this acceptance. Unavailable required live validation stays incomplete while independent work continues.
 
 ## Evidence and handoff
 
@@ -39,5 +41,5 @@ During implementation, write `docs/milestones/evidence/06-adaptive-testing.md` w
 ## Paste-ready goal
 
 ```text
-Implement docs/milestones/06-adaptive-testing.md under docs/milestones/README.md. Complete bounded browser exploration, advisory supervision, independent oracle validation, and the specified evidence report. Keep unavailable required live validation explicitly incomplete while continuing independent work. Stop at this milestone.
+Implement docs/milestones/06-adaptive-testing.md under docs/milestones/README.md. Complete bounded browser exploration, advisory supervision, independent oracle validation, and the specified evidence report. Reuse milestone 04's qualified browser/runtime boundary and prove actual browser execution against a running fixture; removing CLI restrictions alone is insufficient. Keep unavailable required live validation explicitly incomplete while continuing independent work. Stop at this milestone.
 ```

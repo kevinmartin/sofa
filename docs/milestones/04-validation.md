@@ -20,6 +20,7 @@ Local gate and fault tests use deterministic fixtures. Live specialist checks ne
 - Bind each result to policy/tool versions, exact candidate/build/environment identity, execution identity, and evidence. Reuse unaffected evidence only through explicit validity rules; integrity/security recheck the new candidate. Reconcile external required checks against the exact PR head.
 - Add bounded repair/rerun flow driven by actual findings, preserving the same PR and aggregate counters. Accepted oracles cannot be rewritten merely to get green. Record full regression reproductions and concise findings for the implementer.
 - Provide the secretless browser/runtime and finite observed-action boundary that 06 can extend. This milestone uses deterministic journeys and scripted negative cases; Jev exploration arrives later.
+- Provide a running disposable web fixture and configured browser tools, including Playwright where supported by the selected profile. Exercise real browser interactions against declared test origins; enabling CLI/MCP flags alone is insufficient. Keep the application and browser execution separate from controlling model and publication credentials, and pass captured results to the independent gate.
 
 Exclude System One decision-making, continuous patrols, generic visual taste automation, new production permissions, and protected workflow/policy auto-fixes.
 
@@ -40,6 +41,7 @@ Exclude System One decision-making, continuous patrols, generic visual taste aut
 - [ ] **04-F:** The complete canary becomes ready only after current sofa gates and repository required checks pass. It remains unmerged for Kevin.
 - [ ] **04-G:** Deterministic CLI/library/browser fixtures demonstrate profile-specific testing, bounded target operations, and secretless environments. Performance/accessibility/compatibility hooks capture real configured measurements and report unsupported requirements as blocked.
 - [ ] **04-H:** Sensitive findings never enter public logs/issues/artifacts/state as raw content; a missing private destination blocks sensitive publication. Use synthetic secrets/findings to verify this behavior.
+- [ ] **04-I:** A real hosted browser tool operates the running web fixture, captures execution evidence, and detects a seeded defect through independent assertions. Out-of-scope origins and access to controlling model/publication credentials are denied; missing required browser capabilities block the applicable gate. Record the browser/tool profile for reuse by 06.
 
 ## Evidence and handoff
 
@@ -48,5 +50,5 @@ Write `docs/milestones/evidence/04-validation.md`. Include the capability profil
 ## Goal prompt
 
 ```text
-Implement milestone 04 in docs/milestones/04-validation.md, following docs/milestones/README.md and PLAN.md. Build deterministic required-gate planning and independent review, blackbox, and security validation on milestone 01. Prove readiness is tied to current executable evidence, with bounded repairs and isolated credentials. Use subagents for independent gate adapters and adversarial fixtures, and maintain docs/milestones/evidence/04-validation.md. Complete the required local and hosted demonstrations without merging the canary PR, weakening an oracle, or implementing later milestones.
+Implement milestone 04 in docs/milestones/04-validation.md, following docs/milestones/README.md and PLAN.md. Build deterministic required-gate planning and independent review, blackbox, and security validation on milestone 01. Prove readiness is tied to current executable evidence, with bounded repairs and isolated credentials. Include a running disposable web fixture and actual scoped browser execution using Playwright where supported; tested code must not receive controlling model or publication credentials. Use subagents for independent gate adapters and adversarial fixtures, and maintain docs/milestones/evidence/04-validation.md. Complete the required local and hosted demonstrations without merging the canary PR, weakening an oracle, or implementing later milestones.
 ```
