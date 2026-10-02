@@ -14,7 +14,9 @@ type contractWorkflow struct {
 	On struct {
 		WorkflowCall struct {
 			Inputs map[string]struct {
-				Type string `yaml:"type"`
+				Type     string `yaml:"type"`
+				Required bool   `yaml:"required"`
+				Default  string `yaml:"default"`
 			} `yaml:"inputs"`
 		} `yaml:"workflow_call"`
 	} `yaml:"on"`
@@ -131,17 +133,21 @@ func checkDeliveryContracts(callerData, reconcileData, workData []byte) error {
 	}
 	refs := []string{
 		strings.TrimPrefix(caller.Jobs["reconcile"].Uses, "kevinmartin/sofa/.github/workflows/reconcile.reusable.yml@"),
-		caller.Jobs["reconcile"].With["toolkit_sha"],
 		strings.TrimPrefix(caller.Jobs["work"].Uses, "kevinmartin/sofa/.github/workflows/work.reusable.yml@"),
-		caller.Jobs["work"].With["toolkit_sha"],
 	}
-	for _, ref := range refs {
-		if !toolkitRef.MatchString(ref) || ref != refs[0] {
-			return fmt.Errorf("caller reusable workflow and toolkit commit refs differ")
+	if refs[0] == "" || refs[0] != refs[1] {
+		return fmt.Errorf("caller reusable workflow references differ")
+	}
+	reconcileSHA, workSHA := caller.Jobs["reconcile"].With["toolkit_sha"], caller.Jobs["work"].With["toolkit_sha"]
+	if toolkitRef.MatchString(refs[0]) {
+		if reconcileSHA != refs[0] || workSHA != refs[0] || caller.Jobs["reconcile"].With["release_version"] != "" || caller.Jobs["work"].With["release_version"] != "" {
+			return fmt.Errorf("candidate caller workflow and CLI sources differ or combine release selection")
 		}
+	} else if !regexp.MustCompile(`^v[0-9]+$`).MatchString(refs[0]) || reconcileSHA != "" || workSHA != "" || caller.Jobs["reconcile"].With["release_version"] != "${{ inputs.release_version }}" || caller.Jobs["work"].With["release_version"] != "${{ inputs.release_version }}" {
+		return fmt.Errorf("released caller must use one major channel and forward the same release request")
 	}
-	if reconcile.On.WorkflowCall.Inputs["toolkit_sha"].Type != "string" || work.On.WorkflowCall.Inputs["toolkit_sha"].Type != "string" {
-		return fmt.Errorf("toolkit SHA input must be a string")
+	if reconcile.On.WorkflowCall.Inputs["toolkit_sha"].Type != "string" || work.On.WorkflowCall.Inputs["toolkit_sha"].Type != "string" || reconcile.On.WorkflowCall.Inputs["release_version"].Type != "string" || work.On.WorkflowCall.Inputs["release_version"].Type != "string" {
+		return fmt.Errorf("binary source and release inputs must be strings")
 	}
 	execute, verify, publish := work.Jobs["execute"], work.Jobs["verify"], work.Jobs["publish"]
 	if execute.Permissions["copilot-requests"] != "write" || verify.Permissions["copilot-requests"] != "" || publish.Permissions["copilot-requests"] != "" || verify.Permissions["contents"] != "read" || publish.Permissions["contents"] != "read" {
@@ -211,13 +217,23 @@ func TestDeliveryWorkflowContracts(t *testing.T) {
 	if err := checkDeliveryContracts(caller, reconcile, work); err != nil {
 		t.Fatal(err)
 	}
+	candidateSHA := strings.Repeat("a", 40)
+	candidateCaller := strings.ReplaceAll(string(caller), "@v0", "@"+candidateSHA)
+	candidateCaller = strings.ReplaceAll(candidateCaller, "release_version: ${{ inputs.release_version }}", "toolkit_sha: "+candidateSHA)
+	if err := checkDeliveryContracts([]byte(candidateCaller), reconcile, work); err != nil {
+		t.Fatalf("matching exact candidate source rejected: %v", err)
+	}
+	if err := checkDeliveryContracts([]byte(strings.Replace(candidateCaller, "work.reusable.yml@"+candidateSHA, "work.reusable.yml@"+strings.Repeat("b", 40), 1)), reconcile, work); err == nil {
+		t.Fatal("candidate workflow/source mismatch was accepted")
+	}
 	for _, test := range []struct {
 		name      string
 		file      string
 		old, next string
 	}{
 		{"numeric conversion", "caller", "fromJSON(inputs.issue_number)", "inputs.issue_number"},
-		{"toolkit SHA", "caller", "toolkit_sha: 0000000000000000000000000000000000000000", "toolkit_sha: 1111111111111111111111111111111111111111"},
+		{"channel mismatch", "caller", "work.reusable.yml@v0", "work.reusable.yml@v1"},
+		{"release handoff mismatch", "caller", "release_version: ${{ inputs.release_version }}", "release_version: v0.1.0"},
 		{"image architecture", "work", "--platform linux/amd64", "--platform linux/arm64"},
 		{"commented image architecture", "work", "docker run --rm --platform linux/amd64", "# docker run --rm --platform linux/amd64\n          docker run --rm --platform linux/arm64"},
 		{"Copilot archive digest", "work", copilotArchiveSHA256, "13284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112"},

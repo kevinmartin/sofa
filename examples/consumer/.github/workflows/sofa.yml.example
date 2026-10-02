@@ -1,5 +1,6 @@
 # Copy to .github/workflows/sofa.yml in the designated disposable repository.
-# Replace every 000... commit with the same published, reviewed sofa commit.
+# Use after Kevin merges Sofa and the first v0 release is promoted.
+# Each CLI-using job independently selects the currently promoted v0 release.
 name: sofa disposable canary
 
 on:
@@ -9,6 +10,10 @@ on:
         description: Approved issue number in this repository
         required: true
         type: number
+      release_version:
+        description: Optional exact immutable v0 release (empty selects the current promotion)
+        required: false
+        type: string
 
 permissions: {}
 
@@ -24,10 +29,10 @@ jobs:
     permissions:
       contents: write
       actions: read
-    uses: kevinmartin/sofa/.github/workflows/reconcile.reusable.yml@0000000000000000000000000000000000000000
+    uses: kevinmartin/sofa/.github/workflows/reconcile.reusable.yml@v0
     with:
       issue_number: ${{ fromJSON(inputs.issue_number) }}
-      toolkit_sha: 0000000000000000000000000000000000000000
+      release_version: ${{ inputs.release_version }}
     secrets:
       SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
 
@@ -40,9 +45,9 @@ jobs:
       contents: write
       copilot-requests: write
       actions: read
-    uses: kevinmartin/sofa/.github/workflows/work.reusable.yml@0000000000000000000000000000000000000000
+    uses: kevinmartin/sofa/.github/workflows/work.reusable.yml@v0
     with:
-      toolkit_sha: 0000000000000000000000000000000000000000
+      release_version: ${{ inputs.release_version }}
       reconcile_publication: ${{ needs.reconcile.outputs.reconcile_publication == 'true' }}
       reconcile_candidate: ${{ needs.reconcile.outputs.reconcile_candidate == 'true' }}
     secrets:

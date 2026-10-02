@@ -1,5 +1,6 @@
 # Consumer entry point after reconcile.reusable.yml emits dispatch=true. Pin
-# both reusable workflows and toolkit_sha to the same reviewed toolkit commit.
+# reusable workflows to @v0, or use matching exact workflow/source SHAs for tests.
+# Candidate binaries are prepared once by reconcile in this invocation.
 # Jobs form separate trust boundaries: the worker proposes data, verification
 # runs consumer checks without secrets, and only the publisher can create a PR.
 name: Sofa / Reusable candidate execution and publication
@@ -7,9 +8,15 @@ name: Sofa / Reusable candidate execution and publication
 on:
   workflow_call:
     inputs:
+      release_version:
+        description: Optional exact Sofa release within v0; omit for automatic updates
+        required: false
+        default: ''
+        type: string
       toolkit_sha:
-        description: Full immutable commit SHA of the sofa toolkit
-        required: true
+        description: Optional exact source SHA for secretless candidate testing; omit for released CLIs
+        required: false
+        default: ''
         type: string
       reconcile_publication:
         description: Reuse a prior candidate after interrupted publication
@@ -21,6 +28,10 @@ on:
         required: false
         default: false
         type: boolean
+    outputs:
+      release_version:
+        description: Exact release selected by the publish job; empty in candidate mode
+        value: ${{ jobs.publish.outputs.release_version }}
     secrets:
       SOFA_PROJECTS_TOKEN:
         required: true
@@ -49,7 +60,7 @@ jobs:
         env:
           SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
         run: |
-          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
+          [[ -z "$SOFA_TOOLKIT_SHA" || "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
       - name: Download admitted manifest
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -68,37 +79,45 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Check out immutable sofa toolkit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install released Sofa CLIs
+        if: inputs.toolkit_sha == ''
+        id: sofa
+        uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          repository: kevinmartin/sofa
-          ref: ${{ inputs.toolkit_sha }}
-          persist-credentials: false
-          path: toolkit
+          release_version: ${{ inputs.release_version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Download exact candidate binaries from this invocation
+        if: inputs.toolkit_sha != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/sofa-cli
+      - name: Verify candidate selection and expose job binaries
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
+          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
+        run: |
+          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
+            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
+            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
+            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
+            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
+          else
+            test -n "$SOFA_RELEASE_BIN"
+            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
+          fi
+          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
+          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
       - name: Verify source identities
         shell: bash
         env:
           SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "$SOFA_TOOLKIT_SHA"
           test "$(git -C consumer rev-parse HEAD)" = "$SOFA_BASE_SHA"
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: toolkit/go.mod
-          cache: false
-      - name: Build trusted worker
-        shell: bash
-        working-directory: toolkit
-        env:
-          CGO_ENABLED: '0'
-        run: |
-          mkdir -p "$RUNNER_TEMP/sofa-cli"
-          go build -trimpath -o "$RUNNER_TEMP/sofa-cli/sofa" ./cmd/sofa
-      # Verify the exact package before mounting it read-only in the worker.
-      # The package entrypoint is used because the standalone binary failed the
-      # hosted container's zero-prompt ACP initialization probe.
       - name: Fetch pinned Copilot ACP package
         shell: bash
         run: |
@@ -215,30 +234,43 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Check out immutable sofa toolkit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install released Sofa CLIs
+        if: inputs.toolkit_sha == ''
+        id: sofa
+        uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          repository: kevinmartin/sofa
-          ref: ${{ inputs.toolkit_sha }}
-          persist-credentials: false
-          path: toolkit
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: toolkit/go.mod
-          cache: false
-      - name: Build trusted finalizer
-        shell: bash
-        working-directory: toolkit
+          release_version: ${{ inputs.release_version }}
         env:
-          CGO_ENABLED: '0'
-        run: go build -trimpath -o ../sofa ./cmd/sofa
+          GH_TOKEN: ${{ github.token }}
+      - name: Download exact candidate binaries from this invocation
+        if: inputs.toolkit_sha != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/sofa-cli
+      - name: Verify candidate selection and expose job binaries
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
+          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
+        run: |
+          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
+            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
+            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
+            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
+            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
+          else
+            test -n "$SOFA_RELEASE_BIN"
+            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
+          fi
+          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
+          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
       - name: Record the bounded failure
         shell: bash
         env:
           SOFA_STATE_TOKEN: ${{ github.token }}
         run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
           ./sofa fail --config consumer/.sofa.yml \
             --manifest transport/manifest.json \
             --failure failure/failure.json
@@ -298,31 +330,41 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Check out immutable sofa toolkit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install released Sofa CLIs
+        if: inputs.toolkit_sha == ''
+        id: sofa
+        uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          repository: kevinmartin/sofa
-          ref: ${{ inputs.toolkit_sha }}
-          persist-credentials: false
-          path: toolkit
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: toolkit/go.mod
-          cache: false
-      - name: Build trusted verifier
-        shell: bash
-        working-directory: toolkit
+          release_version: ${{ inputs.release_version }}
         env:
-          CGO_ENABLED: '0'
-        run: go build -trimpath -o ../sofa ./cmd/sofa
-      # The trusted verifier checks the admitted base and candidate scope before
-      # executing configured checks. It gives the check subprocess a secretless
-      # environment and binds passing evidence to the exact candidate digest.
+          GH_TOKEN: ${{ github.token }}
+      - name: Download exact candidate binaries from this invocation
+        if: inputs.toolkit_sha != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/sofa-cli
+      - name: Verify candidate selection and expose job binaries
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
+          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
+        run: |
+          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
+            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
+            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
+            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
+            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
+          else
+            test -n "$SOFA_RELEASE_BIN"
+            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
+          fi
+          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
+          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
       - name: Verify candidate and run configured checks without secrets
         shell: bash
         run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
           test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
           mkdir -p evidence
           ./sofa verify --config consumer/.sofa.yml \
@@ -364,6 +406,8 @@ jobs:
     permissions:
       contents: read
       actions: read
+    outputs:
+      release_version: ${{ steps.sofa.outputs.release_version }}
     steps:
       - name: Download admitted manifest
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -393,28 +437,41 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Check out immutable sofa toolkit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install released Sofa CLIs
+        if: inputs.toolkit_sha == ''
+        id: sofa
+        uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          repository: kevinmartin/sofa
-          ref: ${{ inputs.toolkit_sha }}
-          persist-credentials: false
-          path: toolkit
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: toolkit/go.mod
-          cache: false
-      - name: Build trusted publisher
-        shell: bash
-        working-directory: toolkit
+          release_version: ${{ inputs.release_version }}
         env:
-          CGO_ENABLED: '0'
-        run: go build -trimpath -o ../sofa ./cmd/sofa
+          GH_TOKEN: ${{ github.token }}
+      - name: Download exact candidate binaries from this invocation
+        if: inputs.toolkit_sha != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/sofa-cli
+      - name: Verify candidate selection and expose job binaries
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
+          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
+        run: |
+          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
+            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
+            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
+            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
+            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
+          else
+            test -n "$SOFA_RELEASE_BIN"
+            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
+          fi
+          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
+          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
       - name: Verify publisher source identity
         shell: bash
         run: |
-          test "$(git -C toolkit rev-parse HEAD)" = "${{ inputs.toolkit_sha }}"
           test "$(git -C consumer rev-parse HEAD)" = "${{ steps.base.outputs.sha }}"
       - name: Select publisher identity
         id: publisher-auth

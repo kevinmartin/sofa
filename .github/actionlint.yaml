@@ -15,3 +15,9 @@ paths:
   .github/workflows/reconcile.reusable.yml:
     ignore:
       - 'shellcheck reported issue in this script: SC2129:'
+  # GitHub supports queued concurrency, but actionlint 1.7.12 predates it.
+  # Structural tests validate this mapping; remove once actionlint supports it.
+  # https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+  .github/workflows/release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

@@ -7,13 +7,14 @@ excludes the test, so a candidate cannot pass by editing its assertion.
 
 1. Copy the files into the disposable repository. Rename
    `.github/workflows/sofa.yml.example` to `.github/workflows/sofa.yml`.
-2. Publish a reviewed sofa toolkit commit. Replace all four forty-zero values
-   in the caller with its **same full commit SHA**. The two reusable workflow
-   references (`reconcile.reusable.yml` and `work.reusable.yml`) and both
-   `toolkit_sha` inputs must refer to that commit. Update the schema association
-   at the top of `.sofa.yml` to use that commit too, following the
-   [configuration editor setup](../../docs/configuration.md); its example
-   relative path only works inside this toolkit checkout.
+2. Use the example caller after Kevin merges Sofa's distribution change and
+   the first `v0` release is promoted. No `v0` channel exists before that
+   activation. Both reusable workflows use `@v0`; leave `toolkit_sha` empty
+   in normal consumer runs. Each CLI-using job independently installs the
+   currently promoted, immutable Linux amd64 Sofa release. The
+   checked-in `.sofa.yml` schema association resolves only in this toolkit
+   checkout; replace it with the `v0` URL described in the
+   [configuration editor setup](../../docs/configuration.md) when copying it.
 3. The example already names the designated `kevinmartin/sofa-disposable`
    repository and Kevin's immutable ID. Replace only `project_id` in
    `.sofa.yml` with the disposable Project's immutable node ID. Keep the
@@ -22,11 +23,13 @@ excludes the test, so a candidate cannot pass by editing its assertion.
 4. Set repository secret `SOFA_PROJECTS_TOKEN` to a credential that can read
    that issue and its private Project status. Keep Project write access limited
    to trusted people and do not configure automations to set `Ready`. Set
-   `SOFA_PUBLISH_TOKEN` to a separate fine-grained PAT scoped only to this
-   repository, with Contents and Pull requests write
-   permissions. Only the trusted publication job receives it; that job uses the
-   credential for publication-stage ledger updates, candidate branch creation,
-   and the draft PR. Controller and finalizer jobs use their own `GITHUB_TOKEN`
+   `SOFA_PUBLISH_TOKEN` to a separate repository-scoped publisher credential
+   with Contents and Pull requests write permissions, or configure the
+   `SOFA_PUBLISH_APP_ID` and `SOFA_PUBLISH_APP_PRIVATE_KEY` secret pair for a
+   repository-scoped GitHub App publisher. Only the trusted publication job
+   receives this identity for publication-stage ledger updates, candidate
+   branch creation, and the draft PR. Controller and finalizer jobs use their
+   own `GITHUB_TOKEN`
    for state updates through explicit job-level Contents permission; the
    repository default may remain read-only. The
    repository-wide setting that also permits Actions to approve PR reviews is
@@ -40,6 +43,33 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    the Ready field revision, and blocks if the issue was edited after Ready or
    if its admitted content or Ready revision later changes. Milestone 01 does
    not supersede an admitted issue; use a new issue for revised scope.
+
+The caller's `release_version` dispatch input is optional. Empty means each
+CLI-using job resolves the current `v0` promotion when it starts, so an
+unchanged consumer picks up a later compatible release. An exact published tag
+such as `v0.1.3` keeps this invocation on that version; the setup Action
+verifies the signed release asset and installs both `sofa` and `sofa-test` on
+`PATH` without Go or a controller-build dispatch. A custom multi-job workflow
+can also pass an earlier job's `release_version` output into a later job's
+input to hold one exact version across a promotion. Install once per job; the
+Action returns the selected version and its binary directory. The old
+`controller-build.reusable.yml` remains only for migration of existing callers.
+To make the work job reuse an automatically selected reconcile version, replace
+its `release_version` input with:
+
+```yaml
+release_version: ${{ needs.reconcile.outputs.release_version }}
+```
+
+That handoff is optional. The example caller leaves the input empty by default
+so each job can receive a newly promoted compatible release.
+
+Hosted tests of an unmerged Sofa change use a different path: select the
+candidate reusable workflow revision and pass its matching full
+`toolkit_sha`. The secretless candidate build compiles both CLIs once for the
+invocation and transfers that exact-SHA artifact to its jobs. An issue body or
+ordinary consumer dispatch cannot select this candidate mode or grant its
+build Project, publisher, or model credentials.
 
 The workflow admits the issue before the model job. An idle or duplicate run
 completes without dispatching work or consuming inference. The model receives
@@ -58,8 +88,13 @@ on its admitted base revision. The configured recipe path is exact and runs
 without Copilot. A missing path or already formatted file does not count as a
 successful recipe candidate.
 
-For recovery, rerun the same issue after the earlier Actions run is terminal.
-The ledger either suppresses duplicate work or reclaims the attempt. If a
+For factory recovery, start a fresh workflow dispatch for the same issue after
+the earlier Actions run is terminal, so reconciliation can admit the new run
+attempt. GitHub's raw failed-job or specific-job reruns can retain an earlier
+manifest and ownership fence; they are not a replacement for re-admission.
+Release selection supports full and partial job reruns, but does not bypass
+these factory ownership checks. The ledger either suppresses duplicate work or
+reclaims the attempt. If a
 publication intent survived, the verifier fetches the previous run's candidate
 artifact and checks it again under the new fence. Artifacts have a one-day
 retention. If a candidate checkpoint's artifact is missing before publication

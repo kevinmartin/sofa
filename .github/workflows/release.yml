@@ -1,0 +1,166 @@
+# Disabled until Kevin approves the implementation merge and enables the
+# release environment, immutable releases, tag rulesets and activation variable.
+# Only validated owner-approved main source can reach these release operations.
+name: Sofa / toolkit release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# GitHub refs have no conditional old-value field; this serialization plus
+# exclusive-writer rulesets and the controller's prior-ref guard are required.
+concurrency:
+  group: sofa-toolkit-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  quality:
+    if: github.repository == 'kevinmartin/sofa' && github.ref == 'refs/heads/main' && vars.SOFA_RELEASE_ENABLED == 'true'
+    uses: ./.github/workflows/quality.reusable.yml
+    with:
+      profiles: go
+
+  plan:
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: sofa-release
+      deployment: false
+    steps:
+      - name: Check out validated exact main source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build trusted allocator before granting release credentials
+        run: go build -o sofa-release-controller ./cmd/sofa
+      # GitHub lists drafts only to principals with push access. This scoped
+      # token lets retries find incomplete releases without hiding draft versions.
+      - name: Mint Sofa-only draft discovery token
+        id: plan-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SOFA_GATE_APP_ID }}
+          private-key: ${{ secrets.SOFA_GATE_APP_PRIVATE_KEY }}
+          owner: kevinmartin
+          repositories: sofa
+          permission-contents: write
+      - name: Allocate or resume exact source version using read-only controller methods
+        env:
+          SOFA_RELEASE_TOKEN: ${{ steps.plan-token.outputs.token }}
+          SOFA_SOURCE_SHA: ${{ github.sha }}
+          SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
+        run: ./sofa-release-controller release plan --source "$SOFA_SOURCE_SHA" > release-plan.json
+      - name: Preserve trusted version plan within this invocation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-release-plan
+          overwrite: true
+          path: release-plan.json
+          retention-days: 7
+          if-no-files-found: error
+
+  prepare:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out validated exact main source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download only this trusted run's version plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-release-plan
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build both versioned Linux amd64 binaries without release credentials
+        run: go run ./cmd/sofa release build
+      - name: Build same-source release controller without release credentials
+        run: go build -o release-bundle/sofa-release-controller ./cmd/sofa
+      - name: Preserve trusted plan and bundle within this invocation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-release-prepared
+          overwrite: true
+          path: |
+            release-plan.json
+            release-bundle/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-and-promote:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: sofa-release
+      deployment: false
+    steps:
+      - name: Download only this trusted release run's prepared artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-release-prepared
+      - name: Restore same-run controller executable mode
+        run: chmod +x release-bundle/sofa-release-controller
+      - name: Mint Sofa-only publication token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SOFA_GATE_APP_ID }}
+          private-key: ${{ secrets.SOFA_GATE_APP_PRIVATE_KEY }}
+          owner: kevinmartin
+          repositories: sofa
+          permission-contents: write
+          permission-workflows: write
+          permission-administration: read
+      - name: Resume immutable publication without replacing uploaded assets
+        env:
+          SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
+          SOFA_RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: release-bundle/sofa-release-controller release publish
+      - name: Mint disposable-only canary token
+        id: canary-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.SOFA_GATE_APP_ID }}
+          private-key: ${{ secrets.SOFA_GATE_APP_PRIVATE_KEY }}
+          owner: kevinmartin
+          repositories: sofa-disposable
+          permission-actions: write
+          permission-contents: read
+      - name: Require exact successful disposable release canary
+        env:
+          SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
+          SOFA_RELEASE_CANARY_TOKEN: ${{ steps.canary-token.outputs.token }}
+        run: release-bundle/sofa-release-controller release canary > release-canary.json
+      - name: Record trusted canary identity for diagnosis
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-release-canary
+          overwrite: true
+          path: release-canary.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Recheck exact canary and prior channel before direct promotion
+        env:
+          SOFA_RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
+          SOFA_RELEASE_CANARY_TOKEN: ${{ steps.canary-token.outputs.token }}
+          SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
+        run: release-bundle/sofa-release-controller release promote

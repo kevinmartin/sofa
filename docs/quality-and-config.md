@@ -53,10 +53,13 @@ from the untrusted PR checkout without secrets. Repositories with private
 packages need a separate reviewed design before using this gate.
 
 After the first tested release, downstream callers can reference
-`kevinmartin/sofa/.github/workflows/quality.reusable.yml@v1`. The moving major
-reference gets reviewed compatible fixes on subsequent runs. Do not publish or
-move `v1` until the hosted pilot, check-name migration, and Kevin's sofa merge
-approval are complete. A rerun of all jobs can resolve a newer moving ref;
+`kevinmartin/sofa/.github/workflows/quality.reusable.yml@v0`. The moving major
+reference gets reviewed compatible fixes on subsequent runs. The consumer
+template and its structural validator use this initial channel; Sofa itself
+keeps its local call so PRs test proposed quality changes. Initial activation
+follows Kevin's implementation merge and the release setup in
+[release distribution](releases.md). Stable `v1` remains an explicit owner
+activation after integrated qualification. A rerun of all jobs can resolve a newer moving ref;
 the run records the resolved workflow revision for audit. Consumer caller
 files change through PRs, even though compatible called-workflow updates take
 effect without editing those files.

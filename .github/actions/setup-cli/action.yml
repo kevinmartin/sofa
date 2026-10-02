@@ -1,0 +1,134 @@
+# Install the promoted Sofa release once in this job. Candidate source builds use
+# the separate secretless toolkit_sha path in the reusable workflows.
+name: Set up Sofa CLI
+description: Install signed Linux amd64 sofa and sofa-test release binaries
+inputs:
+  major:
+    description: Expected Sofa release major channel
+    required: false
+    default: v0
+  release_version:
+    description: Exact immutable release to reuse across jobs; empty selects the promoted major
+    required: false
+    default: ''
+outputs:
+  release_version:
+    description: Exact Sofa release installed in this job
+    value: ${{ steps.install.outputs.release_version }}
+  bin_directory:
+    description: Directory containing the selected sofa and sofa-test binaries
+    value: ${{ steps.install.outputs.bin_directory }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_HOST: github.com
+        SOFA_SETUP_MAJOR: ${{ inputs.major }}
+        SOFA_SETUP_VERSION: ${{ inputs.release_version }}
+      run: |
+        set -euo pipefail
+        repo=kevinmartin/sofa
+        asset=sofa-linux-amd64.tar.gz
+        if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
+          echo 'Sofa release binaries require Linux amd64' >&2
+          exit 1
+        fi
+        if [[ ! "$SOFA_SETUP_MAJOR" =~ ^v(0|[1-9][0-9]*)$ ]]; then
+          echo 'Invalid Sofa major channel' >&2
+          exit 1
+        fi
+        if [[ -n "$SOFA_SETUP_VERSION" && ! "$SOFA_SETUP_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          echo 'Invalid Sofa release version' >&2
+          exit 1
+        fi
+        if [[ -n "$SOFA_SETUP_VERSION" && "${SOFA_SETUP_VERSION%%.*}" != "$SOFA_SETUP_MAJOR" ]]; then
+          echo 'Sofa release version is outside the expected major' >&2
+          exit 1
+        fi
+
+        selection="$RUNNER_TEMP/sofa-setup-cli.selection"
+        if [[ -f "$selection" ]]; then
+          IFS=$'\t' read -r installed_major installed_version installed_dir < "$selection"
+          if [[ "$installed_major" != "$SOFA_SETUP_MAJOR" || ( -n "$SOFA_SETUP_VERSION" && "$SOFA_SETUP_VERSION" != "$installed_version" ) || ! -x "$installed_dir/sofa" || ! -x "$installed_dir/sofa-test" ]]; then
+            echo 'A different or incomplete Sofa release is already selected in this job' >&2
+            exit 1
+          fi
+          echo "$installed_dir" >> "$GITHUB_PATH"
+          echo "release_version=$installed_version" >> "$GITHUB_OUTPUT"
+          echo "bin_directory=$installed_dir" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ -n "$SOFA_SETUP_VERSION" ]]; then
+          release="$SOFA_SETUP_VERSION"
+        else
+          promoted_sha=$(gh api "repos/$repo/commits/$SOFA_SETUP_MAJOR" --jq .sha)
+          [[ "$promoted_sha" =~ ^[a-f0-9]{40}$ ]] || { echo 'Promoted Sofa ref is not a commit' >&2; exit 1; }
+          candidates=$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+          release=''
+          while IFS= read -r candidate; do
+            [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
+            [[ "${candidate%%.*}" == "$SOFA_SETUP_MAJOR" ]] || continue
+            candidate_sha=$(gh api "repos/$repo/commits/$candidate" --jq .sha)
+            if [[ "$candidate_sha" == "$promoted_sha" ]]; then
+              [[ -z "$release" ]] || { echo 'Promoted Sofa commit has multiple releases' >&2; exit 1; }
+              release="$candidate"
+            fi
+          done <<< "$candidates"
+          [[ -n "$release" ]] || { echo 'No published Sofa release matches the promoted major tag' >&2; exit 1; }
+        fi
+
+        release_json=$(gh api "repos/$repo/releases/tags/$release")
+        jq -e --arg tag "$release" '.tag_name == $tag and .draft == false and .prerelease == false and .immutable == true' <<< "$release_json" >/dev/null || {
+          echo 'Sofa release is missing or mutable' >&2
+          exit 1
+        }
+        release_sha=$(gh api "repos/$repo/commits/$release" --jq .sha)
+        [[ "$release_sha" =~ ^[a-f0-9]{40}$ ]] || { echo 'Sofa release tag is not a commit' >&2; exit 1; }
+
+        stage=$(mktemp -d "$RUNNER_TEMP/sofa-setup-cli.XXXXXXXX")
+        trap 'rm -rf "$stage"' EXIT
+        gh release download "$release" --repo "$repo" --pattern "$asset" --dir "$stage"
+        bundle="$stage/$asset"
+        [[ -f "$bundle" && ! -L "$bundle" ]] || { echo 'Sofa bundle is missing' >&2; exit 1; }
+        gh release verify-asset "$release" "$bundle" --repo "$repo"
+
+        # GNU tar escapes control characters and path separators remain visible.
+        # Only these three regular top-level members are accepted.
+        tar --version | head -n 1 | grep -q 'GNU tar' || { echo 'GNU tar is required' >&2; exit 1; }
+        names=$(tar --list --gzip --file "$bundle" --quoting-style=escape)
+        details=$(tar --list --verbose --gzip --file "$bundle" --quoting-style=escape)
+        declare -A seen=()
+        while IFS= read -r member; do
+          case "$member" in sofa|sofa-test|release.json) ;; *) echo 'Unexpected Sofa archive member' >&2; exit 1 ;; esac
+          [[ -z "${seen[$member]:-}" ]] || { echo 'Duplicate Sofa archive member' >&2; exit 1; }
+          seen[$member]=1
+        done <<< "$names"
+        [[ ${#seen[@]} -eq 3 ]] || { echo 'Incomplete Sofa archive' >&2; exit 1; }
+        while IFS= read -r detail; do
+          [[ "${detail:0:1}" == '-' ]] || { echo 'Non-regular Sofa archive member' >&2; exit 1; }
+        done <<< "$details"
+        [[ $(wc -l <<< "$details") -eq 3 ]] || { echo 'Unexpected Sofa archive structure' >&2; exit 1; }
+
+        mkdir "$stage/extracted"
+        tar --extract --gzip --file "$bundle" --directory "$stage/extracted" --no-same-owner --no-same-permissions
+        jq -e --arg version "$release" --arg sha "$release_sha" \
+          '.schema_version == 1 and .version == $version and .source_sha == $sha and .platform == "linux/amd64"' \
+          "$stage/extracted/release.json" >/dev/null || { echo 'Sofa bundle metadata does not match the release' >&2; exit 1; }
+        [[ -f "$stage/extracted/sofa" && ! -L "$stage/extracted/sofa" && -f "$stage/extracted/sofa-test" && ! -L "$stage/extracted/sofa-test" ]] || {
+          echo 'Sofa binaries are missing or not regular files' >&2
+          exit 1
+        }
+        bin="$RUNNER_TEMP/sofa-cli"
+        mkdir "$stage/bin"
+        install -m 0755 "$stage/extracted/sofa" "$stage/bin/sofa"
+        install -m 0755 "$stage/extracted/sofa-test" "$stage/bin/sofa-test"
+        [[ ! -e "$bin" && ! -L "$bin" ]] || { echo 'Sofa CLI destination already exists without a valid selection' >&2; exit 1; }
+        mv "$stage/bin" "$bin"
+        printf '%s\t%s\t%s\n' "$SOFA_SETUP_MAJOR" "$release" "$bin" > "$selection"
+        echo "$bin" >> "$GITHUB_PATH"
+        echo "release_version=$release" >> "$GITHUB_OUTPUT"
+        echo "bin_directory=$bin" >> "$GITHUB_OUTPUT"
