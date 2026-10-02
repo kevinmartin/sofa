@@ -130,8 +130,9 @@ jobs:
           permission-contents: write
           permission-workflows: write
           permission-administration: read
-      - name: Resume immutable publication without replacing any existing asset
+      - name: Resume immutable publication without replacing uploaded assets
         env:
+          SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
           SOFA_RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
         run: release-bundle/sofa-release-controller release publish
       - name: Mint disposable-only canary token
@@ -146,6 +147,7 @@ jobs:
           permission-contents: read
       - name: Require exact successful disposable release canary
         env:
+          SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
           SOFA_RELEASE_CANARY_TOKEN: ${{ steps.canary-token.outputs.token }}
         run: release-bundle/sofa-release-controller release canary > release-canary.json
       - name: Record trusted canary identity for diagnosis

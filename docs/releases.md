@@ -82,16 +82,28 @@ recognize unfinished releases. Binary preparation runs in its separate secretles
 job after allocation.
 
 The credentialed controller creates a draft exact-version release, uploads all
-assets, publishes it, and requires `immutable=true`. It never changes an existing
-asset; a conflicting or interrupted upload remains a failed draft requiring
-inspection. It dispatches a real-release canary in the disposable repository and
+assets, publishes it, and requires `immutable=true`. It never replaces uploaded
+assets. GitHub documents that an upstream upload `502` can leave an empty
+`starter` placeholder; retries may remove only that zero-byte, digest-free
+placeholder after rechecking its exact ID and unchanged reserved draft. Published,
+uploaded, nonempty or changed assets fail closed and require inspection. This
+uses the existing Contents write permission and still requires release
+serialization and exclusive writers because asset deletion has no CAS field.
+See [GitHub's upload recovery contract](https://docs.github.com/en/rest/releases/assets#upload-a-release-asset).
+It dispatches a real-release canary in the disposable repository and
 binds the observed run to its exact caller SHA, workflow path, repository IDs and
 per-attempt correlation. The canary recomputes that correlation from the release,
 source and originating run/attempt, and verifies the published immutable tag's
 source before loading its installer. A failure, cancelled run, changed caller,
 ambiguous correlation or unavailable API cannot authorize promotion. Allocation
-inspects at most 10,000 release records, canary discovery at most 1,000 runs, and
-canary observation is bounded to ten minutes within the workflow's job timeout.
+inspects at most 10,000 release records. Canary discovery uses GitHub's `created`
+filter to inspect at most 1,000 runs from the preceding 24 hours, rather than
+lifetime history. That window exceeds the release job's maximum lifetime, so
+same-attempt observation retries retain their correlation; an Actions rerun has
+a new attempt and correlation. Duplicate matches within that window fail closed,
+as do missing, out-of-window or future timestamps (with one minute allowed for
+clock skew). Canary observation is bounded to ten minutes within the workflow's
+job timeout. See [GitHub's workflow run filtering contract](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow).
 
 The entire workflow is serialized, with GitHub's `queue: max` preserving up to
 100 pending releases instead of replacing a single pending run. If that bound
@@ -126,3 +138,7 @@ Run `sofa release canary` to obtain fresh correlated evidence, then
 `sofa release promote` with that plan and evidence. Supply repository-scoped
 credentials only to the commands that need them; do not execute state fixtures
 with publication credentials. `rollback-plan` never updates a tag or edits a ledger.
+All credentialed v1 commands, including read-only rollback planning, require
+`SOFA_V1_ENABLED=true` after the reviewed activation steps above. This release
+automation rejects majors beyond v1 before credential use; a future major needs
+its own reviewed activation path rather than inheriting v1's approval flag.

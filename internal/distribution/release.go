@@ -35,6 +35,30 @@ type Config struct {
 	Series string `json:"series" validate:"required"`
 }
 
+func (c Config) Validate() error {
+	if validator.New().Struct(c) != nil || !seriesPattern.MatchString(c.Series) {
+		return errors.New("invalid release series")
+	}
+	major := strings.Split(c.Series, ".")[0]
+	if major != "0" && major != "1" {
+		return errors.New("release automation supports only v0 and v1")
+	}
+	return nil
+}
+
+// VersionMajor validates the current supported release automation generations.
+// Supporting a new stable major requires a reviewed activation path first.
+func VersionMajor(version string) (string, error) {
+	parts := versionPattern.FindStringSubmatch(version)
+	if parts == nil {
+		return "", errors.New("invalid release version")
+	}
+	if parts[1] != "0" && parts[1] != "1" {
+		return "", errors.New("release automation supports only v0 and v1")
+	}
+	return "v" + parts[1], nil
+}
+
 type Plan struct {
 	Version            string `json:"version" validate:"required"`
 	SourceSHA          string `json:"source_sha" validate:"required"`
@@ -53,8 +77,11 @@ func (p Plan) Validate() error {
 	if validator.New().Struct(p) != nil || !versionPattern.MatchString(p.Version) || !shaPattern.MatchString(p.SourceSHA) || (p.ExpectedChannelSHA != "" && !shaPattern.MatchString(p.ExpectedChannelSHA)) {
 		return errors.New("invalid release plan")
 	}
-	parts := versionPattern.FindStringSubmatch(p.Version)
-	if p.Channel != "v"+parts[1] {
+	major, err := VersionMajor(p.Version)
+	if err != nil {
+		return err
+	}
+	if p.Channel != major {
 		return errors.New("release plan major mismatch")
 	}
 	return nil
@@ -77,6 +104,9 @@ func RollbackPlan(ctx context.Context, api API, version, expected string) (Plan,
 	parts := versionPattern.FindStringSubmatch(version)
 	if parts == nil || !shaPattern.MatchString(expected) {
 		return Plan{}, errors.New("invalid rollback release or expected channel")
+	}
+	if _, err := VersionMajor(version); err != nil {
+		return Plan{}, err
 	}
 	record, found, err := api.ReleaseRecordByTag(ctx, Repository, version)
 	if err != nil {
@@ -114,6 +144,7 @@ type API interface {
 	CreateDraftRelease(context.Context, string, string, string, string) (github.ReleaseRecord, error)
 	PublishDraftRelease(context.Context, string, int64) (github.ReleaseRecord, error)
 	UploadReleaseAsset(context.Context, string, int64, string, []byte) (github.ReleaseAsset, error)
+	DeleteEmptyDraftUpload(context.Context, string, github.ReleaseRecord, github.ReleaseAsset) error
 	ImmutableReleasesEnabled(context.Context, string) (bool, error)
 	ReleaseTag(context.Context, string, string) (string, bool, error)
 	UpdateReleaseChannel(context.Context, string, string, string, string) error
@@ -122,7 +153,10 @@ type API interface {
 // Allocate is read-only. The whole release workflow is serialized, including
 // allocation and interrupted draft recovery, so retries cannot race versions.
 func Allocate(ctx context.Context, api API, config Config, source string) (Plan, error) {
-	if validator.New().Struct(config) != nil || !seriesPattern.MatchString(config.Series) || !shaPattern.MatchString(source) {
+	if err := config.Validate(); err != nil {
+		return Plan{}, err
+	}
+	if !shaPattern.MatchString(source) {
 		return Plan{}, errors.New("invalid release series or source")
 	}
 	series := strings.Split(config.Series, ".")
@@ -198,8 +232,9 @@ func digest(content []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// Publish resumes an existing draft without replacing any asset. A conflicting
-// draft/upload or a nonimmutable published release fails closed and is never
+// Publish resumes an existing draft without replacing uploaded assets. Only
+// an empty GitHub starter placeholder can be removed after a guarded recheck.
+// A conflicting draft/upload or a nonimmutable published release fails closed and is never
 // promoted. Digest comparison here protects retries; consumers verify GitHub's
 // signed immutable release independently, with no maintained checksum pins.
 func Publish(ctx context.Context, api API, p Plan, bundle []byte) (github.ReleaseRecord, error) {
@@ -258,18 +293,31 @@ func Publish(ctx context.Context, api API, p Plan, bundle []byte) (github.Releas
 		},
 	}
 	for _, asset := range assets {
-		found := false
+		var match *github.ReleaseAsset
 		for _, existing := range record.Assets {
 			if existing.Name != asset.Name {
 				continue
 			}
-			if found || existing.State != "uploaded" || existing.Size != int64(len(asset.Content)) || existing.Digest != digest(asset.Content) {
+			if match != nil {
 				return github.ReleaseRecord{}, errors.New("existing release asset differs; refuse replacement")
 			}
-			found = true
+			matched := existing
+			match = &matched
 		}
-		if found {
-			continue
+		if match != nil {
+			if record.Draft && match.ID > 0 && match.State == "starter" && match.Size == 0 && match.Digest == "" {
+				// GitHub can leave this empty placeholder after an upstream 502.
+				// The API rechecks the reserved draft and exact placeholder before
+				// deletion; uploaded bytes are never replaced.
+				if err := api.DeleteEmptyDraftUpload(ctx, Repository, record, *match); err != nil {
+					return github.ReleaseRecord{}, err
+				}
+			} else {
+				if match.State != "uploaded" || match.Size != int64(len(asset.Content)) || match.Digest != digest(asset.Content) {
+					return github.ReleaseRecord{}, errors.New("existing release asset differs; refuse replacement")
+				}
+				continue
+			}
 		}
 		if !record.Draft {
 			return github.ReleaseRecord{}, errors.New("published release asset missing")
@@ -319,6 +367,9 @@ func ValidateCanary(run github.ReleaseCanaryRun, p Plan, evidence Canary) error 
 	if err != nil || correlation != evidence.Correlation {
 		return errors.New("release canary correlation does not bind this release")
 	}
+	if run.CreatedAt.IsZero() || run.CreatedAt.After(time.Now().UTC().Add(time.Minute)) {
+		return errors.New("release canary creation time invalid")
+	}
 	if evidence.ReleaseVersion != p.Version || evidence.SourceSHA != p.SourceSHA || !shaPattern.MatchString(evidence.Correlation) || !shaPattern.MatchString(evidence.CallerSHA) || evidence.RunID < 1 || run.ID != evidence.RunID || run.Title != "Sofa release canary / "+evidence.Correlation || run.Event != "workflow_dispatch" || run.Path != ".github/workflows/sofa-release-canary.yml" || run.HeadSHA != evidence.CallerSHA || run.Repository.ID < 1 || run.Repository.ID != run.HeadRepository.ID || run.Repository.FullName != DisposableRepository || run.HeadRepository.FullName != DisposableRepository || run.Status != "completed" || run.Conclusion != "success" {
 		return errors.New("release canary has no matching successful trusted run")
 	}
@@ -367,13 +418,17 @@ type CanaryAPI interface {
 	RepositoryInfo(context.Context, string) (github.RepositoryInfo, error)
 	Reference(context.Context, string, string) (string, bool, error)
 	DispatchReleaseCanary(context.Context, string, string, string, string, string, string, string) error
-	ReleaseCanaryRuns(context.Context, string, int) ([]github.ReleaseCanaryRun, error)
+	ReleaseCanaryRuns(context.Context, string, int, time.Time) ([]github.ReleaseCanaryRun, error)
 	ReleaseCanaryRun(context.Context, string, int64) (github.ReleaseCanaryRun, error)
 }
 
 // RunCanary correlates before and after dispatch, so retrying an interrupted
 // polling operation finds its existing run rather than triggering a new one.
 func RunCanary(ctx context.Context, api CanaryAPI, p Plan, releaseRunID, releaseRunAttempt string, poll time.Duration) (Canary, error) {
+	// An Actions attempt cannot outlive this window. Its ten-minute observer
+	// retries therefore find the same correlation without scanning lifetime
+	// history. A rerun has a distinct attempt and correlation.
+	since := time.Now().UTC().Add(-24 * time.Hour)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -411,13 +466,16 @@ func RunCanary(ctx context.Context, api CanaryAPI, p Plan, releaseRunID, release
 	find := func() (github.ReleaseCanaryRun, bool, error) {
 		var match github.ReleaseCanaryRun
 		for page := 1; page <= 10; page++ {
-			runs, err := api.ReleaseCanaryRuns(ctx, DisposableRepository, page)
+			runs, err := api.ReleaseCanaryRuns(ctx, DisposableRepository, page, since)
 			if err != nil {
 				return github.ReleaseCanaryRun{}, false, err
 			}
 			for _, run := range runs {
 				if run.Title != "Sofa release canary / "+correlation {
 					continue
+				}
+				if run.CreatedAt.IsZero() || run.CreatedAt.Before(since) || run.CreatedAt.After(time.Now().UTC().Add(time.Minute)) {
+					return github.ReleaseCanaryRun{}, false, errors.New("release canary creation time invalid")
 				}
 				if match.ID != 0 && match.ID != run.ID {
 					return github.ReleaseCanaryRun{}, false, errors.New("duplicate release canary correlation")
@@ -444,6 +502,9 @@ func RunCanary(ctx context.Context, api CanaryAPI, p Plan, releaseRunID, release
 			return Canary{}, err
 		}
 		if found {
+			if run.CreatedAt.Before(since) {
+				return Canary{}, errors.New("release canary creation time outside attempt window")
+			}
 			evidence.RunID = run.ID
 			if run.Status == "completed" {
 				return evidence, ValidateCanary(run, p, evidence)

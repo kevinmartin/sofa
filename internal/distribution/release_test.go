@@ -25,6 +25,8 @@ type releaseFake struct {
 	uploads    int
 	failUpload int
 	updates    int
+	cleanups   int
+	leaveStub  bool
 }
 
 func newFake() *releaseFake {
@@ -63,6 +65,17 @@ func (f *releaseFake) PublishDraftRelease(_ context.Context, _ string, id int64)
 func (f *releaseFake) UploadReleaseAsset(_ context.Context, _ string, id int64, name string, data []byte) (github.ReleaseAsset, error) {
 	f.uploads++
 	if f.uploads == f.failUpload {
+		if f.leaveStub {
+			for i := range f.records {
+				if f.records[i].ID == id {
+					f.records[i].Assets = append(f.records[i].Assets, github.ReleaseAsset{
+						ID:    999,
+						Name:  name,
+						State: "starter",
+					})
+				}
+			}
+		}
 		return github.ReleaseAsset{}, errors.New("interrupted upload")
 	}
 	a := github.ReleaseAsset{ID: int64(f.uploads), Name: name, Size: int64(len(data)), Digest: digest(data), State: "uploaded"}
@@ -73,6 +86,20 @@ func (f *releaseFake) UploadReleaseAsset(_ context.Context, _ string, id int64, 
 		}
 	}
 	return github.ReleaseAsset{}, errors.New("missing draft")
+}
+func (f *releaseFake) DeleteEmptyDraftUpload(_ context.Context, _ string, record github.ReleaseRecord, asset github.ReleaseAsset) error {
+	f.cleanups++
+	for i := range f.records {
+		if f.records[i].ID == record.ID {
+			for j, existing := range f.records[i].Assets {
+				if existing == asset {
+					f.records[i].Assets = append(f.records[i].Assets[:j], f.records[i].Assets[j+1:]...)
+					return nil
+				}
+			}
+		}
+	}
+	return errors.New("missing starter")
 }
 func (f *releaseFake) ImmutableReleasesEnabled(context.Context, string) (bool, error) {
 	return f.enabled, nil
@@ -115,8 +142,25 @@ func fixtureBundle(t *testing.T, p Plan) []byte {
 }
 func trustedCanary(p Plan) (github.ReleaseCanaryRun, Canary) {
 	correlation, _ := Correlation(p, "100", "1")
-	e := Canary{ReleaseVersion: p.Version, SourceSHA: p.SourceSHA, Correlation: correlation, CallerSHA: otherSource, RunID: 55, ReleaseRunID: "100", ReleaseRunAttempt: "1"}
-	r := github.ReleaseCanaryRun{ID: e.RunID, Title: "Sofa release canary / " + e.Correlation, Event: "workflow_dispatch", Path: ".github/workflows/sofa-release-canary.yml", HeadSHA: e.CallerSHA, Status: "completed", Conclusion: "success"}
+	e := Canary{
+		ReleaseVersion:    p.Version,
+		SourceSHA:         p.SourceSHA,
+		Correlation:       correlation,
+		CallerSHA:         otherSource,
+		RunID:             55,
+		ReleaseRunID:      "100",
+		ReleaseRunAttempt: "1",
+	}
+	r := github.ReleaseCanaryRun{
+		ID:         e.RunID,
+		Title:      "Sofa release canary / " + e.Correlation,
+		Event:      "workflow_dispatch",
+		Path:       ".github/workflows/sofa-release-canary.yml",
+		HeadSHA:    e.CallerSHA,
+		Status:     "completed",
+		Conclusion: "success",
+		CreatedAt:  time.Now().UTC().Add(-time.Minute),
+	}
 	r.Repository.ID = 9
 	r.Repository.FullName = DisposableRepository
 	r.HeadRepository = r.Repository
@@ -196,6 +240,72 @@ func TestPublishedAssetsAreNeverReplaced(t *testing.T) {
 	}
 	if api.uploads != 2 || api.channels["v0"] != oldSource {
 		t.Fatal("asset conflict caused replacement or promotion")
+	}
+}
+
+func TestPublicationRecoversEmptyStarterAfterFailedUpload(t *testing.T) {
+	api := newFake()
+	api.failUpload = 2
+	api.leaveStub = true
+	p := fixturePlan()
+	bundle := fixtureBundle(t, p)
+	if _, err := Publish(context.Background(), api, p, bundle); err == nil {
+		t.Fatal("interrupted upload succeeded")
+	}
+	if len(api.records[0].Assets) != 2 || api.records[0].Assets[1].State != "starter" {
+		t.Fatal("failure did not leave the GitHub starter placeholder")
+	}
+	original := api.records[0].Assets[0]
+	if _, err := Publish(context.Background(), api, p, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if api.cleanups != 1 || api.uploads != 3 || api.records[0].Assets[0] != original || api.records[0].Draft || api.channels["v0"] != oldSource {
+		t.Fatal("recovery replaced uploaded bytes or advanced the major channel")
+	}
+}
+
+func TestPublicationNeverDeletesNonemptyUploadedOrPublishedAssets(t *testing.T) {
+	for _, kind := range []string{"nonempty", "digest", "uploaded", "published", "invalid ID", "duplicate"} {
+		t.Run(kind, func(t *testing.T) {
+			api := newFake()
+			p := fixturePlan()
+			body, _ := json.Marshal(p)
+			asset := github.ReleaseAsset{
+				ID:    999,
+				Name:  BundleName,
+				State: "starter",
+			}
+			record := github.ReleaseRecord{
+				ID:     1,
+				Tag:    p.Version,
+				Source: p.SourceSHA,
+				Body:   "sofa-release-plan:v1\n" + string(body),
+				Draft:  true,
+			}
+			switch kind {
+			case "nonempty":
+				asset.Size = 1
+			case "digest":
+				asset.Digest = "sha256:unexpected"
+			case "uploaded":
+				asset.State = "uploaded"
+			case "published":
+				record.Draft = false
+			case "invalid ID":
+				asset.ID = 0
+			}
+			record.Assets = []github.ReleaseAsset{asset}
+			if kind == "duplicate" {
+				record.Assets = append(record.Assets, asset)
+			}
+			api.records = []github.ReleaseRecord{record}
+			if _, err := Publish(context.Background(), api, p, fixtureBundle(t, p)); err == nil {
+				t.Fatal("unsafe interrupted asset accepted")
+			}
+			if api.cleanups != 0 || api.uploads != 0 || api.updates != 0 {
+				t.Fatal("unsafe interrupted asset caused a mutation")
+			}
+		})
 	}
 }
 
@@ -302,11 +412,25 @@ func (f *canaryFake) DispatchReleaseCanary(_ context.Context, _, _, _, _, _, _, 
 	f.runs = []github.ReleaseCanaryRun{f.run}
 	return nil
 }
-func (f *canaryFake) ReleaseCanaryRuns(_ context.Context, _ string, page int) ([]github.ReleaseCanaryRun, error) {
+func (f *canaryFake) ReleaseCanaryRuns(_ context.Context, _ string, page int, since time.Time) ([]github.ReleaseCanaryRun, error) {
 	if f.pages != nil {
 		return f.pages[page], f.err
 	}
-	return f.runs, f.err
+	var recent []github.ReleaseCanaryRun
+	for _, run := range f.runs {
+		if run.CreatedAt.IsZero() || !run.CreatedAt.Before(since) {
+			recent = append(recent, run)
+		}
+	}
+	start := (page - 1) * 100
+	if start >= len(recent) {
+		return nil, f.err
+	}
+	end := start + 100
+	if end > len(recent) {
+		end = len(recent)
+	}
+	return recent[start:end], f.err
 }
 func (f *canaryFake) ReleaseCanaryRun(context.Context, string, int64) (github.ReleaseCanaryRun, error) {
 	return f.run, f.err
@@ -353,6 +477,50 @@ func TestCanaryRejectsDuplicateCorrelationAcrossDiscoveryPages(t *testing.T) {
 	}
 	if api.dispatches != 0 {
 		t.Fatal("ambiguous discovery dispatched another run")
+	}
+}
+
+func TestCanaryDiscoveryExcludesMoreThanOneThousandHistoricRuns(t *testing.T) {
+	p := fixturePlan()
+	run, evidence := trustedCanary(p)
+	history := make([]github.ReleaseCanaryRun, 1100)
+	for i := range history {
+		history[i] = run
+		history[i].ID = int64(1000 + i)
+		// Even the same title outside the attempt window is historical, not
+		// evidence for this current release attempt.
+		history[i].CreatedAt = time.Now().UTC().Add(-48 * time.Hour)
+	}
+	api := &canaryFake{runs: append(history, run), run: run}
+	got, err := RunCanary(context.Background(), api, p, evidence.ReleaseRunID, evidence.ReleaseRunAttempt, time.Millisecond)
+	if err != nil || got != evidence || api.dispatches != 0 {
+		t.Fatalf("historic lifetime bound interfered: %+v %v dispatches=%d", got, err, api.dispatches)
+	}
+}
+
+func TestCanaryRejectsMissingOrFutureCreationTime(t *testing.T) {
+	for _, created := range []time.Time{{}, time.Now().UTC().Add(time.Hour)} {
+		p := fixturePlan()
+		run, evidence := trustedCanary(p)
+		run.CreatedAt = created
+		api := &canaryFake{runs: []github.ReleaseCanaryRun{run}, run: run}
+		if _, err := RunCanary(context.Background(), api, p, evidence.ReleaseRunID, evidence.ReleaseRunAttempt, time.Millisecond); err == nil || api.dispatches != 0 {
+			t.Fatal("invalid creation time authorized or retriggered a canary")
+		}
+	}
+}
+
+func TestUnsupportedStableMajorFailsBeforeAPI(t *testing.T) {
+	p := fixturePlan()
+	p.Version, p.Channel = "v2.0.0", "v2"
+	if err := p.Validate(); err == nil {
+		t.Fatal("unsupported release plan accepted")
+	}
+	if _, err := Allocate(context.Background(), nil, Config{Series: "2.0"}, newSource); err == nil {
+		t.Fatal("unsupported allocation reached API")
+	}
+	if _, err := RollbackPlan(context.Background(), nil, p.Version, oldSource); err == nil {
+		t.Fatal("unsupported rollback reached API")
 	}
 }
 

@@ -43,6 +43,16 @@ func boundedReleaseArgs(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+func releaseAuthority(major string) error {
+	if major != "v0" && major != "v1" {
+		return errors.New("release automation supports only v0 and v1")
+	}
+	if major == "v1" && os.Getenv("SOFA_V1_ENABLED") != "true" {
+		return errors.New("stable v1 release activation requires Kevin's approval")
+	}
+	return nil
+}
+
 func newReleaseCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "release",
@@ -70,8 +80,11 @@ func newReleaseCommand() *cobra.Command {
 			if err := readReleaseJSON(configPath, &config); err != nil {
 				return err
 			}
-			if strings.HasPrefix(config.Series, "1.") && os.Getenv("SOFA_V1_ENABLED") != "true" {
-				return errors.New("stable v1 release activation requires Kevin's approval")
+			if err := config.Validate(); err != nil {
+				return err
+			}
+			if err := releaseAuthority("v" + strings.Split(config.Series, ".")[0]); err != nil {
+				return err
 			}
 			api, err := client("SOFA_RELEASE_TOKEN")
 			if err != nil {
@@ -93,6 +106,13 @@ func newReleaseCommand() *cobra.Command {
 		Short: "Plan an owner-authorized rollback after target state compatibility testing",
 		Args:  boundedReleaseArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			major, err := release.VersionMajor(rollbackVersion)
+			if err != nil {
+				return err
+			}
+			if err := releaseAuthority(major); err != nil {
+				return err
+			}
 			api, err := client("SOFA_RELEASE_TOKEN")
 			if err != nil {
 				return err
@@ -133,6 +153,9 @@ func newReleaseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := releaseAuthority(p.Channel); err != nil {
+				return err
+			}
 			file, err := os.Open(bundlePath)
 			if err != nil {
 				return errors.New("release bundle unavailable")
@@ -171,6 +194,9 @@ func newReleaseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := releaseAuthority(p.Channel); err != nil {
+				return err
+			}
 			api, err := client("SOFA_RELEASE_CANARY_TOKEN")
 			if err != nil {
 				return err
@@ -193,6 +219,9 @@ func newReleaseCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := releaseAuthority(p.Channel); err != nil {
+				return err
+			}
 			var evidence release.Canary
 			if err := readReleaseJSON(canaryPath, &evidence); err != nil {
 				return err
@@ -208,9 +237,6 @@ func newReleaseCommand() *cobra.Command {
 			api, err := client("SOFA_RELEASE_TOKEN")
 			if err != nil {
 				return err
-			}
-			if p.Channel == "v1" && os.Getenv("SOFA_V1_ENABLED") != "true" {
-				return errors.New("stable v1 channel activation requires Kevin's approval")
 			}
 			return release.Promote(cmd.Context(), api, p, run, evidence)
 		},

@@ -166,6 +166,42 @@ func (c *Client) UploadReleaseAsset(ctx context.Context, repository string, id i
 	return asset, nil
 }
 
+// DeleteEmptyDraftUpload removes only GitHub's empty upstream-failure starter
+// placeholder. Recheck the reserved draft and exact asset immediately before
+// deletion. This is not an asset-replacement API; published/uploaded/nonempty
+// assets and changed reservations always fail closed. Release serialization
+// and exclusive writer rulesets still apply because DELETE has no CAS field.
+func (c *Client) DeleteEmptyDraftUpload(ctx context.Context, repository string, expected ReleaseRecord, asset ReleaseAsset) error {
+	if !repositoryPattern.MatchString(repository) || expected.ID < 1 || !releaseExactPattern.MatchString(expected.Tag) || !shaPattern.MatchString(expected.Source) || !expected.Draft || expected.Immutable || expected.Prerelease || !strings.HasPrefix(expected.Body, "sofa-release-plan:v1\n") || len(expected.Body) > 4096 || asset.ID < 1 || (asset.Name != "sofa-linux-amd64.tar.gz" && asset.Name != "release.json") || asset.State != "starter" || asset.Size != 0 || asset.Digest != "" {
+		return errors.New("invalid empty draft upload cleanup")
+	}
+	var current ReleaseRecord
+	if err := c.Request(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/releases/%d", repository, expected.ID), nil, &current); err != nil {
+		return err
+	}
+	if current.ID != expected.ID || current.Tag != expected.Tag || current.Source != expected.Source || current.Body != expected.Body || !current.Draft || current.Immutable || current.Prerelease {
+		return errors.New("draft identity changed before upload cleanup")
+	}
+	found := false
+	for _, candidate := range current.Assets {
+		if candidate.ID != asset.ID && candidate.Name != asset.Name {
+			continue
+		}
+		if found || candidate != asset {
+			return errors.New("draft upload changed before cleanup")
+		}
+		found = true
+	}
+	if !found {
+		return errors.New("empty draft upload unavailable for cleanup")
+	}
+	err := c.Request(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/releases/assets/%d", repository, asset.ID), nil, nil)
+	if notFound(err) {
+		return nil // Another authorized retry already removed the same empty ID.
+	}
+	return err
+}
+
 func validReleaseRef(tag string) bool {
 	if len(tag) < 2 || len(tag) > 80 || tag[0] != 'v' {
 		return false
@@ -268,14 +304,15 @@ func (c *Client) DispatchReleaseCanary(ctx context.Context, repository, ref, ver
 	return c.Request(ctx, http.MethodPost, "/repos/"+repository+"/actions/workflows/sofa-release-canary.yml/dispatches", map[string]any{"ref": ref, "inputs": map[string]string{"release_version": version, "source_sha": source, "correlation": correlation, "release_run_id": releaseRunID, "release_run_attempt": releaseRunAttempt}}, nil)
 }
 
-func (c *Client) ReleaseCanaryRuns(ctx context.Context, repository string, page int) ([]ReleaseCanaryRun, error) {
-	if repository != "kevinmartin/sofa-disposable" || page < 1 || page > 10 {
+func (c *Client) ReleaseCanaryRuns(ctx context.Context, repository string, page int, since time.Time) ([]ReleaseCanaryRun, error) {
+	if repository != "kevinmartin/sofa-disposable" || page < 1 || page > 10 || since.IsZero() || since.After(time.Now().UTC()) {
 		return nil, errors.New("invalid release canary page")
 	}
 	var response struct {
 		Runs []ReleaseCanaryRun `json:"workflow_runs"`
 	}
-	err := c.Request(ctx, http.MethodGet, "/repos/"+repository+"/actions/workflows/sofa-release-canary.yml/runs?event=workflow_dispatch&per_page=100&page="+strconv.Itoa(page), nil, &response)
+	created := url.QueryEscape(">=" + since.UTC().Format(time.RFC3339))
+	err := c.Request(ctx, http.MethodGet, "/repos/"+repository+"/actions/workflows/sofa-release-canary.yml/runs?event=workflow_dispatch&per_page=100&page="+strconv.Itoa(page)+"&created="+created, nil, &response)
 	if len(response.Runs) > 100 {
 		return nil, errors.New("release canary page exceeds bound")
 	}
