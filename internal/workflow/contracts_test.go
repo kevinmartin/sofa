@@ -138,17 +138,19 @@ func checkDeliveryContracts(callerData, reconcileData, workData []byte) error {
 	if refs[0] == "" || refs[0] != refs[1] {
 		return fmt.Errorf("caller reusable workflow references differ")
 	}
-	reconcileSHA, workSHA := caller.Jobs["reconcile"].With["toolkit_sha"], caller.Jobs["work"].With["toolkit_sha"]
+	reconcileVersion := caller.Jobs["reconcile"].With["version"]
+	workVersion := caller.Jobs["work"].With["version"]
 	if toolkitRef.MatchString(refs[0]) {
-		if reconcileSHA != refs[0] || workSHA != refs[0] || caller.Jobs["reconcile"].With["release_version"] != "" || caller.Jobs["work"].With["release_version"] != "" {
-			return fmt.Errorf("candidate caller workflow and CLI sources differ or combine release selection")
+		if reconcileVersion != refs[0] || workVersion != refs[0] {
+			return fmt.Errorf("candidate caller workflow and CLI sources differ")
 		}
-	} else if !regexp.MustCompile(`^v[0-9]+$`).MatchString(refs[0]) || reconcileSHA != "" || workSHA != "" || caller.Jobs["reconcile"].With["release_version"] != "${{ inputs.release_version }}" || caller.Jobs["work"].With["release_version"] != "${{ inputs.release_version }}" {
-		return fmt.Errorf("released caller must use one major channel and forward the same release request")
+	} else if !regexp.MustCompile("^v[0-9]+$").MatchString(refs[0]) || reconcileVersion != "${{ inputs.version }}" || workVersion != reconcileVersion {
+		return fmt.Errorf("released caller must use one major channel and forward the same version request")
 	}
-	if reconcile.On.WorkflowCall.Inputs["toolkit_sha"].Type != "string" || work.On.WorkflowCall.Inputs["toolkit_sha"].Type != "string" || reconcile.On.WorkflowCall.Inputs["release_version"].Type != "string" || work.On.WorkflowCall.Inputs["release_version"].Type != "string" {
-		return fmt.Errorf("binary source and release inputs must be strings")
+	if reconcile.On.WorkflowCall.Inputs["version"].Type != "string" || work.On.WorkflowCall.Inputs["version"].Type != "string" {
+		return fmt.Errorf("CLI version inputs must be strings")
 	}
+
 	execute, verify, publish := work.Jobs["execute"], work.Jobs["verify"], work.Jobs["publish"]
 	if execute.Permissions["copilot-requests"] != "write" || verify.Permissions["copilot-requests"] != "" || publish.Permissions["copilot-requests"] != "" || verify.Permissions["contents"] != "read" || publish.Permissions["contents"] != "read" {
 		return fmt.Errorf("execution, verification, or publication permission boundary changed")
@@ -219,7 +221,7 @@ func TestDeliveryWorkflowContracts(t *testing.T) {
 	}
 	candidateSHA := strings.Repeat("a", 40)
 	candidateCaller := strings.ReplaceAll(string(caller), "@v0", "@"+candidateSHA)
-	candidateCaller = strings.ReplaceAll(candidateCaller, "release_version: ${{ inputs.release_version }}", "toolkit_sha: "+candidateSHA)
+	candidateCaller = strings.ReplaceAll(candidateCaller, "version: ${{ inputs.version }}", "version: "+candidateSHA)
 	if err := checkDeliveryContracts([]byte(candidateCaller), reconcile, work); err != nil {
 		t.Fatalf("matching exact candidate source rejected: %v", err)
 	}
@@ -233,7 +235,7 @@ func TestDeliveryWorkflowContracts(t *testing.T) {
 	}{
 		{"numeric conversion", "caller", "fromJSON(inputs.issue_number)", "inputs.issue_number"},
 		{"channel mismatch", "caller", "work.reusable.yml@v0", "work.reusable.yml@v1"},
-		{"release handoff mismatch", "caller", "release_version: ${{ inputs.release_version }}", "release_version: v0.1.0"},
+		{"release handoff mismatch", "caller", "version: ${{ inputs.version }}", "version: v0.1.0"},
 		{"image architecture", "work", "--platform linux/amd64", "--platform linux/arm64"},
 		{"commented image architecture", "work", "docker run --rm --platform linux/amd64", "# docker run --rm --platform linux/amd64\n          docker run --rm --platform linux/arm64"},
 		{"Copilot archive digest", "work", copilotArchiveSHA256, "13284019748ac198c3dbcf9ba17f0541c8fcaaee16e6c644eb0e7285cdfd6112"},

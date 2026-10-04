@@ -1,3 +1,5 @@
+# TODO: remove after v0 activation and migration of remaining exact-source
+# lifecycle callers; merging the distribution PR alone does not retire them.
 # Legacy migration wrapper only. Normal consumers install releases through
 # setup-cli; candidate invocations use candidate-build.reusable.yml.
 # Build one secretless controller for an exact sofa revision. Credentialed

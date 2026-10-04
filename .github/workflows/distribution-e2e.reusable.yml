@@ -1,5 +1,5 @@
-# Secretless hosted proof that one exact source build supplies both CLIs to
-# later Linux jobs. This tests candidate distribution without a release or tag.
+# Secretless hosted proof of per-job exact-source installation and state handoff.
+# Source mode builds with Go; subsequent CLI-only steps explicitly hide Go.
 name: Sofa / Reusable distribution E2E
 
 on:
@@ -18,28 +18,29 @@ on:
 permissions: {}
 
 jobs:
-  candidate-build:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/candidate-build.reusable.yml
-    with:
-      toolkit_sha: ${{ inputs.toolkit_sha }}
-
   first:
     name: Verify both candidate CLIs and produce compatibility state
-    needs: candidate-build
-    if: always() && needs.candidate-build.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Download exact source binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Validate exact source selector
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: '[[ "$SOFA_TOOLKIT_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Install both CLIs through the shared source/release Action
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.toolkit_sha }}
       - name: Verify first-job source and compatibility fixture
         shell: bash
         env:
@@ -48,9 +49,6 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/sofa-cli"
           [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' manifest.json >/dev/null
-          sha256sum --check manifest.sha256
-          chmod 700 sofa sofa-test
           for binary in sofa sofa-test; do
             "./$binary" version | jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
             "./$binary" --version >/dev/null
@@ -92,21 +90,9 @@ jobs:
         run: |
           echo 'Controlled distribution recovery fault after retaining fixture'
           exit 1
-      - name: Check out exact test driver without credentials
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kevinmartin/sofa
-          ref: ${{ inputs.toolkit_sha }}
-          persist-credentials: false
-          path: toolkit
-      - name: Set up Go only for deterministic installer tests
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: toolkit/go.mod
-          cache: false
       - name: Exercise release-selection script with fake GitHub responses
         shell: bash
-        working-directory: toolkit
+        working-directory: .sofa-cli-source
         env:
           GITHUB_TOKEN: ''
           GH_TOKEN: ''
@@ -115,20 +101,30 @@ jobs:
           go test -count=1 ./internal/setupcli
 
   next:
-    name: Consume same CLIs and state in a fresh job without Go
+    name: Rebuild exact source in a fresh job and preserve state
     needs: first
     if: always() && needs.first.result == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Download same source binaries
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Validate exact source selector
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: '[[ "$SOFA_TOOLKIT_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Install both CLIs through the shared source/release Action
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.toolkit_sha }}
       - name: Download first-job compatibility state
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -142,9 +138,6 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/sofa-cli"
           [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' manifest.json >/dev/null
-          sha256sum --check manifest.sha256
-          chmod 700 sofa sofa-test
           for binary in sofa sofa-test; do
             "./$binary" version | jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
           done
@@ -177,7 +170,7 @@ jobs:
 
   result:
     name: Distribution E2E result
-    needs: [candidate-build, first, next]
+    needs: [first, next]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -186,10 +179,8 @@ jobs:
       - name: Require every distribution stage
         shell: bash
         env:
-          SOFA_BUILD_RESULT: ${{ needs.candidate-build.result }}
           SOFA_FIRST_RESULT: ${{ needs.first.result }}
           SOFA_NEXT_RESULT: ${{ needs.next.result }}
         run: |
-          test "$SOFA_BUILD_RESULT" = success
           test "$SOFA_FIRST_RESULT" = success
           test "$SOFA_NEXT_RESULT" = success

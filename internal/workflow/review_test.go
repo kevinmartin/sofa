@@ -47,10 +47,10 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 	if err := yaml.Unmarshal(data, &w); err != nil {
 		t.Fatal(err)
 	}
-	if w.Name == "" || len(w.On.WorkflowCall.Inputs) != 3 || len(w.On.WorkflowCall.Secrets) != 4 {
+	if w.Name == "" || len(w.On.WorkflowCall.Inputs) != 2 || len(w.On.WorkflowCall.Secrets) != 4 {
 		t.Fatal("review workflow call contract changed")
 	}
-	for _, name := range []string{"toolkit_sha", "release_version", "issue_number"} {
+	for _, name := range []string{"version", "issue_number"} {
 		if _, ok := w.On.WorkflowCall.Inputs[name]; !ok {
 			t.Fatalf("missing %s input", name)
 		}
@@ -61,7 +61,7 @@ func TestReviewRepairWorkflowKeepsJobAndCredentialBoundaries(t *testing.T) {
 			t.Fatalf("missing %s caller-owned secret", name)
 		}
 	}
-	if len(w.Jobs) != 6 || w.Jobs["admit"].Needs != "candidate-build" || w.Jobs["execute"].Needs != "admit" || w.Jobs["verify"].Needs != "execute" || w.Jobs["publish"].Needs != "verify" || !reflect.DeepEqual(w.Jobs["finalize-failure"].Needs, []any{"admit", "execute", "verify", "publish"}) {
+	if len(w.Jobs) != 5 || w.Jobs["admit"].Needs != nil || w.Jobs["execute"].Needs != "admit" || w.Jobs["verify"].Needs != "execute" || w.Jobs["publish"].Needs != "verify" || !reflect.DeepEqual(w.Jobs["finalize-failure"].Needs, []any{"admit", "execute", "verify", "publish"}) {
 		t.Fatal("review job graph changed")
 	}
 	if !strings.Contains(w.Jobs["admit"].If, "github.event_name == 'workflow_dispatch'") || !strings.Contains(w.Jobs["admit"].If, "github.event.repository.default_branch") || !strings.Contains(w.Jobs["execute"].If, "needs.admit.outputs.dispatch == 'true'") || !strings.Contains(w.Jobs["verify"].If, "always() && needs.execute.result == 'success'") || !strings.Contains(w.Jobs["publish"].If, "always() && needs.verify.result == 'success'") || !strings.Contains(w.Jobs["finalize-failure"].If, "always()") || !strings.Contains(w.Jobs["finalize-failure"].If, "needs.admit.outputs.dispatch == 'true'") {

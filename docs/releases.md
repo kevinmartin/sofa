@@ -2,16 +2,22 @@
 
 Consumers install the current promoted release through
 [setup-cli](../.github/actions/setup-cli/action.yml), usually at `@v0`.
-The Action installs Linux amd64 `sofa` and `sofa-test` together on `PATH`, verifies
-the bundle with `gh release verify-asset`, and outputs its exact `release_version`.
-An explicit exact version must stay within the requested major. Install once in a
-job; subsequent steps retain that job's version. Dependent jobs can pass the output
-back as `release_version` when they need the same version, while omitted inputs
-adopt the latest promoted compatible release at each job's start.
+The Action installs Linux amd64 sofa and sofa-test together on PATH. Its one
+version selector accepts v0 or v1 major channels, an exact release such as
+v0.1.3, or a full lowercase commit SHA; empty defaults to v0. Release selection
+verifies the bundle with gh release verify-asset. The version output identifies
+the exact release or source SHA installed, and can be supplied as version in a
+later job. Each job retains its first selection; a new job may select a newly
+promoted compatible release. Reusable v0 workflows pass major: v0 as an internal
+guard so their version requests cannot cross to v1.
 
-Candidate hosted E2E keeps the separate secretless exact `toolkit_sha` source
-build. It never requires releases in the disposable repository. Normal installation
-always downloads releases from `kevinmartin/sofa`.
+Exact source selection uses the same Action to check out Sofa without persisted
+credentials and build both CLIs locally. Go builds remove GitHub token environment
+variables and precede Project, model and publication steps. This explicit
+owner-approved candidate path rebuilds independently in each job and needs Go;
+released installation needs no Go or binary artifact handoffs. Candidate hosted
+E2E remains secretless and selects the matching workflow/source revision. Normal
+installation always downloads releases from kevinmartin/sofa.
 
 ## Owner-controlled activation
 
@@ -51,7 +57,7 @@ prerequisites are configured:
    unset until Kevin explicitly authorizes stable v1 after qualification.
 
 Before stable v1 activation, a reviewed major API migration must change the setup
-Action's default expected major to `v1` and change reusable workflows' internal
+Action's empty-selector default to `v1` and change reusable workflows' internal
 setup Action references and explicit `major` values from `v0` to `v1`. Qualify that
 the resulting `@v1` Action and workflows install v1, while the retained `@v0`
 revision continues to select v0. Changing only the release series or enabling

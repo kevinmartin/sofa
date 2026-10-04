@@ -10,20 +10,15 @@ on:
         description: Number of the admitted issue whose PR has owner feedback
         required: true
         type: number
-      release_version:
-        description: Optional exact Sofa release within v0; omit for automatic updates
-        required: false
-        default: ''
-        type: string
-      toolkit_sha:
-        description: Optional exact source SHA for secretless candidate testing; omit for released CLIs
+      version:
+        description: v0 channel, exact v0 release or full source SHA; omit for automatic v0 updates
         required: false
         default: ''
         type: string
     outputs:
-      release_version:
-        description: Exact release selected by the admit job; empty in candidate mode
-        value: ${{ jobs.admit.outputs.release_version }}
+      version:
+        description: Exact release or source SHA selected by the admit job
+        value: ${{ jobs.admit.outputs.version }}
     secrets:
       SOFA_PROJECTS_TOKEN:
         required: true
@@ -39,19 +34,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  candidate-build:
-    if: inputs.toolkit_sha != ''
-    permissions:
-      contents: read
-    uses: ./.github/workflows/candidate-build.reusable.yml
-    with:
-      toolkit_sha: ${{ inputs.toolkit_sha }}
-      release_version: ${{ inputs.release_version }}
-
   admit:
-    needs: candidate-build
     name: Bind owner review to the published PR and reserve repair budget
-    if: always() && !cancelled() && (needs.candidate-build.result == 'success' || (needs.candidate-build.result == 'skipped' && inputs.toolkit_sha == '')) && github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: github.event_name == 'workflow_dispatch' && github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -59,52 +44,46 @@ jobs:
       actions: read # Exact terminal-run proof before recovering an interruption.
       pull-requests: read
     outputs:
-      release_version: ${{ steps.sofa.outputs.release_version }}
+      version: ${{ steps.sofa.outputs.version || steps.sofa-source.outputs.version }}
       dispatch: ${{ steps.status.outputs.dispatch }}
     steps:
-      - name: Validate immutable toolkit reference
-        shell: bash
-        env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-        run: |
-          [[ -z "$SOFA_TOOLKIT_SHA" || "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full lowercase commit SHA' >&2; exit 1; }
       - name: Check out trusted consumer configuration
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
           path: consumer
-      - name: Install released Sofa CLIs
-        if: inputs.toolkit_sha == ''
+      # Before v0 exists, source tests bootstrap this same Action from the
+      # explicitly selected exact Sofa revision. No binary artifacts are needed.
+      - name: Validate exact source selector before loading its installer
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        env:
+          SOFA_VERSION: ${{ inputs.version }}
+        run: '[[ "$SOFA_VERSION" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.version }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Set up source Sofa CLIs
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        id: sofa-source
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.version }}
+          major: v0
+      - name: Set up released Sofa CLIs
+        if: inputs.version == '' || startsWith(inputs.version, 'v')
         id: sofa
         uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          release_version: ${{ inputs.release_version }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Download exact candidate binaries from this invocation
-        if: inputs.toolkit_sha != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
-      - name: Verify candidate selection and expose job binaries
+          major: v0
+          version: ${{ inputs.version }}
+      - name: Expose job binaries for existing CLI commands
         shell: bash
-        env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
-          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
-        run: |
-          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
-            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
-            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
-            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
-            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
-          else
-            test -n "$SOFA_RELEASE_BIN"
-            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
-          fi
-          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
-          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+        run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Admit the exact owner review
         shell: bash
         env:
@@ -161,42 +140,41 @@ jobs:
           ref: ${{ steps.head.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Install released Sofa CLIs
-        if: inputs.toolkit_sha == ''
+      # Before v0 exists, source tests bootstrap this same Action from the
+      # explicitly selected exact Sofa revision. No binary artifacts are needed.
+      - name: Validate exact source selector before loading its installer
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        env:
+          SOFA_VERSION: ${{ inputs.version }}
+        run: '[[ "$SOFA_VERSION" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.version }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Set up source Sofa CLIs
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        id: sofa-source
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.version }}
+          major: v0
+      - name: Set up released Sofa CLIs
+        if: inputs.version == '' || startsWith(inputs.version, 'v')
         id: sofa
         uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          release_version: ${{ inputs.release_version }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Download exact candidate binaries from this invocation
-        if: inputs.toolkit_sha != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
-      - name: Verify candidate selection and expose job binaries
+          major: v0
+          version: ${{ inputs.version }}
+      - name: Expose job binaries for existing CLI commands
         shell: bash
-        env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
-          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
-        run: |
-          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
-            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
-            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
-            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
-            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
-          else
-            test -n "$SOFA_RELEASE_BIN"
-            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
-          fi
-          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
-          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+        run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Verify source identities
         shell: bash
         env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_PR_HEAD_SHA: ${{ steps.head.outputs.sha }}
         run: |
           test "$(git -C consumer rev-parse HEAD)" = "$SOFA_PR_HEAD_SHA"
@@ -278,42 +256,41 @@ jobs:
           ref: ${{ steps.head.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Install released Sofa CLIs
-        if: inputs.toolkit_sha == ''
+      # Before v0 exists, source tests bootstrap this same Action from the
+      # explicitly selected exact Sofa revision. No binary artifacts are needed.
+      - name: Validate exact source selector before loading its installer
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        env:
+          SOFA_VERSION: ${{ inputs.version }}
+        run: '[[ "$SOFA_VERSION" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.version }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Set up source Sofa CLIs
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        id: sofa-source
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.version }}
+          major: v0
+      - name: Set up released Sofa CLIs
+        if: inputs.version == '' || startsWith(inputs.version, 'v')
         id: sofa
         uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          release_version: ${{ inputs.release_version }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Download exact candidate binaries from this invocation
-        if: inputs.toolkit_sha != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
-      - name: Verify candidate selection and expose job binaries
+          major: v0
+          version: ${{ inputs.version }}
+      - name: Expose job binaries for existing CLI commands
         shell: bash
-        env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
-          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
-        run: |
-          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
-            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
-            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
-            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
-            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
-          else
-            test -n "$SOFA_RELEASE_BIN"
-            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
-          fi
-          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
-          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+        run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Verify verifier source identities
         shell: bash
         env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_PR_HEAD_SHA: ${{ steps.head.outputs.sha }}
         run: |
           test "$(git -C consumer rev-parse HEAD)" = "$SOFA_PR_HEAD_SHA"
@@ -378,42 +355,41 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Install released Sofa CLIs
-        if: inputs.toolkit_sha == ''
+      # Before v0 exists, source tests bootstrap this same Action from the
+      # explicitly selected exact Sofa revision. No binary artifacts are needed.
+      - name: Validate exact source selector before loading its installer
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        env:
+          SOFA_VERSION: ${{ inputs.version }}
+        run: '[[ "$SOFA_VERSION" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.version }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Set up source Sofa CLIs
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        id: sofa-source
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.version }}
+          major: v0
+      - name: Set up released Sofa CLIs
+        if: inputs.version == '' || startsWith(inputs.version, 'v')
         id: sofa
         uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          release_version: ${{ inputs.release_version }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Download exact candidate binaries from this invocation
-        if: inputs.toolkit_sha != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
-      - name: Verify candidate selection and expose job binaries
+          major: v0
+          version: ${{ inputs.version }}
+      - name: Expose job binaries for existing CLI commands
         shell: bash
-        env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
-          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
-        run: |
-          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
-            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
-            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
-            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
-            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
-          else
-            test -n "$SOFA_RELEASE_BIN"
-            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
-          fi
-          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
-          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+        run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Verify publisher source identities
         shell: bash
         env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
           test "$(git -C consumer rev-parse HEAD)" = "$SOFA_BASE_SHA"
@@ -499,42 +475,41 @@ jobs:
           ref: ${{ steps.base.outputs.sha }}
           persist-credentials: false
           path: consumer
-      - name: Install released Sofa CLIs
-        if: inputs.toolkit_sha == ''
+      # Before v0 exists, source tests bootstrap this same Action from the
+      # explicitly selected exact Sofa revision. No binary artifacts are needed.
+      - name: Validate exact source selector before loading its installer
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        env:
+          SOFA_VERSION: ${{ inputs.version }}
+        run: '[[ "$SOFA_VERSION" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.version }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Set up source Sofa CLIs
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        id: sofa-source
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.version }}
+          major: v0
+      - name: Set up released Sofa CLIs
+        if: inputs.version == '' || startsWith(inputs.version, 'v')
         id: sofa
         uses: kevinmartin/sofa/.github/actions/setup-cli@v0
         with:
-          release_version: ${{ inputs.release_version }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Download exact candidate binaries from this invocation
-        if: inputs.toolkit_sha != ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: sofa-cli-${{ inputs.toolkit_sha }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/sofa-cli
-      - name: Verify candidate selection and expose job binaries
+          major: v0
+          version: ${{ inputs.version }}
+      - name: Expose job binaries for existing CLI commands
         shell: bash
-        env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-          SOFA_RELEASE_VERSION: ${{ inputs.release_version }}
-          SOFA_RELEASE_BIN: ${{ steps.sofa.outputs.bin_directory }}
-        run: |
-          if [[ -n "$SOFA_TOOLKIT_SHA" ]]; then
-            [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ && -z "$SOFA_RELEASE_VERSION" ]] || exit 1
-            jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.schema == "sofa-candidate-cli-v1" and .source_sha == $sha' "$RUNNER_TEMP/sofa-cli/manifest.json" >/dev/null
-            (cd "$RUNNER_TEMP/sofa-cli" && sha256sum --check manifest.sha256)
-            chmod 700 "$RUNNER_TEMP/sofa-cli/sofa" "$RUNNER_TEMP/sofa-cli/sofa-test"
-          else
-            test -n "$SOFA_RELEASE_BIN"
-            test "$SOFA_RELEASE_BIN" = "$RUNNER_TEMP/sofa-cli"
-          fi
-          ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
-          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+        run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Verify finalizer source identities
         shell: bash
         env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
           test "$(git -C consumer rev-parse HEAD)" = "$SOFA_BASE_SHA"

@@ -37,8 +37,11 @@ type release struct {
 }
 
 type fakeState struct {
-	Promoted map[string]string `json:"promoted"`
-	Releases []release         `json:"releases"`
+	Promoted     map[string]string `json:"promoted"`
+	Releases     []release         `json:"releases"`
+	SourceSHA    string
+	SourceDirty  bool
+	BuildFailure bool
 }
 
 type fixture struct {
@@ -402,16 +405,23 @@ func readActionScript(t *testing.T) string {
 		Runs struct {
 			Steps []struct {
 				Run string `yaml:"run"`
+				ID  string `yaml:"id"`
 			} `yaml:"steps"`
 		} `yaml:"runs"`
 	}
 	if err := yaml.Unmarshal(data, &action); err != nil {
 		t.Fatal(err)
 	}
-	if len(action.Runs.Steps) != 1 || action.Runs.Steps[0].Run == "" {
-		t.Fatal("setup action has no single install script")
+	var scripts []string
+	for _, step := range action.Runs.Steps {
+		if step.ID == "select" || step.ID == "install" {
+			scripts = append(scripts, step.Run)
+		}
 	}
-	return action.Runs.Steps[0].Run
+	if len(scripts) != 2 {
+		t.Fatal("setup action lacks selector and installer scripts")
+	}
+	return strings.Join(scripts, "\n")
 }
 
 type tarMember struct {
@@ -546,6 +556,9 @@ func (f *fixture) run(job, major, version string) runResult {
 		"SOFA_FAKE_STATE="+filepath.Join(f.root, "state.json"),
 		"SOFA_SETUP_MAJOR="+major,
 		"SOFA_SETUP_VERSION="+version,
+		"SOFA_SETUP_SOURCE_DIR="+filepath.Join(f.root, "source"),
+		"GH_TOKEN=fixture-token",
+		"GITHUB_TOKEN=fixture-token",
 		"RUNNER_TEMP="+jobDir,
 		"GITHUB_OUTPUT="+outPath,
 		"GITHUB_PATH="+pathPath,
@@ -555,8 +568,8 @@ func (f *fixture) run(job, major, version string) runResult {
 	result := runResult{output: string(output), err: err}
 	if data, readErr := os.ReadFile(outPath); readErr == nil {
 		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "release_version=") {
-				result.version = strings.TrimPrefix(line, "release_version=")
+			if strings.HasPrefix(line, "version=") {
+				result.version = strings.TrimPrefix(line, "version=")
 			}
 			if strings.HasPrefix(line, "bin_directory=") {
 				result.binDirectory = strings.TrimPrefix(line, "bin_directory=")
@@ -673,6 +686,8 @@ func fakeTool(args []string) int {
 		return fakeTar(args)
 	case "gh":
 		return fakeGH(args)
+	case "git", "go":
+		return fakeSourceTool(filepath.Base(os.Args[0]), args)
 	}
 	fmt.Fprintln(os.Stderr, "unexpected fake tool call", filepath.Base(os.Args[0]), args)
 	return 2
@@ -846,4 +861,164 @@ func fakeTar(args []string) int {
 			fmt.Println(escaped)
 		}
 	}
+}
+
+func TestMajorChannelVersionSelector(t *testing.T) {
+	f := newFixture(t)
+	f.addRelease("v0.1.0", shaA, nil)
+	f.addRelease("v1.0.0", shaB, nil)
+	f.state.Promoted["v0"] = shaA
+	f.state.Promoted["v1"] = shaB
+	f.save()
+	for _, tc := range []struct {
+		name     string
+		guard    string
+		selector string
+		want     string
+	}{
+		{name: "explicit v0", selector: "v0", want: "v0.1.0"},
+		{name: "explicit v1", selector: "v1", want: "v1.0.0"},
+		{name: "default", want: "v0.1.0"},
+		{name: "exact release", selector: "v1.0.0", want: "v1.0.0"},
+		{name: "workflow major guard", guard: "v0", selector: "v1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := f.run(tc.name, tc.guard, tc.selector)
+			if tc.want == "" {
+				if got.err == nil {
+					t.Fatal("workflow accepted another major")
+				}
+				return
+			}
+			if got.err != nil || got.version != tc.want {
+				t.Fatalf("selector %q: version=%q err=%v output=%s", tc.selector, got.version, got.err, got.output)
+			}
+			got.assertBinaries(t, tc.want)
+		})
+	}
+}
+
+func TestSourceSelectionBuildsBothCLIsOncePerJobWithoutTokens(t *testing.T) {
+	f := newSourceFixture(t)
+	f.state.SourceSHA = shaA
+	f.save()
+	first := f.run("source", "v0", shaA)
+	if first.err != nil || first.version != shaA {
+		t.Fatalf("source install: version=%q err=%v output=%s", first.version, first.err, first.output)
+	}
+	first.assertBinaries(t, "development")
+	again := f.run("source", "v0", shaA)
+	if again.err != nil || again.version != shaA {
+		t.Fatalf("reuse source selection: %+v", again)
+	}
+	trace, err := os.ReadFile(filepath.Join(f.jobDir("source"), "tool-trace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(trace), "go:build") != 2 || strings.Contains(string(trace), "gh:") {
+		t.Fatalf("source mode rebuilt within the job or contacted releases: %s", trace)
+	}
+	for _, selector := range []string{"", "v0", shaB, "v0.1.0"} {
+		if got := f.run("source", "v0", selector); got.err == nil {
+			t.Fatalf("source selection switched to %q inside one job", selector)
+		}
+	}
+	next := f.run("fresh", "v0", shaA)
+	if next.err != nil || next.version != shaA {
+		t.Fatalf("fresh-job source install: %+v", next)
+	}
+	next.assertBinaries(t, "development")
+}
+
+func TestSourceSelectionRejectsChangedCheckoutAndFailedBuild(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sha   string
+		dirty bool
+		fail  bool
+	}{
+		{name: "wrong revision", sha: shaB},
+		{name: "dirty checkout", sha: shaA, dirty: true},
+		{name: "second binary fails", sha: shaA, fail: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSourceFixture(t)
+			f.state.SourceSHA = tc.sha
+			f.state.SourceDirty = tc.dirty
+			f.state.BuildFailure = tc.fail
+			f.save()
+			got := f.run("job", "v0", shaA)
+			if got.err == nil {
+				t.Fatal("invalid source installation succeeded")
+			}
+			for _, path := range []string{"sofa-cli", "sofa-setup-cli.selection"} {
+				if _, err := os.Stat(filepath.Join(f.jobDir("job"), path)); !os.IsNotExist(err) {
+					t.Fatalf("failed build published %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func newSourceFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	if err := os.MkdirAll(filepath.Join(f.root, "source", ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"git", "go"} {
+		if err := os.Symlink(self, filepath.Join(f.path, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+func fakeSourceTool(tool string, args []string) int {
+	data, err := os.ReadFile(os.Getenv("SOFA_FAKE_STATE"))
+	if err != nil {
+		return 2
+	}
+	var state fakeState
+	if json.Unmarshal(data, &state) != nil {
+		return 2
+	}
+	if tool == "git" && len(args) >= 4 {
+		switch args[2] {
+		case "rev-parse":
+			fmt.Println(state.SourceSHA)
+			return 0
+		case "status":
+			if state.SourceDirty {
+				fmt.Println(" M go.mod")
+			}
+			return 0
+		}
+	}
+	if tool != "go" || len(args) < 2 || args[0] != "build" {
+		return 2
+	}
+	if os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("CGO_ENABLED") != "0" || os.Getenv("GOOS") != "linux" || os.Getenv("GOARCH") != "amd64" {
+		return 2
+	}
+	for i, arg := range args {
+		if arg != "-o" || i+1 >= len(args) {
+			continue
+		}
+		output := args[i+1]
+		binary := filepath.Base(output)
+		if state.BuildFailure && binary == "sofa-test" {
+			return 1
+		}
+		script := "#!/bin/sh\nprintf '%s\\n' '" + binary + "-development'\n"
+		if os.WriteFile(output, []byte(script), 0755) != nil {
+			return 2
+		}
+		return 0
+	}
+	return 2
 }

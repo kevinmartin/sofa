@@ -9,7 +9,7 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    `.github/workflows/sofa.yml.example` to `.github/workflows/sofa.yml`.
 2. Use the example caller after Kevin merges Sofa's distribution change and
    the first `v0` release is promoted. No `v0` channel exists before that
-   activation. Both reusable workflows use `@v0`; leave `toolkit_sha` empty
+   activation. Both reusable workflows use `@v0`; leave `version` empty
    in normal consumer runs. Each CLI-using job independently installs the
    currently promoted, immutable Linux amd64 Sofa release. The
    checked-in `.sofa.yml` schema association resolves only in this toolkit
@@ -44,21 +44,21 @@ excludes the test, so a candidate cannot pass by editing its assertion.
    if its admitted content or Ready revision later changes. Milestone 01 does
    not supersede an admitted issue; use a new issue for revised scope.
 
-The caller's `release_version` dispatch input is optional. Empty means each
+The caller's `version` dispatch input is optional. Empty means each
 CLI-using job resolves the current `v0` promotion when it starts, so an
 unchanged consumer picks up a later compatible release. An exact published tag
 such as `v0.1.3` keeps this invocation on that version; the setup Action
 verifies the signed release asset and installs both `sofa` and `sofa-test` on
 `PATH` without Go or a controller-build dispatch. A custom multi-job workflow
-can also pass an earlier job's `release_version` output into a later job's
+can also pass an earlier job's `version` output into a later job's
 input to hold one exact version across a promotion. Install once per job; the
 Action returns the selected version and its binary directory. The old
 `controller-build.reusable.yml` remains only for migration of existing callers.
 To make the work job reuse an automatically selected reconcile version, replace
-its `release_version` input with:
+its `version` input with:
 
 ```yaml
-release_version: ${{ needs.reconcile.outputs.release_version }}
+version: ${{ needs.reconcile.outputs.version }}
 ```
 
 That handoff is optional. The example caller leaves the input empty by default
@@ -66,10 +66,10 @@ so each job can receive a newly promoted compatible release.
 
 Hosted tests of an unmerged Sofa change use a different path: select the
 candidate reusable workflow revision and pass its matching full
-`toolkit_sha`. The secretless candidate build compiles both CLIs once for the
-invocation and transfers that exact-SHA artifact to its jobs. An issue body or
-ordinary consumer dispatch cannot select this candidate mode or grant its
-build Project, publisher, or model credentials.
+`version`. The shared setup Action compiles both CLIs locally in each job before
+Project, publisher or model secrets are supplied to their later steps. Only
+trusted caller configuration or an authorized manual dispatch may select source
+mode. Issue content cannot select a version or expand runtime authority.
 
 The workflow admits the issue before the model job. An idle or duplicate run
 completes without dispatching work or consuming inference. The model receives

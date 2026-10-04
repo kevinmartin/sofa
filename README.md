@@ -29,15 +29,15 @@ Sofa's shared PR quality gate and its reviewable repository-file reconciler
 are described in [shared quality and managed configuration](docs/quality-and-config.md).
 
 After `v0` activation, normal consumers call the reusable workflows at `@v0`
-without `toolkit_sha`; each job downloads both Linux amd64 CLIs from the
+without `version`; each job downloads both Linux amd64 CLIs from the
 currently promoted release. Direct Action consumers can use
 `kevinmartin/sofa/.github/actions/setup-cli@v0` to put `sofa` and `sofa-test`
-on `PATH`. The Action exposes `release_version` for an optional exact-version
+on `PATH`. The Action exposes `version` for an optional exact-version
 handoff between jobs and `bin_directory` for steps that need a filesystem path.
-Neither path needs Go or a controller-build dispatch in the consumer. The
+Released installation needs no Go or controller-build dispatch in the consumer. The
 downloaded bundle must pass GitHub's signed release-asset verification before
 either CLI is installed. Hosted tests of an unmerged candidate instead select
-its exact full source SHA through the separate secretless `toolkit_sha` path.
+its exact full source SHA through the same setup Action's source-build path.
 
 This public repository holds **no Kevin-owned reusable workflow secret**.
 Callers pass their own Project read credential explicitly; the scoped

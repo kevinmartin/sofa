@@ -53,24 +53,25 @@ wakeups use the same ledger and coalesce missed ticks. A poll reads metadata
 only; no model is started for unchanged items. After the first promoted v0
 release is activated, normal callers use
 `kevinmartin/sofa/.github/workflows/lifecycle.reusable.yml@v0` and omit
-`toolkit_sha`. Each poll uses the shared setup Action to download both CLIs
+`version`. Each poll uses the shared setup Action to download both CLIs
 from the currently promoted immutable Sofa release, verifies its signed asset,
 and retains that selection throughout the job. No Go toolchain, controller-build
-dispatch, or expiring controller artifact is needed. Optional `release_version`
-selects an exact immutable release within v0 instead of automatic updates.
+dispatch, or expiring controller artifact is needed. Optional `version`
+accepts the v0 channel, an exact immutable v0 release, or an explicit full source SHA.
 See [release setup and activation](releases.md) before migrating an existing
 consumer; keep its legacy caller operational until the v0 channel exists.
 
 Hosted tests of unmerged Sofa source can select a candidate workflow revision
-and pass the corresponding full `toolkit_sha`. That separate path builds both
-CLIs once in a secretless job and transfers them only within its invocation.
+and pass the corresponding full SHA as `version`. The same setup Action
+builds both CLIs locally in each job before Project, model or publication secrets
+are supplied to later steps.
 It is not the normal polling setup. `controller-build.reusable.yml` remains
 only for legacy callers during migration.
 
 The poll's bounded output dispatches
 the caller-owned Discovery workflow for owner-admitted Discovery items and the
 delivery workflow for approved Ready items. The normal Discovery caller uses
-`discovery.reusable.yml@v0`, omits `toolkit_sha`, and passes the targeted
+`discovery.reusable.yml@v0`, omits `version`, and passes the targeted
 `issue_number`; when its trusted publisher uses `github.token` for
 issue comments, pin `spec_author_id` to the public node ID of
 `github-actions[bot]`. Active Discovery defaults to two

@@ -1,17 +1,19 @@
-# Install the promoted Sofa release once in this job. Candidate source builds use
-# the separate secretless toolkit_sha path in the reusable workflows.
+# Install both CLIs once per job from a promoted release, exact release or source SHA.
 name: Set up Sofa CLI
-description: Install signed Linux amd64 sofa and sofa-test release binaries
+description: Install signed release binaries or build exact source for Linux amd64
 inputs:
   major:
-    description: Expected Sofa release major channel
+    description: Optional expected major guard for reusable workflows
     required: false
-    default: v0
-  release_version:
-    description: Exact immutable release to reuse across jobs; empty selects the promoted major
+    default: ''
+  version:
+    description: Major channel, exact immutable release or full source SHA; empty selects v0
     required: false
     default: ''
 outputs:
+  version:
+    description: Exact release or source SHA selected in this job
+    value: ${{ steps.install.outputs.version }}
   release_version:
     description: Exact Sofa release installed in this job
     value: ${{ steps.install.outputs.release_version }}
@@ -21,13 +23,50 @@ outputs:
 runs:
   using: composite
   steps:
+    - id: select
+      shell: bash
+      env:
+        SOFA_SETUP_VERSION: ${{ inputs.version }}
+        SOFA_SETUP_SOURCE_DIR: ${{ github.workspace }}/.sofa-cli-source
+      run: |
+        if [[ -n "$SOFA_SETUP_VERSION" && ! "$SOFA_SETUP_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ && ! "$SOFA_SETUP_VERSION" =~ ^[a-f0-9]{40}$ && ! "$SOFA_SETUP_VERSION" =~ ^v(0|[1-9][0-9]*)$ ]]; then
+          echo 'version must be a major channel, exact release or full lowercase source SHA' >&2
+          exit 1
+        fi
+        build=false
+        if [[ "$SOFA_SETUP_VERSION" =~ ^[a-f0-9]{40}$ && ! -f "$RUNNER_TEMP/sofa-setup-cli.selection" ]]; then
+          build=true
+        fi
+        checkout=false
+        if [[ "$build" == true ]]; then
+          if [[ ! -d "$SOFA_SETUP_SOURCE_DIR/.git" ]] || [[ "$(git -C "$SOFA_SETUP_SOURCE_DIR" rev-parse HEAD)" != "$SOFA_SETUP_VERSION" ]]; then
+            checkout=true
+          fi
+        fi
+        echo "build=$build" >> "$GITHUB_OUTPUT"
+        echo "checkout=$checkout" >> "$GITHUB_OUTPUT"
+    - name: Check out selected Sofa source without persisted credentials
+      if: steps.select.outputs.checkout == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: kevinmartin/sofa
+        ref: ${{ inputs.version }}
+        persist-credentials: false
+        path: .sofa-cli-source
+    - name: Set up Go for source selection only
+      if: steps.select.outputs.build == 'true'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: .sofa-cli-source/go.mod
+        cache: false
     - id: install
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         GH_HOST: github.com
+        SOFA_SETUP_SOURCE_DIR: ${{ github.workspace }}/.sofa-cli-source
         SOFA_SETUP_MAJOR: ${{ inputs.major }}
-        SOFA_SETUP_VERSION: ${{ inputs.release_version }}
+        SOFA_SETUP_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
         repo=kevinmartin/sofa
@@ -36,29 +75,62 @@ runs:
           echo 'Sofa release binaries require Linux amd64' >&2
           exit 1
         fi
-        if [[ ! "$SOFA_SETUP_MAJOR" =~ ^v(0|[1-9][0-9]*)$ ]]; then
-          echo 'Invalid Sofa major channel' >&2
+        if [[ -n "$SOFA_SETUP_MAJOR" && ! "$SOFA_SETUP_MAJOR" =~ ^v(0|[1-9][0-9]*)$ ]]; then
+          echo 'Invalid expected Sofa major channel' >&2
           exit 1
         fi
-        if [[ -n "$SOFA_SETUP_VERSION" && ! "$SOFA_SETUP_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-          echo 'Invalid Sofa release version' >&2
+        if [[ -n "$SOFA_SETUP_VERSION" && ! "$SOFA_SETUP_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ && ! "$SOFA_SETUP_VERSION" =~ ^[a-f0-9]{40}$ && ! "$SOFA_SETUP_VERSION" =~ ^v(0|[1-9][0-9]*)$ ]]; then
+          echo 'Invalid Sofa version selector' >&2
           exit 1
         fi
-        if [[ -n "$SOFA_SETUP_VERSION" && "${SOFA_SETUP_VERSION%%.*}" != "$SOFA_SETUP_MAJOR" ]]; then
-          echo 'Sofa release version is outside the expected major' >&2
-          exit 1
+        if [[ "$SOFA_SETUP_VERSION" == v* ]]; then
+          requested_major="${SOFA_SETUP_VERSION%%.*}"
+          if [[ -n "$SOFA_SETUP_MAJOR" && "$requested_major" != "$SOFA_SETUP_MAJOR" ]]; then
+            echo 'Sofa version is outside the expected major' >&2
+            exit 1
+          fi
+          SOFA_SETUP_MAJOR="$requested_major"
+          # A major tag selects its currently promoted exact release.
+          if [[ "$SOFA_SETUP_VERSION" == "$requested_major" ]]; then SOFA_SETUP_VERSION=''; fi
         fi
+        SOFA_SETUP_MAJOR="${SOFA_SETUP_MAJOR:-v0}"
 
         selection="$RUNNER_TEMP/sofa-setup-cli.selection"
         if [[ -f "$selection" ]]; then
           IFS=$'\t' read -r installed_major installed_version installed_dir < "$selection"
-          if [[ "$installed_major" != "$SOFA_SETUP_MAJOR" || ( -n "$SOFA_SETUP_VERSION" && "$SOFA_SETUP_VERSION" != "$installed_version" ) || ! -x "$installed_dir/sofa" || ! -x "$installed_dir/sofa-test" ]]; then
+          if [[ "$installed_major" != "$SOFA_SETUP_MAJOR" || ( -n "$SOFA_SETUP_VERSION" && "$SOFA_SETUP_VERSION" != "$installed_version" ) || ( -z "$SOFA_SETUP_VERSION" && "$installed_version" != v* ) || ! -x "$installed_dir/sofa" || ! -x "$installed_dir/sofa-test" ]]; then
             echo 'A different or incomplete Sofa release is already selected in this job' >&2
             exit 1
           fi
           echo "$installed_dir" >> "$GITHUB_PATH"
-          echo "release_version=$installed_version" >> "$GITHUB_OUTPUT"
+          echo "version=$installed_version" >> "$GITHUB_OUTPUT"
+          if [[ "$installed_version" == v* ]]; then echo "release_version=$installed_version" >> "$GITHUB_OUTPUT"; fi
           echo "bin_directory=$installed_dir" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ "$SOFA_SETUP_VERSION" =~ ^[a-f0-9]{40}$ ]]; then
+          source_dir="$SOFA_SETUP_SOURCE_DIR"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$SOFA_SETUP_VERSION"
+          test -z "$(git -C "$source_dir" status --porcelain)"
+          stage=$(mktemp -d "$RUNNER_TEMP/sofa-source-cli.XXXXXXXX")
+          trap 'rm -rf "$stage"' EXIT
+          flags="-X github.com/kevinmartin/sofa/internal/version.Version=development -X github.com/kevinmartin/sofa/internal/version.SourceCommit=$SOFA_SETUP_VERSION"
+          # Build before Project/model/publication steps, without token environment.
+          (
+            cd "$source_dir"
+            for binary in sofa sofa-test; do
+              env -u GH_TOKEN -u GITHUB_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOWORK=off GOENV=off GOFLAGS= \
+                go build -mod=readonly -trimpath -buildvcs=true -ldflags "$flags" -o "$stage/$binary" "./cmd/$binary"
+            done
+          )
+          bin="$RUNNER_TEMP/sofa-cli"
+          [[ ! -e "$bin" && ! -L "$bin" ]] || { echo 'Sofa CLI destination already exists without a valid selection' >&2; exit 1; }
+          mv "$stage" "$bin"
+          printf '%s\t%s\t%s\n' "$SOFA_SETUP_MAJOR" "$SOFA_SETUP_VERSION" "$bin" > "$selection"
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "version=$SOFA_SETUP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "bin_directory=$bin" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
@@ -130,5 +202,6 @@ runs:
         mv "$stage/bin" "$bin"
         printf '%s\t%s\t%s\n' "$SOFA_SETUP_MAJOR" "$release" "$bin" > "$selection"
         echo "$bin" >> "$GITHUB_PATH"
+        echo "version=$release" >> "$GITHUB_OUTPUT"
         echo "release_version=$release" >> "$GITHUB_OUTPUT"
         echo "bin_directory=$bin" >> "$GITHUB_OUTPUT"

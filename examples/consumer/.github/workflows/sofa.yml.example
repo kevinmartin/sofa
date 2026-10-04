@@ -10,7 +10,7 @@ on:
         description: Approved issue number in this repository
         required: true
         type: number
-      release_version:
+      version:
         description: Optional exact immutable v0 release (empty selects the current promotion)
         required: false
         type: string
@@ -32,7 +32,7 @@ jobs:
     uses: kevinmartin/sofa/.github/workflows/reconcile.reusable.yml@v0
     with:
       issue_number: ${{ fromJSON(inputs.issue_number) }}
-      release_version: ${{ inputs.release_version }}
+      version: ${{ inputs.version }}
     secrets:
       SOFA_PROJECTS_TOKEN: ${{ secrets.SOFA_PROJECTS_TOKEN }}
 
@@ -47,7 +47,7 @@ jobs:
       actions: read
     uses: kevinmartin/sofa/.github/workflows/work.reusable.yml@v0
     with:
-      release_version: ${{ inputs.release_version }}
+      version: ${{ inputs.version }}
       reconcile_publication: ${{ needs.reconcile.outputs.reconcile_publication == 'true' }}
       reconcile_candidate: ${{ needs.reconcile.outputs.reconcile_candidate == 'true' }}
     secrets:

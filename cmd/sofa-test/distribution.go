@@ -163,16 +163,9 @@ func normalizeCompatibilityFixture(fixture compatibilityFixture) (compatibilityF
 	if err != nil || len(ledger.Attempts) != 1 {
 		return compatibilityFixture{}, errors.New("incompatible fixture ledger")
 	}
-	when := time.Date(2026, time.September, 29, 12, 0, 0, 0, time.UTC)
 	for _, attempt := range ledger.Attempts {
-		if attempt.Admission.Repository != c.Repository || attempt.Admission.Issue != 7 || attempt.Admission.ConfigDigest != configDigest || attempt.Admission.SpecDigest != strings.Repeat("a", 64) || attempt.Admission.BaseSHA != strings.Repeat("b", 40) || attempt.Admission.ProjectID != c.ProjectID || attempt.Admission.ProjectItemID != "item-fixture-7" || attempt.Admission.StatusOptionID != "ready-fixture" || !attempt.Admission.StatusUpdatedAt.Equal(when) || attempt.Phase != state.Validating || attempt.Generation != 3 || attempt.Dispatch != "claimed" || attempt.Owner == nil || attempt.Owner.RunID != "fixture-run-42" || attempt.Owner.RunAttempt != 2 {
-			return compatibilityFixture{}, errors.New("fixture lost admitted scope or owner")
-		}
-		if attempt.Limits.ModelCalls != 5 || attempt.Limits.Repairs != 2 || attempt.Limits.InfrastructureRetries != 1 || attempt.Limits.RuntimeSeconds != 600 || attempt.Counts.ModelCalls != 2 || attempt.Counts.Repairs != 1 || attempt.Counts.InfrastructureRetries != 1 || attempt.Counts.RuntimeSeconds != 120 {
-			return compatibilityFixture{}, errors.New("fixture changed cumulative work budget")
-		}
-		if attempt.Checkpoint == nil || attempt.Checkpoint.Version != state.Version || attempt.Checkpoint.Phase != state.Validating || attempt.Checkpoint.ArtifactID != "fixture-artifact-7" || attempt.Checkpoint.Digest != strings.Repeat("c", 64) || attempt.Checkpoint.CandidateSHA != strings.Repeat("d", 40) || attempt.Checkpoint.Generation != 3 || attempt.Checkpoint.Producer != *attempt.Owner || !attempt.Checkpoint.AcceptedAt.Equal(when.Add(time.Minute)) || !attempt.Checkpoint.ExpiresAt.Equal(when.Add(time.Hour)) {
-			return compatibilityFixture{}, errors.New("fixture lost checkpoint evidence or ownership fence")
+		if err := checkCompatibilityAttempt(attempt, c, configDigest); err != nil {
+			return compatibilityFixture{}, err
 		}
 	}
 	encoded, err := state.Encode(ledger)
@@ -181,4 +174,70 @@ func normalizeCompatibilityFixture(fixture compatibilityFixture) (compatibilityF
 	}
 	fixture.Ledger = encoded
 	return fixture, nil
+}
+
+func checkCompatibilityAttempt(attempt state.Attempt, c config.Config, configDigest string) error {
+	when := time.Date(2026, time.September, 29, 12, 0, 0, 0, time.UTC)
+	expectedAdmission := state.Admission{
+		Repository:      c.Repository,
+		Issue:           7,
+		ConfigDigest:    configDigest,
+		SpecDigest:      strings.Repeat("a", 64),
+		BaseSHA:         strings.Repeat("b", 40),
+		ProjectID:       c.ProjectID,
+		ProjectItemID:   "item-fixture-7",
+		StatusOptionID:  "ready-fixture",
+		StatusUpdatedAt: when,
+	}
+	admission := attempt.Admission
+	admission.StatusUpdatedAt = admission.StatusUpdatedAt.UTC()
+	if admission != expectedAdmission {
+		return errors.New("fixture lost admitted scope or owner")
+	}
+	expectedOwner := state.Owner{
+		RunID:      "fixture-run-42",
+		RunAttempt: 2,
+	}
+	if attempt.Owner == nil || *attempt.Owner != expectedOwner {
+		return errors.New("fixture lost admitted scope or owner")
+	}
+	if attempt.Phase != state.Validating || attempt.Generation != 3 || attempt.Dispatch != "claimed" {
+		return errors.New("fixture lost admitted scope or owner")
+	}
+	expectedLimits := state.Limits{
+		ModelCalls:            5,
+		Repairs:               2,
+		InfrastructureRetries: 1,
+		RuntimeSeconds:        600,
+	}
+	expectedCounts := state.Counters{
+		ModelCalls:            2,
+		Repairs:               1,
+		InfrastructureRetries: 1,
+		RuntimeSeconds:        120,
+	}
+	if attempt.Limits != expectedLimits || attempt.Counts != expectedCounts {
+		return errors.New("fixture changed cumulative work budget")
+	}
+	if attempt.Checkpoint == nil {
+		return errors.New("fixture lost checkpoint evidence or ownership fence")
+	}
+	expectedCheckpoint := state.Checkpoint{
+		Version:      state.Version,
+		Phase:        state.Validating,
+		ArtifactID:   "fixture-artifact-7",
+		Digest:       strings.Repeat("c", 64),
+		CandidateSHA: strings.Repeat("d", 40),
+		Generation:   3,
+		Producer:     expectedOwner,
+		AcceptedAt:   when.Add(time.Minute),
+		ExpiresAt:    when.Add(time.Hour),
+	}
+	checkpoint := *attempt.Checkpoint
+	checkpoint.AcceptedAt = checkpoint.AcceptedAt.UTC()
+	checkpoint.ExpiresAt = checkpoint.ExpiresAt.UTC()
+	if checkpoint != expectedCheckpoint {
+		return errors.New("fixture lost checkpoint evidence or ownership fence")
+	}
+	return nil
 }

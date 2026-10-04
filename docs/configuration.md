@@ -62,12 +62,12 @@ exact-version tag:
 
 `v0.1.3` illustrates the form; select a published version in the expected
 major. The reusable workflows and setup Action accept an optional
-`release_version` input for that exact release. Empty is the default and lets
+`version` input for that exact release. Empty is the default and lets
 each CLI-using job select the latest promoted release independently. For
 offline editing, copy the selected release's schema into the consumer's
 `schemas/` directory and use `$schema=./schemas/sofa.schema.json` instead.
 The editor schema is advisory; the selected CLI still validates configuration
-at runtime. Hosted candidate tests use an exact `toolkit_sha` and can point the
+at runtime. Hosted candidate tests use an exact `version` and can point the
 editor at that commit's raw schema URL without changing release selection.
 
 The [Go decoder](../internal/config/config.go) remains authoritative at runtime.

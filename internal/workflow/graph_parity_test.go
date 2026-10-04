@@ -27,11 +27,11 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 	}
 	if !reflect.DeepEqual(jobNames(work), []string{"execute", "finalize-failure", "publish", "verify"}) ||
 		!reflect.DeepEqual(jobNames(fake), []string{"assert-denied", "execute", "publish", "verify"}) ||
-		!reflect.DeepEqual(jobNames(reconcile), []string{"admit", "candidate-build"}) {
+		!reflect.DeepEqual(jobNames(reconcile), []string{"admit"}) {
 		return fmt.Errorf("production, admission, or fake job inventory changed")
 	}
-	if reconcile.Jobs["admit"].Needs != "candidate-build" || !strings.Contains(reconcile.Jobs["admit"].If, "needs.candidate-build.result == 'success'") || !strings.Contains(reconcile.Jobs["admit"].If, "needs.candidate-build.result == 'skipped'") {
-		return fmt.Errorf("candidate source build no longer gates admission while released mode may skip it")
+	if reconcile.Jobs["admit"].Needs != nil {
+		return fmt.Errorf("admission must install its own selected CLI without another build workflow")
 	}
 	sharedVerify := "(needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))"
 	fakeGuard := "github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'edit' && inputs.denial_kind == ''"
