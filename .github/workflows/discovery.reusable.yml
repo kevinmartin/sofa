@@ -96,7 +96,7 @@ jobs:
           fi
       - name: Carry admitted manifest to isolated stages
         if: steps.decision.outputs.dispatch == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-discovery-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport/manifest.json
@@ -183,7 +183,7 @@ jobs:
             node:24-bookworm@sha256:b977d0f785d96029d8d4c0790b6bf1c2a4c72e0f26319808e7ba2e9d966a1ac3 \
             /toolkit/sofa discovery generate --manifest /transport/manifest.json --out /candidate/specification.json
       - name: Carry bounded candidate to trusted publisher
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-discovery-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate/specification.json
