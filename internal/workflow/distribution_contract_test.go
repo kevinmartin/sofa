@@ -86,7 +86,7 @@ func TestCLISelectionUsesOneInstallerBeforeCredentials(t *testing.T) {
 }
 
 func TestHostedDistributionE2ERequiresEverySecretlessHandoff(t *testing.T) {
-	data, err := os.ReadFile("../../.github/workflows/distribution-e2e.reusable.yml")
+	data, err := os.ReadFile("../../.github/workflows/distribution-e2e.yml")
 	if err != nil {
 		t.Fatal(err)
 	}

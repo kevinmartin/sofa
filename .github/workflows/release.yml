@@ -38,13 +38,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Set up current approved source CLIs before release credentials
+        uses: ./.github/actions/setup-cli
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Build trusted allocator before granting release credentials
-        run: go build -o sofa-release-controller ./cmd/sofa
+          version: ${{ github.sha }}
       # GitHub lists drafts only to principals with push access. This scoped
       # token lets retries find incomplete releases without hiding draft versions.
       - name: Mint Sofa-only draft discovery token
@@ -61,7 +58,7 @@ jobs:
           SOFA_RELEASE_TOKEN: ${{ steps.plan-token.outputs.token }}
           SOFA_SOURCE_SHA: ${{ github.sha }}
           SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
-        run: ./sofa-release-controller release plan --source "$SOFA_SOURCE_SHA" > release-plan.json
+        run: sofa release plan --source "$SOFA_SOURCE_SHA" > release-plan.json
       - name: Preserve trusted version plan within this invocation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -85,15 +82,14 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: sofa-release-plan
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Set up current approved source CLIs before release credentials
+        uses: ./.github/actions/setup-cli
         with:
-          go-version-file: go.mod
-          cache: false
+          version: ${{ github.sha }}
       - name: Build both versioned Linux amd64 binaries without release credentials
-        run: go run ./cmd/sofa release build
-      - name: Build same-source release controller without release credentials
-        run: go build -o release-bundle/sofa-release-controller ./cmd/sofa
+        run: sofa release build
+      - name: Carry this same-source Sofa CLI to the publication job
+        run: cp "$RUNNER_TEMP/sofa-cli/sofa" release-bundle/sofa
       - name: Preserve trusted plan and bundle within this invocation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -118,7 +114,7 @@ jobs:
         with:
           name: sofa-release-prepared
       - name: Restore same-run controller executable mode
-        run: chmod +x release-bundle/sofa-release-controller
+        run: chmod +x release-bundle/sofa
       - name: Mint Sofa-only publication token
         id: release-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -134,7 +130,7 @@ jobs:
         env:
           SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
           SOFA_RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
-        run: release-bundle/sofa-release-controller release publish
+        run: release-bundle/sofa release publish
       - name: Mint disposable-only canary token
         id: canary-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -149,7 +145,7 @@ jobs:
         env:
           SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
           SOFA_RELEASE_CANARY_TOKEN: ${{ steps.canary-token.outputs.token }}
-        run: release-bundle/sofa-release-controller release canary > release-canary.json
+        run: release-bundle/sofa release canary > release-canary.json
       - name: Record trusted canary identity for diagnosis
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -163,4 +159,4 @@ jobs:
           SOFA_RELEASE_TOKEN: ${{ steps.release-token.outputs.token }}
           SOFA_RELEASE_CANARY_TOKEN: ${{ steps.canary-token.outputs.token }}
           SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
-        run: release-bundle/sofa-release-controller release promote
+        run: release-bundle/sofa release promote

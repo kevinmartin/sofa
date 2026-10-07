@@ -44,7 +44,7 @@ prerequisites are configured:
    disposable default branch. It declares string inputs `release_version`,
    `source_sha`, `correlation`, `release_run_id`, and `release_run_attempt`, and uses
    `run-name: Sofa release canary / ${{ inputs.correlation }}`. It calls
-   `release-canary.reusable.yml`; that workflow verifies both binary identities
+   `release-canary.yml`; that workflow verifies both binary identities
    and round-trips the configuration/state compatibility fixture without Project,
    publisher or model credentials.
 5. Protect exact semantic-version tags from update/deletion. Restrict creation and

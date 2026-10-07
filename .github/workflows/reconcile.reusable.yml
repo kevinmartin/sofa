@@ -57,8 +57,8 @@ jobs:
           persist-credentials: false
           path: consumer
       # Prepare toolkit binaries outside the consumer tree.
-      # Before v0 exists, source tests bootstrap this same Action from the
-      # explicitly selected exact Sofa revision. No binary artifacts are needed.
+      # Explicit SHA mode always loads this Action from the selected source.
+      # It works before and after v0 activation; release mode follows below.
       - name: Validate exact source selector before loading its installer
         if: inputs.version != '' && !startsWith(inputs.version, 'v')
         env:
