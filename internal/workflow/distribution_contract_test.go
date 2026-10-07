@@ -36,6 +36,9 @@ func TestCLISelectionUsesOneInstallerBeforeCredentials(t *testing.T) {
 			}
 			installedJobs := 0
 			for jobName, job := range w.Jobs {
+				if err := checkCLISelectionConditions(job); err != nil {
+					t.Fatalf("%s: %v", jobName, err)
+				}
 				validationAt, checkoutAt, sourceAt, releaseAt, credentialAt := -1, -1, -1, -1, len(job.Steps)
 				for i, step := range job.Steps {
 					if strings.HasPrefix(step.Name, "Validate exact source selector") {

@@ -161,3 +161,36 @@ func TestCanaryCancellationDoesNotBecomeSuccess(t *testing.T) {
 		t.Fatalf("cancelled canary=%v", err)
 	}
 }
+
+func TestPromotionRequiresFreshCanary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		created time.Time
+		allowed bool
+	}{
+		{name: "recent successful run", created: time.Now().UTC().Add(-time.Hour), allowed: true},
+		{name: "stale successful run", created: time.Now().UTC().Add(-25 * time.Hour)},
+		{name: "missing creation time"},
+		{name: "future creation time", created: time.Now().UTC().Add(2 * time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := fixturePlan()
+			api := newFake()
+			if _, err := Publish(t.Context(), api, p, fixtureBundle(t, p)); err != nil {
+				t.Fatal(err)
+			}
+			run, evidence := trustedCanary(p)
+			run.CreatedAt = tc.created
+			err := Promote(t.Context(), api, p, run, evidence)
+			if tc.allowed {
+				if err != nil || api.updates != 1 || api.channels[p.Channel] != p.SourceSHA {
+					t.Fatalf("fresh evidence did not promote exact source: updates=%d err=%v", api.updates, err)
+				}
+				return
+			}
+			if err == nil || api.updates != 0 || api.channels[p.Channel] != p.ExpectedChannelSHA {
+				t.Fatalf("invalid creation time authorized promotion: updates=%d err=%v", api.updates, err)
+			}
+		})
+	}
+}

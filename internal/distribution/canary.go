@@ -11,6 +11,8 @@ import (
 	"github.com/kevinmartin/sofa/internal/github"
 )
 
+const canaryMaxAge = 24 * time.Hour
+
 type Canary struct {
 	ReleaseVersion    string `json:"release_version"`
 	SourceSHA         string `json:"source_sha"`
@@ -29,7 +31,8 @@ func ValidateCanary(run github.ReleaseCanaryRun, p Plan, evidence Canary) error 
 	if err != nil || correlation != evidence.Correlation {
 		return errors.New("release canary correlation does not bind this release")
 	}
-	if run.CreatedAt.IsZero() || run.CreatedAt.After(time.Now().UTC().Add(time.Minute)) {
+	now := time.Now().UTC()
+	if run.CreatedAt.IsZero() || run.CreatedAt.Before(now.Add(-canaryMaxAge)) || run.CreatedAt.After(now.Add(time.Minute)) {
 		return errors.New("release canary creation time invalid")
 	}
 	if evidence.ReleaseVersion != p.Version || evidence.SourceSHA != p.SourceSHA || !shaPattern.MatchString(evidence.Correlation) || !shaPattern.MatchString(evidence.CallerSHA) || evidence.RunID < 1 || run.ID != evidence.RunID || run.Title != "Sofa release canary / "+evidence.Correlation || run.Event != "workflow_dispatch" || run.Path != ".github/workflows/sofa-release-canary.yml" || run.HeadSHA != evidence.CallerSHA || run.Repository.ID < 1 || run.Repository.ID != run.HeadRepository.ID || run.Repository.FullName != DisposableRepository || run.HeadRepository.FullName != DisposableRepository || run.Status != "completed" || run.Conclusion != "success" {
@@ -67,7 +70,7 @@ func RunCanary(ctx context.Context, api CanaryAPI, p Plan, releaseRunID, release
 	// An Actions attempt cannot outlive this window. Its ten-minute observer
 	// retries therefore find the same correlation without scanning lifetime
 	// history. A rerun has a distinct attempt and correlation.
-	since := time.Now().UTC().Add(-24 * time.Hour)
+	since := time.Now().UTC().Add(-canaryMaxAge)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
