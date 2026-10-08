@@ -60,7 +60,7 @@ jobs:
           SOFA_V1_ENABLED: ${{ vars.SOFA_V1_ENABLED }}
         run: sofa release plan --source "$SOFA_SOURCE_SHA" > release-plan.json
       - name: Preserve trusted version plan within this invocation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-release-plan
           overwrite: true
@@ -91,7 +91,7 @@ jobs:
       - name: Carry this same-source Sofa CLI to the publication job
         run: cp "$RUNNER_TEMP/sofa-cli/sofa" release-bundle/sofa
       - name: Preserve trusted plan and bundle within this invocation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-release-prepared
           overwrite: true
@@ -147,7 +147,7 @@ jobs:
           SOFA_RELEASE_CANARY_TOKEN: ${{ steps.canary-token.outputs.token }}
         run: release-bundle/sofa release canary > release-canary.json
       - name: Record trusted canary identity for diagnosis
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-release-canary
           overwrite: true
