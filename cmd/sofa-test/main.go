@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kevinmartin/sofa/internal/version"
 )
 
 func main() {
@@ -28,6 +30,7 @@ func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "sofa-test",
 		Short:         "Run sofa's deterministic hosted-test helpers",
+		Version:       version.Current().String(),
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -38,11 +41,12 @@ func newRootCommand() *cobra.Command {
 			return runFakeACP()
 		},
 	}
+	cmd.SetVersionTemplate("{{.Name}} {{.Version}}\n")
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.Flags().BoolVar(&acpMode, "acp", false, "ACP harness mode")
 	cmd.Flags().BoolVar(&stdio, "stdio", false, "ACP standard I/O transport")
 	_ = cmd.Flags().MarkHidden("acp")
 	_ = cmd.Flags().MarkHidden("stdio")
-	cmd.AddCommand(newPrepareCommand(), newRecoverCommand(), newReportCommand(), newDenyCommand(), newGateBridgeCommand(), newReleaseObserveCommand())
+	cmd.AddCommand(newPrepareCommand(), newRecoverCommand(), newReportCommand(), newDenyCommand(), newGateBridgeCommand(), newReleaseObserveCommand(), newVersionCommand(), newDistributionCommand())
 	return cmd
 }

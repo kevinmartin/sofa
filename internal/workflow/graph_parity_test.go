@@ -30,6 +30,9 @@ func checkHostedGraphParity(reconcileData, workData, fakeData []byte) error {
 		!reflect.DeepEqual(jobNames(reconcile), []string{"admit"}) {
 		return fmt.Errorf("production, admission, or fake job inventory changed")
 	}
+	if reconcile.Jobs["admit"].Needs != nil {
+		return fmt.Errorf("admission must install its own selected CLI without another build workflow")
+	}
 	sharedVerify := "(needs.execute.result == 'success' || (needs.execute.result == 'skipped' && inputs.reconcile_candidate))"
 	fakeGuard := "github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/sofa-e2e/') && inputs.scenario == 'edit' && inputs.denial_kind == ''"
 	conditions := []struct {

@@ -35,26 +35,40 @@ public node ID, never a credential.
 GitHub App IDs; an unavailable required check blocks Done. Configuration does not grant Project write access
 or authorize moving items to Backlog or Ready.
 
-The [consumer example](../examples/consumer/.sofa.yml) starts with a
+The [consumer example](../examples/consumer/.sofa.yml) keeps a
 [YAML language server](https://github.com/redhat-developer/vscode-yaml)
-association that resolves within this toolkit checkout:
+association that resolves locally inside this toolkit checkout:
 
 ```yaml
 # yaml-language-server: $schema=../../schemas/sofa.schema.json
 ```
 
 After copying the example into a consumer repository, replace that relative
-path with the raw schema URL at the **same published toolkit commit** used by
-both reusable workflows and their `toolkit_sha` inputs:
+path with the promoted major-channel URL:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/kevinmartin/sofa/TOOLKIT_COMMIT_SHA/schemas/sofa.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/kevinmartin/sofa/v0/schemas/sofa.schema.json
 ```
 
-Replace `TOOLKIT_COMMIT_SHA` with the full reviewed commit SHA. For offline
-editing, copy that commit's schema into the consumer's `schemas/` directory
-and use `$schema=./schemas/sofa.schema.json` instead. Keep the copied schema in
-step with the toolkit pin.
+Use this URL after Kevin merges the distribution change and the first `v0`
+release is promoted. Before activation, use the schema from a reviewed Sofa
+commit or a local copy; `v0` does not yet identify a release. A consumer that
+selects an exact release across jobs can pin its editor schema to the same
+exact-version tag:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/kevinmartin/sofa/v0.1.3/schemas/sofa.schema.json
+```
+
+`v0.1.3` illustrates the form; select a published version in the expected
+major. The reusable workflows and setup Action accept an optional
+`version` input for that exact release. Empty is the default and lets
+each CLI-using job select the latest promoted release independently. For
+offline editing, copy the selected release's schema into the consumer's
+`schemas/` directory and use `$schema=./schemas/sofa.schema.json` instead.
+The editor schema is advisory; the selected CLI still validates configuration
+at runtime. Hosted candidate tests use an exact `version` and can point the
+editor at that commit's raw schema URL without changing release selection.
 
 The [Go decoder](../internal/config/config.go) remains authoritative at runtime.
 Some requirements depend on the complete configuration or the original YAML
