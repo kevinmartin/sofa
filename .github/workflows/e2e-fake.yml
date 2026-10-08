@@ -165,7 +165,7 @@ jobs:
           done < <(find transport candidate -type f -print0)
           echo "Host-only credential boundary and artifact scan passed"
       - name: Carry synthetic admission and fixture identity
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-e2e-source-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -175,7 +175,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Carry bounded fake candidate and telemetry
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-e2e-candidate-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -266,7 +266,7 @@ jobs:
             --manifest transport/manifest.json --workspace "$PWD/consumer" \
             --bundle candidate/bundle.json --out evidence/checks.json
       - name: Carry current verification artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -331,7 +331,7 @@ jobs:
           go test -count=1 -run '^TestHostedArtifactPublicationConflict$' ./cmd/sofa
       - name: Carry redacted branch-conflict report
         if: '!inputs.reconcile_candidate'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-e2e-conflict-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: report/conflict.json
@@ -374,7 +374,7 @@ jobs:
             --publication ../report/publication.json --network ../candidate/network.json \
             --out ../report/scenario.json
       - name: Carry redacted candidate report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-e2e-report-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -440,7 +440,7 @@ jobs:
             --verify-result "$SOFA_E2E_VERIFY_RESULT" \
             --publish-result "$SOFA_E2E_PUBLISH_RESULT"
       - name: Carry redacted denial report
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-e2e-denial-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: report/denial.json

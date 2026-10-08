@@ -105,7 +105,7 @@ jobs:
           fi
       - name: Carry admitted review manifest
         if: steps.status.outputs.dispatch == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport/manifest.json
@@ -215,7 +215,7 @@ jobs:
               --manifest /transport/manifest.json --workspace /workspace \
               --out /candidate/bundle.json
       - name: Carry repair bundle to secretless verification
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-review-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -302,14 +302,14 @@ jobs:
             --manifest transport/manifest.json --workspace "$PWD/consumer" \
             --bundle candidate/bundle.json --out evidence/checks.json
       - name: Carry trusted check evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-review-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/checks.json
           if-no-files-found: error
           retention-days: 1
       - name: Carry verified repair bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sofa-review-verified-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate/bundle.json
