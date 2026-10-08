@@ -129,29 +129,34 @@ compares existing asset bytes, and keeps the originally reserved prior channel
 guard. A later promotion cannot turn an older retry into an implicit rollback.
 No stage restores a ledger, resets counters, or edits consumer durable state.
 
-The first release has no earlier release to roll back to. A serialized,
-owner-dispatched rollback workflow is proposed in
-[release-rollback-proposal.md](release-rollback-proposal.md), but has not been
-installed or authorized. Approving its implementation does not authorize a live
-rollback. Do not run channel-writing commands outside the shared release queue.
+## Recover with a forward fix
 
-After that workflow is approved and installed, an intentional rollback is a
-separate owner operation: download and verify the
-desired previous exact release, run its `sofa-test distribution
-compatibility-fixture --input` against the supported current fixture, run its
-fresh disposable canary, and update the major tag with the observed current SHA
-as the explicit expected prior ref. Preserve all consumer configuration,
-checkpoints, ownership, evidence and counters. A failed compatibility check or
-changed prior ref blocks the operation. Full live production rollback evidence
-follows activation; deterministic premerge fixtures are recorded separately.
+If validation or the canary fails before promotion, the major channel stays on
+the last good release. Correct the failure and retry that release when appropriate,
+or merge a reviewed fix to publish a new version. Published assets and exact tags
+remain immutable; an older retry cannot overwrite a later promotion.
 
-The proposed queued workflow will create a read-only rollback plan with
-`sofa release rollback-plan --release-version v0.1.0 --expected-channel-sha "$CURRENT_SHA" > release-plan.json`.
-Run `sofa release canary` to obtain fresh correlated evidence, then
-`sofa release promote` with that plan and evidence. Supply repository-scoped
-credentials only to the commands that need them; do not execute state fixtures
-with publication credentials. `rollback-plan` never updates a tag or edits a ledger.
-All credentialed v1 commands, including read-only rollback planning, require
-`SOFA_V1_ENABLED=true` after the reviewed activation steps above. This release
-automation rejects majors beyond v1 before credential use; a future major needs
-its own reviewed activation path rather than inheriting v1's approval flag.
+If a defect is found after promotion:
+
+1. Open a fix PR, or revert the offending PR in a new PR. A revert creates a new
+   source commit; do not reuse an older exact release or dispatch an old source.
+2. Run normal required quality and hosted checks, then obtain Kevin's merge
+   approval. Check compatibility with state written by the defective release.
+3. The normal queued release workflow builds the approved main commit, publishes
+   a new immutable version, and runs its fresh disposable canary.
+4. Only successful qualification advances the major channel to that new release.
+   Unchanged consumers receive it on subsequent CLI-using jobs.
+
+For example, a fix or PR revert after v0.1.2 produces v0.1.3. It preserves consumer
+configuration, checkpoints, ownership, evidence and counters. Reverting code
+does not restore an old ledger or reset budgets; the replacement must still
+understand supported persisted state.
+
+Use this same publication process for release recovery. No separate rollback
+workflow or additional credentialed channel writer is planned. Existing low-level
+rollback planning and downgrade compatibility fixtures remain in the merged CLI
+for API compatibility; they are not the factory's recovery procedure.
+
+All credentialed v1 release commands require SOFA_V1_ENABLED=true after the
+reviewed activation steps above. Release automation rejects majors beyond v1
+before credential use; a future major needs its own reviewed activation path.
