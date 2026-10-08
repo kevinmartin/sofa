@@ -65,8 +65,10 @@ Hosted tests of unmerged Sofa source can select a candidate workflow revision
 and pass the corresponding full SHA as `version`. The same setup Action
 builds both CLIs locally in each job before Project, model or publication secrets
 are supplied to later steps.
-It is not the normal polling setup. `controller-build.reusable.yml` remains
-only for legacy callers during migration.
+It is not the normal polling setup. The obsolete `controller-build.reusable.yml`
+has been retired; migrate existing callers after the major release channel
+is activated. Older immutable workflow revisions remain available for historical
+runs; the CLI retains its legacy artifact-reader compatibility.
 
 The poll's bounded output dispatches
 the caller-owned Discovery workflow for owner-admitted Discovery items and the

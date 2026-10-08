@@ -129,7 +129,14 @@ compares existing asset bytes, and keeps the originally reserved prior channel
 guard. A later promotion cannot turn an older retry into an implicit rollback.
 No stage restores a ledger, resets counters, or edits consumer durable state.
 
-An intentional rollback is a separate owner operation: download and verify the
+The first release has no earlier release to roll back to. A serialized,
+owner-dispatched rollback workflow is proposed in
+[release-rollback-proposal.md](release-rollback-proposal.md), but has not been
+installed or authorized. Approving its implementation does not authorize a live
+rollback. Do not run channel-writing commands outside the shared release queue.
+
+After that workflow is approved and installed, an intentional rollback is a
+separate owner operation: download and verify the
 desired previous exact release, run its `sofa-test distribution
 compatibility-fixture --input` against the supported current fixture, run its
 fresh disposable canary, and update the major tag with the observed current SHA
@@ -138,7 +145,7 @@ checkpoints, ownership, evidence and counters. A failed compatibility check or
 changed prior ref blocks the operation. Full live production rollback evidence
 follows activation; deterministic premerge fixtures are recorded separately.
 
-After those checks, create a read-only rollback plan with
+The proposed queued workflow will create a read-only rollback plan with
 `sofa release rollback-plan --release-version v0.1.0 --expected-channel-sha "$CURRENT_SHA" > release-plan.json`.
 Run `sofa release canary` to obtain fresh correlated evidence, then
 `sofa release promote` with that plan and evidence. Supply repository-scoped
