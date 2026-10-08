@@ -46,7 +46,7 @@ jobs:
         run: |
           [[ "$SOFA_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo 'issue_number must be positive' >&2; exit 1; }
       - name: Check out current consumer default branch
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: consumer
@@ -236,7 +236,7 @@ jobs:
           github-token: ${{ github.token }}
           path: candidate
       - name: Check out current consumer configuration
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: consumer
@@ -329,7 +329,7 @@ jobs:
         shell: bash
         run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Check out trusted configuration
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: consumer
