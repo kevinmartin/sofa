@@ -69,7 +69,7 @@ func validateRendered(s Spec, files map[string][]byte) error {
 		return errors.New("rendered quality caller trigger or permissions changed")
 	}
 	quality := caller.Jobs["quality"]
-	uses := "kevinmartin/sofa/.github/workflows/quality.reusable.yml@v1"
+	uses := "kevinmartin/sofa/.github/workflows/quality.reusable.yml@v0"
 	if s.Mode == "self" {
 		uses = "./.github/workflows/quality.reusable.yml"
 	}

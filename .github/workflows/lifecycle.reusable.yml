@@ -6,9 +6,10 @@ name: Sofa / Reusable lifecycle reconciliation
 on:
   workflow_call:
     inputs:
-      toolkit_sha:
-        description: Full immutable commit SHA of the sofa toolkit
-        required: true
+      version:
+        description: v0 channel, exact v0 release or full source SHA; omit for automatic v0 updates
+        required: false
+        default: ''
         type: string
       wake_id:
         description: Stable event revision; omit for the scheduled ticker
@@ -24,13 +25,17 @@ on:
         required: false
         default: sofa-discovery.yml
         type: string
+    outputs:
+      version:
+        description: Exact release or source SHA selected by the reconcile job
+        value: ${{ jobs.reconcile.outputs.version }}
     secrets:
       SOFA_PROJECTS_TOKEN:
         required: true
 
 jobs:
   reconcile:
-    if: github.event_name == 'schedule' || (github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    if: (github.event_name == 'schedule' || (github.event.repository.fork == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     concurrency:
@@ -42,15 +47,15 @@ jobs:
       pull-requests: read
       checks: read
       actions: write # Dispatch caller-owned delivery workflow for Ready items.
+    outputs:
+      version: ${{ steps.sofa.outputs.version || steps.sofa-source.outputs.version }}
     steps:
       - name: Validate trusted workflow inputs
         shell: bash
         env:
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
           SOFA_DELIVERY_WORKFLOW: ${{ inputs.delivery_workflow }}
           SOFA_DISCOVERY_WORKFLOW: ${{ inputs.discovery_workflow }}
         run: |
-          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'toolkit_sha must be a full commit SHA' >&2; exit 1; }
           [[ "$SOFA_DELIVERY_WORKFLOW" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || { echo 'delivery_workflow must be a workflow filename' >&2; exit 1; }
           [[ "$SOFA_DISCOVERY_WORKFLOW" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]] || { echo 'discovery_workflow must be a workflow filename' >&2; exit 1; }
       - name: Check out caller configuration
@@ -58,51 +63,38 @@ jobs:
         with:
           persist-credentials: false
           path: consumer
-      - name: Download and verify pinned controller
-        shell: bash
+      # Explicit SHA mode always loads this Action from the selected source.
+      # It works before and after v0 activation; release mode follows below.
+      - name: Validate exact source selector before loading its installer
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
         env:
-          GH_TOKEN: ${{ github.token }}
-          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
-          SOFA_REPOSITORY: ${{ github.repository }}
-          SOFA_CALLER_SHA: ${{ github.sha }}
-          SOFA_DEFAULT_BRANCH: ${{ github.event_name == 'schedule' && github.ref_name || github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          test -n "$SOFA_DEFAULT_BRANCH" || { echo 'Default branch unavailable for controller artifact lookup' >&2; exit 1; }
-          repo_id=$(gh api "repos/$SOFA_REPOSITORY" --jq .id)
-          artifact_name="sofa-controller-$SOFA_TOOLKIT_SHA"
-          artifact=$(gh api "repos/$SOFA_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" |
-            jq -c --arg name "$artifact_name" --arg branch "$SOFA_DEFAULT_BRANCH" --argjson repo_id "$repo_id" \
-              '[.artifacts[] | select(.name == $name and .expired == false and .workflow_run.head_branch == $branch and .workflow_run.repository_id == $repo_id and .workflow_run.head_repository_id == $repo_id)] | sort_by(.id) | last // empty')
-          test -n "$artifact" || { echo 'No unexpired pinned controller artifact; dispatch the secretless controller build' >&2; exit 1; }
-          artifact_id=$(jq -r .id <<< "$artifact")
-          archive_digest=$(jq -r .digest <<< "$artifact")
-          archive_size=$(jq -r .size_in_bytes <<< "$artifact")
-          producer_id=$(jq -r .workflow_run.id <<< "$artifact")
-          test "$(jq -r .workflow_run.repository_id <<< "$artifact")" = "$repo_id"
-          test "$(jq -r .workflow_run.head_repository_id <<< "$artifact")" = "$repo_id"
-          test "$(jq -r .workflow_run.head_branch <<< "$artifact")" = "$SOFA_DEFAULT_BRANCH"
-          [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$producer_id" =~ ^[1-9][0-9]*$ ]]
-          [[ "$archive_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$archive_size" =~ ^[1-9][0-9]*$ ]] && (( archive_size <= 67108864 ))
-          producer=$(gh api "repos/$SOFA_REPOSITORY/actions/runs/$producer_id")
-          jq -e --argjson repo_id "$repo_id" --arg branch "$SOFA_DEFAULT_BRANCH" \
-            '.status == "completed" and .conclusion == "success" and .event == "workflow_dispatch" and .path == ".github/workflows/sofa-controller-build.yml" and .head_branch == $branch and .repository.id == $repo_id and .head_repository.id == $repo_id' \
-            <<< "$producer" >/dev/null
-          producer_sha=$(jq -r .head_sha <<< "$producer")
-          [[ "$producer_sha" =~ ^[0-9a-f]{40}$ && "$SOFA_CALLER_SHA" =~ ^[0-9a-f]{40}$ ]]
-          comparison=$(gh api "repos/$SOFA_REPOSITORY/compare/$producer_sha...$SOFA_CALLER_SHA" --jq .status)
-          [[ "$comparison" == identical || "$comparison" == ahead ]] || { echo 'Controller build is not on the caller history' >&2; exit 1; }
-          gh api "repos/$SOFA_REPOSITORY/actions/artifacts/$artifact_id/zip" > controller.zip
-          test "$(sha256sum controller.zip | cut -d ' ' -f 1)" = "${archive_digest#sha256:}"
-          test "$(unzip -Z -1 controller.zip | sort)" = $'manifest.json\nsofa'
-          unzip -p controller.zip manifest.json > controller-manifest.json
-          jq -e --arg sha "$SOFA_TOOLKIT_SHA" \
-            '.schema == "sofa-controller-v1" and .toolkit_sha == $sha and .goos == "linux" and .goarch == "amd64" and .cgo_enabled == false and (.binary_sha256 | test("^[0-9a-f]{64}$"))' \
-            controller-manifest.json >/dev/null
-          unzip -p controller.zip sofa > sofa-controller
-          test "$(sha256sum sofa-controller | cut -d ' ' -f 1)" = "$(jq -r .binary_sha256 controller-manifest.json)"
-          chmod 700 sofa-controller
+          SOFA_VERSION: ${{ inputs.version }}
+        run: '[[ "$SOFA_VERSION" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.version }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Set up source Sofa CLIs
+        if: inputs.version != '' && !startsWith(inputs.version, 'v')
+        id: sofa-source
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.version }}
+          major: v0
+      - name: Set up released Sofa CLIs
+        if: inputs.version == '' || startsWith(inputs.version, 'v')
+        id: sofa
+        uses: kevinmartin/sofa/.github/actions/setup-cli@v0
+        with:
+          major: v0
+          version: ${{ inputs.version }}
+      - name: Expose job binaries for existing CLI commands
+        shell: bash
+        run: ln -s "$RUNNER_TEMP/sofa-cli/sofa" ./sofa
       - name: Reconcile due Project work without inference
         shell: bash
         env:
@@ -111,7 +103,7 @@ jobs:
           SOFA_WAKE_ID: ${{ inputs.wake_id }}
         run: |
           mkdir -p transport
-          ./sofa-controller lifecycle reconcile --config consumer/.sofa.yml --wake-id "$SOFA_WAKE_ID" --out transport/lifecycle.json
+          ./sofa lifecycle reconcile --config consumer/.sofa.yml --wake-id "$SOFA_WAKE_ID" --out transport/lifecycle.json
       - name: Summarize lifecycle holds and Backlog review suggestions
         shell: bash
         env:

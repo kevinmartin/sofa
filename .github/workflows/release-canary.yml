@@ -1,0 +1,98 @@
+# Verify a real immutable Sofa release in the disposable repository, without
+# Project, publisher, or model credentials, before its major channel advances.
+name: Sofa / reusable release canary
+
+on:
+  workflow_call:
+    inputs:
+      release_version:
+        description: Exact immutable Sofa release under qualification
+        type: string
+        required: true
+      source_sha:
+        description: Exact Sofa source identity embedded in both binaries
+        type: string
+        required: true
+      correlation:
+        description: Trusted release workflow dispatch correlation
+        type: string
+        required: true
+      release_run_id:
+        description: Originating Sofa release workflow run ID
+        type: string
+        required: true
+      release_run_attempt:
+        description: Originating Sofa release workflow attempt
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    if: github.repository == 'kevinmartin/sofa-disposable' && github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Bind installer source to the immutable Sofa release before checkout
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CORRELATION: ${{ inputs.correlation }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ inputs.release_run_attempt }}
+        run: |
+          [[ "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$CORRELATION" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ && "$RELEASE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
+          actual_correlation=$(printf '%s\n%s\n%s\n%s' "$RELEASE_VERSION" "$SOURCE_SHA" "$RELEASE_RUN_ID" "$RELEASE_RUN_ATTEMPT" | sha256sum)
+          [[ "${actual_correlation:0:40}" == "$CORRELATION" ]] || exit 1
+          gh api "repos/kevinmartin/sofa/releases/tags/$RELEASE_VERSION" |
+            jq -e --arg version "$RELEASE_VERSION" '.tag_name == $version and .draft == false and .prerelease == false and .immutable == true'
+          release_sha=$(gh api "repos/kevinmartin/sofa/commits/$RELEASE_VERSION" --jq .sha)
+          [[ "$release_sha" == "$SOURCE_SHA" ]] || exit 1
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "major=${RELEASE_VERSION%%.*}" >> "$GITHUB_OUTPUT"
+      - name: Check out published installer without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ steps.release.outputs.source_sha }}
+          persist-credentials: false
+          path: sofa-toolkit
+      - name: Confirm checked-out installer identity
+        env:
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+        run: |
+          test "$(git -C sofa-toolkit rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Download and verify exact release
+        uses: ./sofa-toolkit/.github/actions/setup-cli
+        with:
+          major: ${{ steps.release.outputs.major }}
+          version: ${{ inputs.release_version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Verify binary identities and compatibility fixture
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          sofa version | jq -e --arg version "$RELEASE_VERSION" --arg source "$SOURCE_SHA" '.version == $version and .source_commit == $source'
+          sofa-test version | jq -e --arg version "$RELEASE_VERSION" --arg source "$SOURCE_SHA" '.version == $version and .source_commit == $source'
+          sofa-test distribution compatibility-fixture --output before.json
+          sofa-test distribution compatibility-fixture --input before.json --output after.json
+          cmp before.json after.json
+
+  acceptance:
+    needs: install
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Require release installation and fixture success
+        env:
+          RESULT: ${{ needs.install.result }}
+        run: test "$RESULT" = success

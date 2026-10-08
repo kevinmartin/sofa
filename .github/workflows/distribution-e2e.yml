@@ -1,0 +1,186 @@
+# Secretless hosted proof of per-job exact-source installation and state handoff.
+# Source mode builds with Go; subsequent CLI-only steps explicitly hide Go.
+name: Sofa / Reusable distribution E2E
+
+on:
+  workflow_call:
+    inputs:
+      fail_first_attempt:
+        description: Inject one first-job failure on attempt one to test failed-job recovery
+        type: boolean
+        required: false
+        default: false
+      toolkit_sha:
+        description: Full lowercase Sofa source commit SHA under test
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  first:
+    name: Verify both candidate CLIs and produce compatibility state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Validate exact source selector
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: '[[ "$SOFA_TOOLKIT_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Install both CLIs through the shared source/release Action
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.toolkit_sha }}
+      - name: Verify first-job source and compatibility fixture
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/sofa-cli"
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          for binary in sofa sofa-test; do
+            "./$binary" version | jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
+            "./$binary" --version >/dev/null
+          done
+          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+          ./sofa-test distribution compatibility-fixture --output "$RUNNER_TEMP/compatibility-first.json"
+      - name: Prove both CLIs remain on PATH in a later step
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          set -euo pipefail
+          jq_bin=$(command -v jq)
+          # Hosted images contain Go already. Exclude every toolchain directory
+          # so this step proves the installed binaries need no Go runtime.
+          export PATH="$RUNNER_TEMP/sofa-cli"
+          if command -v go >/dev/null; then
+            echo 'Go must be unavailable during the CLI-only proof' >&2
+            exit 1
+          fi
+          for binary in sofa sofa-test; do
+            "$binary" --version >/dev/null
+            # $sha is a jq argument; the saved executable path hides jq from ShellCheck.
+            # shellcheck disable=SC2016
+            "$binary" version | "$jq_bin" -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
+          done
+          sofa-test distribution compatibility-fixture >/dev/null
+      - name: Upload first-job compatibility state
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sofa-distribution-fixture-${{ github.run_id }}
+          path: ${{ runner.temp }}/compatibility-first.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+      - name: Inject bounded first-attempt recovery fault
+        if: inputs.fail_first_attempt && github.run_attempt == 1
+        shell: bash
+        run: |
+          echo 'Controlled distribution recovery fault after retaining fixture'
+          exit 1
+      - name: Exercise release-selection script with fake GitHub responses
+        shell: bash
+        working-directory: .sofa-cli-source
+        env:
+          GITHUB_TOKEN: ''
+          GH_TOKEN: ''
+        run: |
+          set -euo pipefail
+          go test -count=1 ./internal/setupcli
+
+  next:
+    name: Rebuild exact source in a fresh job and preserve state
+    needs: first
+    if: always() && needs.first.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Validate exact source selector
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: '[[ "$SOFA_TOOLKIT_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Check out exact source installer without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kevinmartin/sofa
+          ref: ${{ inputs.toolkit_sha }}
+          path: .sofa-cli-source
+          persist-credentials: false
+      - name: Install both CLIs through the shared source/release Action
+        uses: ./.sofa-cli-source/.github/actions/setup-cli
+        with:
+          version: ${{ inputs.toolkit_sha }}
+      - name: Download first-job compatibility state
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sofa-distribution-fixture-${{ github.run_id }}
+          path: ${{ runner.temp }}/handoff
+      - name: Verify source and round-trip durable state
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/sofa-cli"
+          [[ "$SOFA_TOOLKIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          for binary in sofa sofa-test; do
+            "./$binary" version | jq -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
+          done
+          echo "$RUNNER_TEMP/sofa-cli" >> "$GITHUB_PATH"
+          ./sofa-test distribution compatibility-fixture \
+            --input "$RUNNER_TEMP/handoff/compatibility-first.json" \
+            --output "$RUNNER_TEMP/compatibility-second.json"
+          cmp "$RUNNER_TEMP/handoff/compatibility-first.json" "$RUNNER_TEMP/compatibility-second.json"
+      - name: Prove both CLIs remain on PATH in a later step
+        shell: bash
+        env:
+          SOFA_TOOLKIT_SHA: ${{ inputs.toolkit_sha }}
+        run: |
+          set -euo pipefail
+          jq_bin=$(command -v jq)
+          # Hosted images contain Go already. Exclude every toolchain directory
+          # so this step proves the installed binaries need no Go runtime.
+          export PATH="$RUNNER_TEMP/sofa-cli"
+          if command -v go >/dev/null; then
+            echo 'Go must be unavailable during the CLI-only proof' >&2
+            exit 1
+          fi
+          for binary in sofa sofa-test; do
+            "$binary" --version >/dev/null
+            # $sha is a jq argument; the saved executable path hides jq from ShellCheck.
+            # shellcheck disable=SC2016
+            "$binary" version | "$jq_bin" -e --arg sha "$SOFA_TOOLKIT_SHA" '.version == "development" and .source_commit == $sha' >/dev/null
+          done
+          sofa-test distribution compatibility-fixture >/dev/null
+
+  result:
+    name: Distribution E2E result
+    needs: [first, next]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every distribution stage
+        shell: bash
+        env:
+          SOFA_FIRST_RESULT: ${{ needs.first.result }}
+          SOFA_NEXT_RESULT: ${{ needs.next.result }}
+        run: |
+          test "$SOFA_FIRST_RESULT" = success
+          test "$SOFA_NEXT_RESULT" = success
