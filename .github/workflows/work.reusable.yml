@@ -51,7 +51,7 @@ jobs:
       copilot-requests: write
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
@@ -174,21 +174,21 @@ jobs:
       contents: write
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download sanitized failure, when produced
         if: needs.execute.result == 'failure'
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-execution-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: failure
       - name: Download sanitized verification failure, when produced
         if: needs.verify.result == 'failure'
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: failure
@@ -276,7 +276,7 @@ jobs:
       actions: read # Only used by download-artifact for a prior run on recovery.
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
@@ -292,13 +292,13 @@ jobs:
           echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
       - name: Download current candidate bundle
         if: '!inputs.reconcile_candidate'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
       - name: Download retained candidate bundle
         if: inputs.reconcile_candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-verified-candidate-${{ steps.recovery.outputs.run_id }}-${{ steps.recovery.outputs.attempt }}
           repository: ${{ github.repository }}
@@ -398,17 +398,17 @@ jobs:
       version: ${{ steps.sofa.outputs.version || steps.sofa-source.outputs.version }}
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download verified candidate bundle
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-verified-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
       - name: Download trusted check evidence
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence
