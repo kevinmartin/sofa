@@ -196,19 +196,19 @@ jobs:
     steps:
       - name: Download current synthetic admission
         if: '!inputs.reconcile_candidate'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-e2e-source-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download current fake candidate
         if: '!inputs.reconcile_candidate'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-e2e-candidate-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
       - name: Download retained synthetic admission
         if: inputs.reconcile_candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-e2e-source-${{ inputs.suite_id }}-${{ inputs.producer_run_id }}-${{ inputs.producer_run_attempt }}
           run-id: ${{ inputs.producer_run_id }}
@@ -216,7 +216,7 @@ jobs:
           path: retained
       - name: Download retained fake candidate
         if: inputs.reconcile_candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-e2e-candidate-${{ inputs.suite_id }}-${{ inputs.producer_run_id }}-${{ inputs.producer_run_attempt }}
           run-id: ${{ inputs.producer_run_id }}
@@ -289,7 +289,7 @@ jobs:
       contents: read
     steps:
       - name: Download exact verified candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sofa-e2e-verified-${{ inputs.suite_id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
