@@ -52,8 +52,9 @@ verifies the signed release asset and installs both `sofa` and `sofa-test` on
 `PATH` without Go or a controller-build dispatch. A custom multi-job workflow
 can also pass an earlier job's `version` output into a later job's
 input to hold one exact version across a promotion. Install once per job; the
-Action returns the selected version and its binary directory. The old
-`controller-build.reusable.yml` remains only for migration of existing callers.
+Action returns the selected version and its binary directory. The obsolete
+`controller-build.reusable.yml` has been retired; existing callers must migrate
+to setup-cli after their major release channel is activated.
 To make the work job reuse an automatically selected reconcile version, replace
 its `version` input with:
 

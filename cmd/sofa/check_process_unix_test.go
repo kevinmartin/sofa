@@ -54,12 +54,14 @@ func assertDescendantStopped(t *testing.T, checkHome string) {
 		t.Fatalf("invalid descendant PID %q: %v", data, err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for !checkProcessStopped(pid) && time.Now().Before(deadline) {
+	// A stopped observation is terminal; rechecking a reaped PID can observe
+	// an unrelated process if the kernel reuses it between two checks.
+	for !checkProcessStopped(pid) {
+		if !time.Now().Before(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("check descendant %d survived", pid)
+		}
 		time.Sleep(20 * time.Millisecond)
-	}
-	if !checkProcessStopped(pid) {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatalf("check descendant %d survived", pid)
 	}
 	if _, err := os.Stat(filepath.Join(checkHome, "marker")); !os.IsNotExist(err) {
 		t.Fatalf("descendant wrote marker before stopping: %v", err)
