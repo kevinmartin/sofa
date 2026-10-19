@@ -105,7 +105,7 @@ jobs:
           fi
       - name: Carry admitted review manifest
         if: steps.status.outputs.dispatch == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport/manifest.json
@@ -123,7 +123,7 @@ jobs:
       copilot-requests: write
     steps:
       - name: Download admitted review manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
@@ -215,7 +215,7 @@ jobs:
               --manifest /transport/manifest.json --workspace /workspace \
               --out /candidate/bundle.json
       - name: Carry repair bundle to secretless verification
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-review-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -234,12 +234,12 @@ jobs:
       contents: read
     steps:
       - name: Download admitted review manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download untrusted repair bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
@@ -302,14 +302,14 @@ jobs:
             --manifest transport/manifest.json --workspace "$PWD/consumer" \
             --bundle candidate/bundle.json --out evidence/checks.json
       - name: Carry trusted check evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-review-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/checks.json
           if-no-files-found: error
           retention-days: 1
       - name: Carry verified repair bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-review-verified-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate/bundle.json
@@ -328,17 +328,17 @@ jobs:
       pull-requests: read
     steps:
       - name: Download admitted review manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download verified repair bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-verified-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
       - name: Download trusted check evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence
@@ -417,7 +417,7 @@ jobs:
       - name: Mint repository-scoped publisher App token
         if: steps.publisher-auth.outputs.mode == 'app'
         id: publisher-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.SOFA_PUBLISH_APP_ID }}
           private-key: ${{ secrets.SOFA_PUBLISH_APP_PRIVATE_KEY }}
@@ -458,7 +458,7 @@ jobs:
       contents: write # Only the trusted finalizer writes sofa-state.
     steps:
       - name: Download admitted review manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-review-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
