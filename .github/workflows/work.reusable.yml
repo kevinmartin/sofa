@@ -51,7 +51,7 @@ jobs:
       copilot-requests: write
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
@@ -146,14 +146,14 @@ jobs:
               --out /candidate/bundle.json
       - name: Preserve sanitized execution failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-execution-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate/execution-failure.json
           if-no-files-found: ignore
           retention-days: 1
       - name: Carry candidate bundle to secretless verification
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -174,21 +174,21 @@ jobs:
       contents: write
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download sanitized failure, when produced
         if: needs.execute.result == 'failure'
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-execution-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: failure
       - name: Download sanitized verification failure, when produced
         if: needs.verify.result == 'failure'
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: failure
@@ -276,7 +276,7 @@ jobs:
       actions: read # Only used by download-artifact for a prior run on recovery.
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
@@ -292,13 +292,13 @@ jobs:
           echo "attempt=$attempt" >> "$GITHUB_OUTPUT"
       - name: Download current candidate bundle
         if: '!inputs.reconcile_candidate'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
       - name: Download retained candidate bundle
         if: inputs.reconcile_candidate
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-verified-candidate-${{ steps.recovery.outputs.run_id }}-${{ steps.recovery.outputs.attempt }}
           repository: ${{ github.repository }}
@@ -360,21 +360,21 @@ jobs:
             --bundle candidate/bundle.json --out evidence/checks.json
       - name: Preserve sanitized verification failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-verification-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/verification-failure.json
           if-no-files-found: ignore
           retention-days: 1
       - name: Carry trusted evidence to publication
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/checks.json
           if-no-files-found: error
           retention-days: 1
       - name: Carry verified candidate to publication
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sofa-verified-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate/bundle.json
@@ -398,17 +398,17 @@ jobs:
       version: ${{ steps.sofa.outputs.version || steps.sofa-source.outputs.version }}
     steps:
       - name: Download admitted manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Download verified candidate bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-verified-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
       - name: Download trusted check evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sofa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence
@@ -485,7 +485,7 @@ jobs:
       - name: Mint repository-scoped publisher App token
         if: steps.publisher-auth.outputs.mode == 'app'
         id: publisher-app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.SOFA_PUBLISH_APP_ID }}
           private-key: ${{ secrets.SOFA_PUBLISH_APP_PRIVATE_KEY }}
