@@ -3,7 +3,7 @@ module github.com/kevinmartin/sofa
 go 1.27.1
 
 require (
-	github.com/caelis-labs/acp-go-sdk v1.4.1
+	github.com/caelis-labs/acp-go-sdk v1.5.1
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/spf13/cobra v1.10.2
